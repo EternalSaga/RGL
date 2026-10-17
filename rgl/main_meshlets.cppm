@@ -116,32 +116,8 @@ void wireMeshletOverlayActivation(entt::registry& registry, const AssetTable& as
 			hosts);
 }
 
-/**
- * 叠加 mesh SPV 变体选档（★0.5-b2 的三档 base/debug/tint + **债-105** 的归属裁决）。
- *
- * 🔴 变体位**归叠加段所有**：`overlay = false` 时**一律 base**——这两枚是**条目级**开关（变体经
- * `bakeMeshletEntries` 的 `variant` 烘进**条目**），而那批条目同时是 β-1 原位取代的宿主
- * （`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 叠加段关着也能改产品路的几何
- * （DEBUG_OFFSET 把 clip.z 拉向相机 = 取代段整体错位；TINT 把着色输入写死 = 产品路变平色块）。
- * 这不是「仪器没宿主」而是「仪器渗进产品」。孤立组合（debug/tint 开了但被强制归 base、
- * tint 与 debug 同真的让位）的出声自债-106 起在 **gate_lint**（meshlet.debug / meshlet.tint
- * 三条规则）——原就近 warn `warnMeshletVariantInstruments` 的判据是纯配置组合，同一根因
- * 不许多处各喊一条（影子真相源），随迁移删除。
- *
- * 优先级与 ★0.5-b2 一致：tint 与 debug 同真 = **tint 优先**（判据 3 只用 tint、判据 4 只用
- * offset，从不同时用 ⟹ 不建第 4 个组合变体）。
- * @param cfg 运行配置（读 overlay / tint / debug 三字段）
- * @return 本跑该烘的 mesh SPV 变体
- */
-MeshletMeshVariant pickMeshletMeshVariant(const RuntimeConfig& cfg) {
-	if (!cfg.meshletOverlay)
-		return MeshletMeshVariant::base;
-	if (cfg.meshletTint)
-		return MeshletMeshVariant::tint;
-	if (cfg.meshletDebug)
-		return MeshletMeshVariant::debugOffset;
-	return MeshletMeshVariant::base;
-}
+// 叠加 mesh SPV 变体选档 pickMeshletMeshVariant 已随债-129 S2 下移到 shader_registry
+// （= MeshletMeshVariant 的 owner，单测可达）；本 TU 经 import shader_registry 直接调用。
 
 /** 原位取代对账的两个计数（口径 → auditMeshletSwitch）。 */
 struct SwitchCoverage {
@@ -607,14 +583,14 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
  * 簇化轴 ★1-a1ii-α 装配总入口（main.cppm 声明）：描述符接线 + 条目烘焙两步的顺序
  * 契约内聚在此（bake 依赖 wire 的槽号），main() 只留一次调用（装配层行数预算）。
  *
- * ★0.5-b2 起 mesh SPV 变体三档（base/debug/tint）：tint 与 debug 同真时 **tint 优先**
- * （判据 3 只用 tint、判据 4 只用 offset，从不同时用，故不建第 4 个组合变体；让位与孤立
- * 组合的 warn 自债-106 起在 gate_lint 启动期申报，原就近 warnMeshletVariantInstruments 已
- * 随迁移删除——门关 grep meshlet = 0 的护栏由「门关默认档无偏离」保证）。
+ * ★0.5-b2 起 mesh SPV 变体三档（base/debug/tint）：债-129 S2 起由配置键 `meshlet.instrument`
+ * 三态直接选档——原「tint 与 debug 同真 = tint 优先」的让位与孤立组合 warn 自债-106 起在
+ * gate_lint 启动期申报（现为 meshlet.instrument 一条规则），原就近 warnMeshletVariantInstruments
+ * 已随迁移删除——门关 grep meshlet = 0 的护栏由「门关默认档无偏离」保证）。
  *
  * 🔴 债-105 起变体位**归叠加段所有**：`meshlet.overlay` 关 = 变体一律 base（变体烘进条目、
  * 条目是 β-1 取代的宿主 ⟹ 不归位会让关掉叠加段的跑仍然被诊断改掉产品路几何；偏离默认时
- * 由 gate_lint meshlet.debug / meshlet.tint 规则 warn）。
+ * 由 gate_lint meshlet.instrument 规则 warn）。
  * 本函数**不**因为 overlay 关而少烘一条条目——见 `bakeMeshletEntries` 的宿主契约注释。
  */
 MeshletAssembly wireMeshletOverlay(Resources& resources,
@@ -631,7 +607,8 @@ MeshletAssembly wireMeshletOverlay(Resources& resources,
 	assembly.bindingSlots = slots;
 	// mesh SPV 变体选档（门关 = bakeMeshletEntries 首行早退，variant 不被读；孤立组合的 warn
 	// 自债-106 起归 gate_lint 启动期申报——门关 grep meshlet = 0 的护栏由「门关默认档无偏离」
-	// 保证，见 meshlet.debug / meshlet.tint 规则）。一件事一个函数：选档 = pickMeshletMeshVariant。
+	// 保证，见 meshlet.instrument 规则）。一件事一个函数：选档 = pickMeshletMeshVariant
+	// （债-129 S2 起住在 shader_registry，= MeshletMeshVariant 的 owner）。
 	const MeshletMeshVariant variant = pickMeshletMeshVariant(cfg);
 	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
 		rtCache, meshletGeometry, slots, variant);

@@ -15,7 +15,7 @@ import scene_tables;  // 批 T1：逐对象四张表 StructuredBuffer 读取面�
 //    `shadow.frag.spv`（只收一个 SV_Position）。给 meshlet.mesh 加宏去裁输出字段 = 同一份
 //    SPV 里塞两种输出接口，宏关掉那侧仍要过 frag 入口匹配，裁不干净。
 // 2. 🔴 **门 = 选 SPV 变体 / 选管线条目，不是运行时 flag**（2026-10-02 slang fp 重排教训，
-//    同 IZB/PCSS/EVSSM/meshlet.debug 纪律）：slang 对源码差异做 fp 重排，「flag=0 的分支」
+//    同 IZB/PCSS/EVSSM/meshlet.instrument 纪律）：slang 对源码差异做 fp 重排，「flag=0 的分支」
 //    也会让主路逐位漂移。主 pass 的红线 A（`54e40665…`）不能被一个阴影实验碰。
 // 3. 两者的**派发契约不同**：主 pass 恒 L0 前缀（`cluster = base + (groupID.x >> 1)`），
 //    本管线要插一个选级偏移（`clusterStart`，§18.3 拍板走 push constant，零 scene data 变更）。

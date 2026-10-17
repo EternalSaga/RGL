@@ -212,6 +212,34 @@ export enum class MeshletLodFallbackMode : uint8_t {
 };
 
 /**
+ * 簇路径叠加的 **mesh SPV 变体仪器位**（configs/runtime.lua `meshlet.instrument` 键，
+ * 债-129 S2 O1-1.1）：**三态互斥**，不是两个布尔（`aa` 三态先例的复刻）。
+ *
+ * 为什么必须是 enum（原 `meshlet.debug` + `meshlet.tint` 两布尔的失效形态，实测可达）：
+ * 两布尔同真时靠 `pickMeshletMeshVariant` 的**代码顺序**裁决「tint 优先、debug 让位」
+ * （让位规则 + gate_lint 让位申报行 + 一条 warn 全在为这个非法态服务）。合并以后
+ * 那个非法态**写不出来**——一个槽位只有一个值，让位规则连同让位分支一起消失。
+ *
+ * 三档语义（= 原三档返回语义，逐字不变）：
+ *  · `none`（默认）  = `meshlet.mesh.spv`（正常叠加：共面 + eLess ⟹ 零写入）
+ *  · `offset`        = `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`（clip.z 拉向相机 + 翻法线，
+ *                      ★1-a1ii-α 判据 3 的阳性对照；原 `debug = true`）
+ *  · `tint`          = `meshlet.mesh_MESHLET_TINT.spv`（着色输入写常数、clip 不动 ⟹ 深度与
+ *                      覆盖集与底逐位同，只有写回的颜色不同 = 逐 primitive 平色块；
+ *                      ★0.5-b2 共面双臂的阳性对照：`coplanar=equal` + tint 图**必须变** =
+ *                      equal 臂的非空洞证明，`coplanar=off` + tint 必须仍 = 基线锚；
+ *                      原 `tint = true`）
+ * 🔴 未知值 = 启动 fail-fast（`aa` / `meshlet.coplanar` 同纪律：静默回落 = 截图哈希
+ * 判据整批假绿的地基事故）。消费侧一律走 `RuntimeConfig::instrumentIsOffset()/
+ * instrumentIsTint()` 谓词，不在调用点散写 `== MeshletInstrument::x`。
+ */
+export enum class MeshletInstrument : uint8_t {
+	none = 0,    ///< 默认 = 正常叠加档（base SPV）
+	offset = 1,  ///< 沿视向偏移 + 翻法线（原 `meshlet.debug`）
+	tint = 2,    ///< 着色输入写常数、深度不动（原 `meshlet.tint`）
+};
+
+/**
  * `renderScale` 的合法区间（**单一真相源**：配置解析钳制与 Swapchain 派生 render extent
  * 都读它，避免两处各写一个魔数、改一个漂一个）。
  *
@@ -415,25 +443,26 @@ export struct RuntimeConfig {
 	 * `wireMeshletOverlayActivation` 另按「有没有条目可采」的**事实**出声（同因不同层：无产物 /
 	 * 多产物回落只有装配期看得见），不静默空开关。
 	 *
-	 * 🔴 本键关 ⟹ `meshlet.debug` / `meshlet.tint` 这两枚**条目级 SPV 变体位**一律取 base
-	 * （它们烘进的是 `switch` 也要用的那批条目，让叠加仪器改条目 = 诊断渗进产品取代路；
-	 * 偏离默认时由 gate_lint warn 出声，meshlet.debug / meshlet.tint 规则——原装配层就近 warn
+	 * 🔴 本键关 ⟹ `meshlet.instrument` 这枚**条目级 SPV 变体位**一律取 base（它烘进的是
+	 * `switch` 也要用的那批条目，让叠加仪器改条目 = 诊断渗进产品取代路；
+	 * 偏离默认时由 gate_lint warn 出声，meshlet.instrument 规则——原装配层就近 warn
 	 * `warnMeshletVariantInstruments` 判据是纯配置组合，已随债-106 迁入申报表并删除）。
 	 */
 	bool meshletOverlay = false;
 	/**
-	 * 簇路径**阳性对照**档（configs/runtime.lua `meshlet.debug` 键，★1-a1ii-α）。
+	 * 簇路径**阳性对照**的 mesh SPV 变体档（configs/runtime.lua `meshlet.instrument` 键，
+	 * 债-129 S2 O1-1.1 = 原 `meshlet.debug` + `meshlet.tint` 两布尔合并，`aa` 三态先例复刻）。
 	 *
-	 * = true（且 assets = true）时叠加条目改用 `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`
-	 * 变体：clip.z 拉向相机 + 翻法线 ⟹ 叠加真正赢得深度测试并留下可见差异——判据 3
-	 * 「画了相同内容 vs 什么都没画」的区分器（docs/mdi_plan.md §11）。门 = 选 SPV 变体
+	 * 三档语义与逐档判据 → `MeshletInstrument` 枚举注释（`offset` = ★1-a1ii-α 判据 3 的
+	 * DEBUG_OFFSET 阳性对照；`tint` = ★0.5-b2 双臂的 TINT 阳性对照）。门 = 选 SPV 变体
 	 * 不是运行时 flag 分支（2026-10-02 slang fp 重排教训，同 IZB/PCSS/EVSSM 纪律）。
-	 * 默认关；assets 关时本键无意义（条目根本不建）。
+	 * 默认 `none`；assets 关时无意义（条目根本不建）。
 	 * 🔴 **overlay 关时本键被强制归 base**（债-105）——变体烘进的是 `switch` 原位取代共用的那批
 	 * 条目，让叠加仪器改条目 = 把「clip.z 拉向相机」的几何错位带进产品路。偏离默认时由
-	 * gate_lint warn 出声（meshlet.debug 规则；原装配层就近 warn 已随债-106 迁入申报表）。
+	 * gate_lint warn 出声（meshlet.instrument 规则）。
+	 * 🔴 原两布尔的「同真 ⟹ tint 优先」让位规则随合并**结构性消失**——该非法态写不出来。
 	 */
-	bool meshletDebug = false;
+	MeshletInstrument meshletInstrument = MeshletInstrument::none;
 	/**
 	 * 簇路径叠加的**共面双臂**深度比较档（configs/runtime.lua `meshlet.coplanar` 键，★0.5-b2）。
 	 *
@@ -445,7 +474,7 @@ export struct RuntimeConfig {
 	 * 不用新建管线），把屏幕切成两类且都要求逐位不变：
 	 *  · `equal`：共面像素写回 ⟹ 与门关逐位同 = 属性/材质绑定/切线手性全对（盲区 = 不共面像素）
 	 *  · `ne`：存在「簇覆盖但深度 ≠ 旧深度」即写 ⟹ 与门关逐位同 = 位置逐位同 + 覆盖集同
-	 *    （盲区 = 簇没覆盖的像素，由已有的 `meshlet.debug` 覆盖臂补，M = 34.267%）
+	 *    （盲区 = 簇没覆盖的像素，由已有的 `meshlet.instrument = "offset"` 覆盖臂补，M = 34.267%）
 	 *
 	 * 🔴 `off`（默认）= **一条 setDepthCompareOp 都不发** ⟹ 门关与 off 档的动态状态序列
 	 * 逐 bit 不变（A1 判据的构造性保证）。未知值 = 启动 fail-fast（`aa` 三态键同纪律：
@@ -456,21 +485,6 @@ export struct RuntimeConfig {
 	 * 不点出来会被读成「双臂还在跑」）。
 	 */
 	MeshletCoplanarMode meshletCoplanar = MeshletCoplanarMode::off;
-	/**
-	 * 簇路径叠加的 **tint** SPV 变体档（configs/runtime.lua `meshlet.tint` 键，★0.5-b2）。
-	 *
-	 * = true（且 assets = true）时叠加条目改用 `meshlet.mesh_MESHLET_TINT.spv`：着色输入
-	 * 全写死成常数（normal/uv/tangent），**clip 一 bit 不动** ⟹ 深度与覆盖集与底逐位同，
-	 * 只有写回的颜色不同（逐 primitive 平色块）。它是双臂的**阳性对照**：
-	 *  · `coplanar=equal` + tint 图**必须变** = equal 臂的**非空洞证明**（若簇几何深度与旧
-	 *    路径差哪怕 1 ULP，eEqual 处处拒绝 ⟹ 恒绿但毫无意义）
-	 *  · `coplanar=off` + tint 必须仍 = 基线锚（证明变化来自「共面写回」，不是 tint 本身可见）
-	 *
-	 * 与 `meshletDebug` 同真时**本键优先**（判据 3 只用 tint、判据 4 只用 offset，从不同时
-	 * 用，故不建第 4 个组合变体，改由装配层 warn 出声）。门 = 选 SPV 变体不是运行时 flag
-	 * （2026-10-02 slang fp 重排教训，同 `meshletDebug`）。默认关；assets 关时无意义。
-	 */
-	bool meshletTint = false;
 	/**
 	 * 簇路径在 opaque 段**原位取代**旧 mesh draw 档（configs/runtime.lua `meshlet.switch`
 	 * 键，★1-a1ii-β-1）。
@@ -570,6 +584,14 @@ export struct RuntimeConfig {
 	/** 「FSR 要不要接」的唯一推导点（原 `fsr_upscaler` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsFsr() const {
 		return aa == AaMode::fsr;
+	}
+	/** 「叠加条目烘 DEBUG_OFFSET 变体」的唯一推导点（消费侧不散写 `== MeshletInstrument::offset`）。 */
+	[[nodiscard]] constexpr bool instrumentIsOffset() const {
+		return meshletInstrument == MeshletInstrument::offset;
+	}
+	/** 「叠加条目烘 TINT 变体」的唯一推导点（同上，`aaWantsTaa()` 先例）。 */
+	[[nodiscard]] constexpr bool instrumentIsTint() const {
+		return meshletInstrument == MeshletInstrument::tint;
 	}
 	int showAfter = -1;               // DIAG：隐藏窗启动、第 N 帧后显示（-1 = 立即显示）
 	PresentModePref presentMode = PresentModePref::immediate;  // 窗口 present 模式（headless 忽略）

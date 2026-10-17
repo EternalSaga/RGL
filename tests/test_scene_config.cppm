@@ -1069,11 +1069,98 @@ TEST_CASE("runtime_config：meshlet.switch（★1-a1ii-β-1 原位取代）—�
 			CHECK_FALSE(r.has_value());
 		}
 	}
-	{  // 同块其余三枚布尔同享严格面（本批把整块换掉，不是只换 switch）
+	{  // 同块其余布尔键同享严格面（★1-a1ii-β-1 把整块换掉，不是只换 switch；债-129 S2 起
+	   // debug 已并成 instrument 三态字符串键，严格面兄弟换成 mdi_shadow）
 		TempLua f("rt_mswitch_strict_siblings", R"lua(return { meshlet = { assets = "on" } })lua");
 		CHECK_FALSE(loadRuntimeConfig(f.pathStr()).has_value());
-		TempLua g("rt_mswitch_strict_debug", R"lua(return { meshlet = { debug = 0 } })lua");
+		TempLua g("rt_mswitch_strict_mdi", R"lua(return { meshlet = { mdi_shadow = 0 } })lua");
 		CHECK_FALSE(loadRuntimeConfig(g.pathStr()).has_value());
+	}
+}
+
+TEST_CASE("runtime_config：meshlet.instrument（债-129 S2 三值仪器位）——默认 none、三值命中、"
+          "未知值 fail-fast 点名全部合法值、旧两布尔无兼容双读") {
+	// 被测 = applyMeshletInstrumentKey（形态先例 applyMeshletCoplanarKey / applyAaKey）。
+	// 判据来源 = 实读解析器。三值 = none/offset/tint（原 meshlet.debug + meshlet.tint 两布尔
+	// 合并，「同真 ⟹ tint 优先」的让位态**写不出来** = 本键的存在理由）。
+	// 变异红线声明：
+	//   ① 成员初始化默认翻成 offset/tint → 「成员初始化」与「缺块」两条断言红（出厂白烘仪器变体）。
+	//   ② 解析器键名打错（instrument → instrumnt）→ 「三值命中」红（探针值读不到 = 回落 none）。
+	//   ③ 未知值回落成默认（删 else 分支）→ 「未知值 fail-fast」红；失效形态 = 仪器臂根本没跑
+	//      而截图判据全绿（coplanar 四臂假绿同族）。
+	//   ④ 错误文本漏点名某个合法值 → 对应 CHECK 红（报错必须教人怎么改，shadow mode 先例）。
+	//   ⑤ 加旧键 debug/tint 的兼容双读 → 「无兼容双读」两条红（两个真相源 = 本仓反模式；
+	//      迁移安全网是未知键护栏，不是双读——warn 点名那条见债-129 未知键用例）。
+	{  // 成员初始化默认路径（不看 lua 文件）= 出厂不选仪器变体
+		CHECK(RuntimeConfig{}.meshletInstrument == MeshletInstrument::none);
+		CHECK(RuntimeConfig{}.instrumentIsOffset() == false);
+		CHECK(RuntimeConfig{}.instrumentIsTint() == false);
+	}
+	{  // 缺块 / 缺键 = 保持默认 none
+		TempLua f("rt_instr_default", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletInstrument == MeshletInstrument::none);
+		TempLua g("rt_instr_nokey", R"lua(return { meshlet = { assets = true } })lua");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->meshletInstrument == MeshletInstrument::none);
+	}
+	{  // 三个合法值各自命中（探针值 ≠ 默认，漏读即红）+ 谓词与枚举同步（谓词是消费侧唯一入口）
+		struct Row { const char* lua; MeshletInstrument want; };
+		const Row rows[]{{"none", MeshletInstrument::none},
+			{"offset", MeshletInstrument::offset}, {"tint", MeshletInstrument::tint}};
+		int seen = 0;
+		for (const auto& row : rows) {
+			const std::string body =
+				std::string("return { meshlet = { instrument = \"") + row.lua + "\" } }\n";
+			TempLua f("rt_instr_val", body);
+			auto r = loadRuntimeConfig(f.pathStr());
+			REQUIRE(r.has_value());
+			CHECK(r->meshletInstrument == row.want);
+			CHECK(r->instrumentIsOffset() == (row.want == MeshletInstrument::offset));
+			CHECK(r->instrumentIsTint() == (row.want == MeshletInstrument::tint));
+			++seen;
+		}
+		CHECK(seen == 3);  // 前置守卫：三档都真跑了（空列表假绿防线）
+	}
+	{  // 未知值 = **启动失败**且错误点名键名 + 全部合法值 + 回显写错的值（不静默回落）
+		TempLua f("rt_instr_bad", R"lua(return { meshlet = { instrument = "debug" } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		CHECK_FALSE(r.has_value());
+		if (!r) {
+			const std::string& msg = r.error().message;
+			CHECK(msg.find("meshlet.instrument") != std::string::npos);
+			CHECK(msg.find("\"none\"") != std::string::npos);   // 错误文本列出合法值
+			CHECK(msg.find("\"offset\"") != std::string::npos);
+			CHECK(msg.find("\"tint\"") != std::string::npos);
+			CHECK(msg.find("debug") != std::string::npos);      // 且回显写错的值本体
+		}
+		// 大小写敏感 + 空串不合法（shadow mode / coplanar 同口径）
+		for (const char* bad : {R"lua(return { meshlet = { instrument = "None" } })lua",
+		                        R"lua(return { meshlet = { instrument = "" } })lua"}) {
+			TempLua f("rt_instr_bad2", bad);
+			CHECK_FALSE(loadRuntimeConfig(f.pathStr()).has_value());
+		}
+	}
+	{  // 🔴 已知限制（与先例 coplanar / shadow_lod_fallback 共有，实机对照同形）：值写成**非
+	   // 字符串**时 sol 的 optional<string> 读成 nullopt = 走缺键保默认，**不**报错。
+		TempLua f("rt_instr_bool", R"lua(return { meshlet = { instrument = true } })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletInstrument == MeshletInstrument::none);
+	}
+	{  // 🔴 旧两布尔键**无兼容双读**（硬切红线）：顶层扁平键与块内旧键都不被解析器读——
+	   // 块内旧键的「出声」由未知键护栏负责（变异红线用例在下方 meshlet.debug warn 那条），
+	   // 本条钉的是「就算不喊，旧键也**绝不**被当成新键读」（双读 = 两个真相源）。
+		TempLua f("rt_instr_flat", R"lua(return { meshlet_instrument = "offset" })lua");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->meshletInstrument == MeshletInstrument::none);
+		TempLua g("rt_instr_old_debug_flat", R"lua(return { meshlet_debug = true })lua");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->meshletInstrument == MeshletInstrument::none);
 	}
 }
 
@@ -1936,6 +2023,54 @@ TEST_CASE("债-129 runtime 嵌套阳性锚点：meshlet 块内拼错 → warn �
 		CHECK(log.delta().find("未知键 'meshlet.overlay'") == std::string::npos);  // 合法子键不喊
 		CHECK(containsKey(trace.present, "meshlet.ovrelay"));  // 判据本体：下钻采集到点分名
 		CHECK(r->meshletOverlay == true);  // lint 不改解析：同块合法键照常生效
+	}
+}
+
+TEST_CASE("债-129 S2 变异红线：残留旧键 meshlet.debug / meshlet.tint → 启动 warn 点名（硬切护栏）") {
+	// 🔴 本用例是「instrument 合并 = 硬切、无旧键双读兼容」的**迁移安全网本体**（S2 段验收
+	// 原文：配置里留一枚 meshlet.debug = true → 启动 warn 点名它）。护栏为本次合并背书的证明。
+	// 变异红线声明：
+	//   ① 把 kRuntimeKeys 里 `meshlet.instrument` 改回 `meshlet.debug`（= 偷偷恢复旧键）→
+	//      第一条 warn 断言红（未知键判据不再喊它 = 双读的静默形态复活）。
+	//   ② 解析器加旧键双读（debug → instrument 映射）→ 「instrument 保持 none」红。
+	//   ③ 未知键 lint 下钻射程缩回顶层（declaresNestedKeys 失效）→ present 不含点分名 →
+	//      containsKey 红（债-129 第三刀护栏同锚）。
+	// 反向（常错的 lint = 被静音的 lint）：新键 `instrument = "none"` 出厂写法**零 warn**，
+	// 且键真的被解析（「不 warn」不是漏扫的假绿）。
+	// ⚠ LogTailer::delta() = 自**构造**起的增量 ⟹ 每块各立一个（共用一个时反向块会读到
+	// 阳性块的 warn，先跑顺序也救不了「谁先谁进账」的语义）。
+	{  // 阳性①：块内残留 debug = true → warn 点名 'meshlet.debug' 全名，且**不被**当新键读
+		LogTailer log;
+		TempLua f("rt_s2_oldkey_debug",
+			R"lua(return { meshlet = { overlay = true, debug = true } })lua");
+		RuntimeKeyTrace trace;
+		auto r = loadRuntimeConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(hasUnknownKeyWarn(log.delta(), "runtime", "meshlet.debug"));
+		CHECK(containsKey(trace.present, "meshlet.debug"));  // 判据本体：下钻采集到点分名
+		CHECK(r->meshletInstrument == MeshletInstrument::none);  // 旧键**绝不**被映射进新字段
+		CHECK(r->meshletOverlay == true);  // lint 不改解析：同块合法键照常生效
+	}
+	{  // 阳性②：tint 同形
+		LogTailer log;
+		TempLua f("rt_s2_oldkey_tint",
+			R"lua(return { meshlet = { overlay = true, tint = true } })lua");
+		RuntimeKeyTrace trace;
+		auto r = loadRuntimeConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(hasUnknownKeyWarn(log.delta(), "runtime", "meshlet.tint"));
+		CHECK(containsKey(trace.present, "meshlet.tint"));
+		CHECK(r->meshletInstrument == MeshletInstrument::none);
+	}
+	{  // 反向：出厂写法 instrument = "none" 零未知键 warn，且键真的被解析
+		LogTailer log;
+		TempLua ok("rt_s2_newkey_ok",
+			R"lua(return { meshlet = { overlay = false, instrument = "none" } })lua");
+		auto r = loadRuntimeConfig(ok.pathStr(), nullptr);
+		REQUIRE(r.has_value());
+		CHECK(r->meshletInstrument == MeshletInstrument::none);
+		CHECK(r->meshletOverlay == false);
+		CHECK(log.delta().find("未知键") == std::string::npos);
 	}
 }
 

@@ -99,19 +99,17 @@ constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
 // 债-106 判据，措辞必须逐字一致，所以住同一个常量（各抄一份必漂；消息级金标准
 // tests/golden/gate_lint_findings_msg.txt 逐字钉死，改措辞 = 金标准红）。
 
-/** debug 的落空机制是两条独立路（overlay 关 / assets 关），消息按并集写 = 债-106 原文。 */
-constexpr std::string_view kMsgMeshletDebug{
-	"debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）："
+/** instrument 的落空机制是两条独立路（overlay 关 / assets 关），消息按并集写 = 债-106 原文
+ *  骨架（债-129 S2：原 kMsgMeshletDebug/kMsgMeshletTint 两条随两布尔合并为这一条；
+ *  原「tint 与 debug 同真 ⟹ 让位」的第三条规则**整条删除**——三值键下该形态写不出来）。 */
+constexpr std::string_view kMsgMeshletInstrument{
+	"instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint "
+	"两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）："
 	"① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；"
 	"② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，"
 	"变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）"
-	"⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零"
+	"⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 \"none\""
 	"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）"};
-
-/** tint 的落空机制不重述，指回 debug 两条 = 债-106 原文。 */
-constexpr std::string_view kMsgMeshletTint{
-	"tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 "
-	"base；assets 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表"};
 
 /** coplanar 的两个失效面（assets 关 / overlay 关）写在一条消息里 = 债-106 原文。 */
 constexpr std::string_view kMsgMeshletCoplanar{
@@ -133,10 +131,11 @@ constexpr std::string_view kMsgMeshletMdiShadow{
 	"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）"};
 
 /**
- * 44 行独立申报 = diagnostics 侧 24 行 + shadow 侧 9 行 + runtime.lua **meshlet 块** 11 行
- * （债-106 整块挂号；债-129 第二刀 D 后其中 8 枚「宿主 = assets」的键塌进 kGateBlocks，
- * 本表只留跨档前置 / 链式前置 / 结构性错位的行）。与三份配置结构体 / 两份回显表 +
- * 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死（去重后 53 门，
+ * 42 行独立申报 = diagnostics 侧 24 行 + shadow 侧 9 行 + runtime.lua **meshlet 块** 9 行
+ * （债-106 整块挂号；债-129 第二刀 D 后其中 7 枚「宿主 = assets」的键塌进 kGateBlocks，
+ * 本表只留跨档前置 / 链式前置 / 结构性错位的行；债-129 S2 把 meshlet.debug/tint 三条
+ * ——两条残留 + 一条让位——合并成 meshlet.instrument 一条）。与三份配置结构体 / 两份回显表 +
+ * 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死（去重后 52 门，
  * 覆盖 = 本表行 ∪ 块条目）。
  * 级别判据 = 计划 §4：error 只留给「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
  * **行数 ≠ 门数**：一门可以有多条规则（`izb` 两条 = 非 deferred 图 / mode="none"，
@@ -240,31 +239,23 @@ const GateRule kGateRules[]{
 	// 探针子键（picking_probe.x/y、ui_click_probe.x/y、camera_probe.key/holdFrames）的
 	// 「frame=0（宿主）⟹ 子键是死值」塌进 kGateBlocks 的三个探针块（宿主 = 各自 frame 键）。
 
-	// ———— runtime.lua 的 meshlet 块（债-106：整块 10 枚键挂号，「子键开了但资源门关」从装配层
-	//      就近告警升级成启动期申报式护栏；债-129 第二刀 D：块宿主 = assets 的 8 枚键塌进
+	// ———— runtime.lua 的 meshlet 块（债-106：整块 9 枚键挂号，「子键开了但资源门关」从装配层
+	//      就近告警升级成启动期申报式护栏；债-129 第二刀 D：块宿主 = assets 的 7 枚键塌进
 	//      kGateBlocks 的 meshlet 块，本表只留**非 owner 根因**的残留行——owner 项已按
 	//      「同一根因只准一处出声」从残留行里删掉；🔴 assets 是**资源门**不是 9 键总门（生效前置
 	//      不含它的只有 overlay，逐键消息见 kMeshletKeys；路径选择语义归 meshlet.mode）；
 	//      判据出处 = 字段注释 + wireMeshlet*）————
 	{"meshlet.assets", GateSeverity::inertNote, "", nullptr},  // 资源门本身：无生效前置（= meshlet 块的宿主，进覆盖率对账；不是总门——overlay 的生效前置不含它）
-	{"meshlet.debug", GateSeverity::warn, kMsgMeshletDebug,
+	{"meshlet.instrument", GateSeverity::warn, kMsgMeshletInstrument,
 		// 残留行只报 ①（overlay 关）；②（assets 关）由 meshlet 块出声——本行**谓词**已删掉该
-		// owner 项（不双报），但**消息**保持债-106 并集原文（金标准钉文本，逐键归因不并入块消息）
-		[](const Ctx& c) { return c.runtime.meshletDebug
+		// owner 项（不双报），但**消息**保持并集原文（金标准钉文本，逐键归因不并入块消息）。
+		// 债-129 S2：原 meshlet.debug / meshlet.tint 两条残留行 + 一条让位行（tint 与 debug
+		// 同真 ⟹ tint 优先）随两布尔合并为这一条——让位断的形态在三值键下**不可表示**，整删
+		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletInstrument)
 			&& c.runtime.meshletAssets && !c.runtime.meshletOverlay; }},
-	{"meshlet.tint", GateSeverity::warn, kMsgMeshletTint,
-		// 残留行只报 overlay 关那条；assets 关由 meshlet 块出声（谓词删 owner、消息留原文，
-		// 同 meshlet.debug）
-		[](const Ctx& c) { return c.runtime.meshletTint
-			&& c.runtime.meshletAssets && !c.runtime.meshletOverlay; }},
-	{"meshlet.tint", GateSeverity::warn,
-		"tint 与 debug 同真 ⟹ tint 优先、debug 让位（不建组合 SPV 变体：判据 3 只用 tint、判据 4 只用 "
-		"debug，从不同时用）—— 本跑走 TINT 变体（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）",
-		[](const Ctx& c) { return c.runtime.meshletAssets && c.runtime.meshletOverlay
-			&& c.runtime.meshletTint && c.runtime.meshletDebug; }},
 	{"meshlet.coplanar", GateSeverity::warn, kMsgMeshletCoplanar,
 		// 残留行只报 overlay 关那条；assets 关（无条目）由 meshlet 块出声（谓词删 owner、
-		// 消息留债-106 并集原文，同 meshlet.debug）
+		// 消息留债-106 并集原文，同 meshlet.instrument）
 		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletCoplanar)
 			&& c.runtime.meshletAssets && !c.runtime.meshletOverlay; }},
 	{"meshlet.switch", GateSeverity::warn,
@@ -338,11 +329,12 @@ const BlockKey kCameraProbeKeys[]{
 };
 
 /**
- * meshlet 块 8 枚键（宿主 = meshlet.assets）。present 口径 = 「本键配了」：
- * 布尔键 = 为真；coplanar = 偏离 off；shadow_lod = **≥ 0**（🔴 不是「偏离默认」——
- * 门关档 -1 也偏离默认 5，写成 deviated 会打破「门关 grep meshlet = 0」护栏，
- * tests 红线 A 用例钉住这条）。
- * 🔴 8 枚键**全部**自带消息（块消息只是新键缺省）：逐键归因不是重复项——overlay 的
+ * meshlet 块 7 枚键（宿主 = meshlet.assets）。present 口径 = 「本键配了」：
+ * 布尔键 = 为真；coplanar / instrument = **偏离默认**（off / none；🔴 不是「偏离出厂档」
+ * 的歧义——两枚都是三态字符串键，deviated 即「配了仪器/双臂」）；shadow_lod = **≥ 0**
+ * （🔴 不是「偏离默认」——门关档 -1 也偏离默认 5，写成 deviated 会打破「门关 grep meshlet = 0」
+ * 护栏，tests 红线 A 用例钉住这条）。
+ * 🔴 7 枚键**全部**自带消息（块消息只是新键缺省）：逐键归因不是重复项——overlay 的
  * 「生效条件**不含** assets」、cull 的「真实宿主 = assets && switch（比块 owner 强）」
  * 这类微妙区别块消息表达不出来，塌成一条 = 抹掉下一刀（拍板 A）要消费的语义。
  * 与残留行共享的文本走 kMsgMeshlet* 常量（单一来源）。
@@ -352,8 +344,8 @@ const BlockKey kMeshletKeys[]{
 		"overlay 的生效条件**不含** assets（它的宿主是叠加段自己），但 assets = false ⟹ slots = nullopt = "
 		"条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」"
 		"的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）"},
-	{"meshlet.debug", [](const Ctx& c) { return c.runtime.meshletDebug; }, kMsgMeshletDebug},
-	{"meshlet.tint", [](const Ctx& c) { return c.runtime.meshletTint; }, kMsgMeshletTint},
+	{"meshlet.instrument", [](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletInstrument); },
+		kMsgMeshletInstrument},
 	{"meshlet.coplanar", [](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletCoplanar); },
 		kMsgMeshletCoplanar},
 	{"meshlet.switch", [](const Ctx& c) { return c.runtime.meshletSwitch; },

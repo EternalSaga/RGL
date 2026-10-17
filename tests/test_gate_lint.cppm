@@ -2,8 +2,9 @@ module;
 /**
  * test_gate_lint —— 门组合自检（gate_lint 立项批，docs/gate_lint_plan.md）
  *
- * 被测 = rgl/gate_lint.cppm（rlscene 成员）：53 门申报规则表（diagnostics 侧 30 +
- * shadow.lua 侧 13 + runtime.lua **meshlet 块** 10，债-106 整块接管）+ variant 交叉校验。
+ * 被测 = rgl/gate_lint.cppm（rlscene 成员）：52 门申报规则表（diagnostics 侧 30 +
+ * shadow.lua 侧 13 + runtime.lua **meshlet 块** 9，债-106 整块接管、债-129 S2 把
+ * debug+tint 两枚布尔门合并成 instrument 一枚）+ variant 交叉校验。
  * 纯函数（一切事实入参），无 GPU 无窗口，`just test` 毫秒级。
  *
  * ## 判据纪律（本文件比别处更严的原因）
@@ -107,10 +108,10 @@ std::vector<GateFinding> lint(const DiagnosticsConfig& cfg, std::span<const RgPa
 
 TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源键集合（双向 + 钉数 + 块前缀宿主判据）") {
 	// 变异红线（债-129 第二刀 D 换口径后）：
-	//   · kGateRules 删任一行 / 改任一门名拼写 → 行数钉 44 + 双向 hasGate 红；
-	//   · kGateBlocks 删任一枚块条目 → 键数钉 21 + 该键「块条目 ∪ 独立行」双落空红（点名）；
+	//   · kGateRules 删任一行 / 改任一门名拼写 → 行数钉 42 + 双向 hasGate 红；
+	//   · kGateBlocks 删任一枚块条目 → 键数钉 20 + 该键「块条目 ∪ 独立行」双落空红（点名）；
 	//   · 任一配置结构体加字段不更新两侧 → 回显表/键表的键数钉先红；
-	//   · 把下面的 meshlet 前缀过滤改成扫不到的前缀（如 "meshlett."）→ meshletKeys.size() == 10
+	//   · 把下面的 meshlet 前缀过滤改成扫不到的前缀（如 "meshlett."）→ meshletKeys.size() == 9
 	//     的钉先红（对账面缩小不会静默通过）。
 	// 🔴 新口径的真收益：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有
 	//   = 断言失败并**点名**；且命中块前缀的键必须是块条目或该块宿主——「往块里加一枚键而
@@ -126,7 +127,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	const auto echo = diagnosticsEchoKeys();
 	const auto shadowEcho = shadowConfigEchoKeys();
 	// 第三个来源 = runtime.lua 的 meshlet 块。前缀过滤**写死**在这里并吃 runtimeConfigKnownKeys()
-	// （🔴 不许把 10 枚键名抄进测试当清单——抄了键名就等于没抄来源，键表改名会静默漏对）。
+	// （🔴 不许把 9 枚键名抄进测试当清单——抄了键名就等于没抄来源，键表改名会静默漏对）。
 	// 为什么目前只有 meshlet 块：见 runtime_config_impl.cppm 的 readSsrBlock 头注释
 	// 「为什么**暂**未往 gate_lint 挂号」段（债-106 整块接管，不挑键）。
 	// 🔴 2026-10-17 纠正：原在此处写的「其余块没有『子键开而总门关』的孤立形态」是**假的**——
@@ -137,12 +138,14 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
 			meshletKeys.push_back(k);
-	CHECK(rules.size() == 44u);       // 独立行（19 行 nullptr 挂号 + 25 行谓词）
+	CHECK(rules.size() == 42u);       // 独立行（19 行 nullptr 挂号 + 23 行谓词；债-129 S2：
+	                                  // meshlet.debug/tint 三条 → meshlet.instrument 一条）
 	CHECK(blocks.size() == 6u);       // pcss / evssm / 三探针 / meshlet
-	CHECK(blockKeys.size() == 21u);   // 3 + 4 + 2 + 2 + 2 + 8
+	CHECK(blockKeys.size() == 20u);   // 3 + 4 + 2 + 2 + 2 + 7
 	CHECK(echo.size() == 30u);
 	CHECK(shadowEcho.size() == 13u);
-	CHECK(meshletKeys.size() == 10u);  // 整块 10 枚（债-106 红线：接管整块 = 一枚都不能少）
+	CHECK(meshletKeys.size() == 9u);  // 整块 9 枚（债-106 红线：接管整块 = 一枚都不能少；
+	                                  // 债-129 S2 起 debug+tint 合并为 instrument）
 	// 正向：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有 = 红并点名。
 	auto coveredBy = [&](std::string_view k) {
 		return hasGate(rules, k) ? "独立行" : (hasGate(blockKeys, k) ? "块条目" : "");
@@ -156,7 +159,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 去重门数钉在「独立行 ∪ 块条目」的并集上（= 三方来源键数之和）。
 	std::vector<std::string> unionGates = rules;
 	unionGates.insert(unionGates.end(), blockKeys.begin(), blockKeys.end());
-	CHECK(distinctGateCount(unionGates) == 53u);
+	CHECK(distinctGateCount(unionGates) == 52u);
 	// 反向：独立行与块条目吃的都必须是已知来源键（陈旧/拼错门名）。
 	auto known = [&](std::string_view k) {
 		return hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);
@@ -529,7 +532,7 @@ TEST_CASE("gate_lint meshlet 红线 A：门关态（assets=false + shadow_lod=-1
 	// 本用例的判据对象是 meshlet 块，别把两条红线焊成一条。
 	// 变异红线：任何 meshlet 规则改成「与 assets / 偏离态无关的恒真」→ 本用例红。
 	const auto fs = lintRt(redlineA());
-	for (const char* k : {"meshlet.assets", "meshlet.overlay", "meshlet.debug", "meshlet.tint",
+	for (const char* k : {"meshlet.assets", "meshlet.overlay", "meshlet.instrument",
 		 "meshlet.coplanar", "meshlet.switch", "meshlet.cull", "meshlet.shadow_lod",
 		 "meshlet.shadow_lod_fallback", "meshlet.mdi_shadow"})
 		CHECK(find(fs, k) == nullptr);
@@ -576,57 +579,38 @@ TEST_CASE("gate_lint meshlet.overlay：生效不含 assets，但 overlay && !ass
 	}
 }
 
-TEST_CASE("gate_lint meshlet.debug / meshlet.tint：条目级变体位的死值与让位（三条规则）") {
-	{  // debug 正例①：assets 开 + overlay 关 = 强制归 base（债-105 的归属裁决）
+TEST_CASE("gate_lint meshlet.instrument：条目级变体位的死值（债-129 S2 三值合并，原三条 → 一条）") {
+	// 🔴 原「meshlet.debug / meshlet.tint 三条规则」用例随两布尔合并重写：其中**让位两条**
+	// （tint 与 debug 同真 ⟹ tint 优先恰一条 / 让位反向）**整删**——它们断的输入（两枚布尔
+	// 同真）在 `MeshletInstrument` 三值键下**不可构造**，让位规则本身已随合并从申报表消失。
+	// 「消灭的是一个真实可达态」的实测证据 = 合并前基线第四行（overlay+debug+tint 同真截图
+	// 与 tint 单开逐位同 = tint 优先赢下），见 /tmp/opencode/o1_premerge_anchors.txt。
+	// 变异红线：instrument 残留行谓词把 `!meshletOverlay` 删掉（弱化 = overlay 开也喊）→
+	// 「反向」两条红；把 deviated 改成恒真 → 红线 A 用例红。
+	{  // 正例①：assets 开 + overlay 关 + offset = 强制归 base（债-105 的归属裁决）
 		RuntimeConfig r;
-		r.meshletDebug = true;
+		r.meshletInstrument = MeshletInstrument::offset;
 		const auto fs = lintRt(r);
-		REQUIRE(find(fs, "meshlet.debug") != nullptr);
-		CHECK(find(fs, "meshlet.debug")->severity == GateSeverity::warn);
+		REQUIRE(find(fs, "meshlet.instrument") != nullptr);
+		CHECK(find(fs, "meshlet.instrument")->severity == GateSeverity::warn);
 	}
-	{  // debug 正例②：assets 关（overlay 开）= 条目根本不烘，也是死值
+	{  // 正例②：assets 关（overlay 开）+ tint = 条目根本不烘，也是死值（块条目出声）
 	   // 🔴 这条同时钉住「门关 + 仪器开」不再静默——债-106 的挂号原文形态
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
 			r.meshletOverlay = true;
-			r.meshletDebug = true;
+			r.meshletInstrument = MeshletInstrument::tint;
 		}));
-		CHECK(find(fs, "meshlet.debug") != nullptr);
+		CHECK(find(fs, "meshlet.instrument") != nullptr);
 	}
-	{  // debug 反向：assets + overlay 都开 = 变体真被烘，不喊
+	{  // 反向①：assets + overlay 都开 + offset = 变体真被烘，不喊
 		RuntimeConfig r;
 		r.meshletOverlay = true;
-		r.meshletDebug = true;
-		CHECK(find(lintRt(r), "meshlet.debug") == nullptr);
+		r.meshletInstrument = MeshletInstrument::offset;
+		CHECK(find(lintRt(r), "meshlet.instrument") == nullptr);
 	}
-	{  // tint 正例：overlay 关 = 死值；反向：overlay 开 = 不喊
-		RuntimeConfig r;
-		r.meshletTint = true;
-		REQUIRE(find(lintRt(r), "meshlet.tint") != nullptr);
-		r.meshletOverlay = true;
-		CHECK(find(lintRt(r), "meshlet.tint") == nullptr);
-	}
-	{  // 让位正例：assets + overlay 开 + tint 与 debug 同真 ⟹ tint 优先**恰一条**
-	   // （overlay 开 ⟹ 两条死值规则都不成立，find 到的只能是让位规则那条）
-		RuntimeConfig r;
-		r.meshletOverlay = true;
-		r.meshletTint = true;
-		r.meshletDebug = true;
-		const auto fs = lintRt(r);
-		const auto hits = gateFindings(fs, "meshlet.tint");
-		REQUIRE(hits.size() == 1u);
-		CHECK(hits[0]->message.find("tint 优先") != std::string::npos);
-		CHECK(find(fs, "meshlet.debug") == nullptr);
-	}
-	{  // 让位反向：tint 与 debug 同真但 overlay 关 ⟹ 喊的是两条**死值**，让位规则不喊
-	   // （变体 = base，没有谁优先这回事）。变异红线：让位谓词删掉 meshletOverlay 条件 → tint
-	   // 变 2 条 ⟹ 本断言红。
-		RuntimeConfig r;
-		r.meshletTint = true;
-		r.meshletDebug = true;
-		const auto fs = lintRt(r);
-		CHECK(gateFindings(fs, "meshlet.tint").size() == 1u);
-		CHECK(gateFindings(fs, "meshlet.tint")[0]->message.find("tint 优先") == std::string::npos);
-		CHECK(gateFindings(fs, "meshlet.debug").size() == 1u);
+	{  // 反向②：默认 none 任何组合都不喊（出厂态沉默；「同真让位」形态写不出来，无需再测）
+		CHECK(find(lintRt(RuntimeConfig{}), "meshlet.instrument") == nullptr);
+		CHECK(gateFindings(lintRt(redlineA()), "meshlet.instrument").empty());
 	}
 }
 
@@ -931,22 +915,26 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "rt/overlay-on", .runtime = {.meshletOverlay = true}},
 		{.name = "rt/overlay-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) { r.meshletOverlay = true; })},
-		{.name = "rt/debug-only", .runtime = {.meshletDebug = true}},
-		{.name = "rt/debug-offenable",
+		{.name = "rt/instrument-offset", .runtime = {.meshletInstrument = MeshletInstrument::offset}},
+		{.name = "rt/instrument-offset-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) {
 				r.meshletOverlay = true;
-				r.meshletDebug = true;
+				r.meshletInstrument = MeshletInstrument::offset;
 			})},
-		{.name = "rt/tint-only", .runtime = {.meshletTint = true}},
-		{.name = "rt/tint-debug", .runtime = {.meshletDebug = true, .meshletTint = true}},
-		{.name = "rt/tint-debug-overlay",
-			.runtime = {.meshletOverlay = true, .meshletDebug = true, .meshletTint = true}},
-		{.name = "rt/tint-debug-offenable",
+		{.name = "rt/instrument-tint", .runtime = {.meshletInstrument = MeshletInstrument::tint}},
+		{.name = "rt/instrument-tint-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) {
 				r.meshletOverlay = true;
-				r.meshletDebug = true;
-				r.meshletTint = true;
+				r.meshletInstrument = MeshletInstrument::tint;
 			})},
+		// 🔴 债-129 S2：原 rt/tint-debug / rt/tint-debug-overlay / rt/tint-debug-offenable 三档
+		// （断「两布尔同真 ⟹ tint 优先让位」）随合并**整删**——输入不可构造；让位规则已不在
+		// 申报表里。补两档 instrument 的「overlay 开 = 合法沉默」反向（扫描面保持 90 档，
+		// 删档 = 回归网静默缩小的形态用补档堵住，档位哨兵 CHECK(size==90) 不降格）。
+		{.name = "rt/instrument-offset-overlay-ok",
+			.runtime = {.meshletOverlay = true, .meshletInstrument = MeshletInstrument::offset}},
+		{.name = "rt/instrument-tint-overlay-ok",
+			.runtime = {.meshletOverlay = true, .meshletInstrument = MeshletInstrument::tint}},
 		{.name = "rt/coplanar-eq", .runtime = {.meshletCoplanar = MeshletCoplanarMode::equal}},
 		{.name = "rt/coplanar-ne-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) {
@@ -996,9 +984,8 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "rt/kitchen-sink-off",
 			.runtime = redlineA([](RuntimeConfig& r) {
 				r.meshletOverlay = true;
-				r.meshletDebug = true;
+				r.meshletInstrument = MeshletInstrument::tint;
 				r.meshletCoplanar = MeshletCoplanarMode::ne;
-				r.meshletTint = true;
 				r.meshletSwitch = true;
 				r.meshletCull = true;
 				r.meshletShadowLodFallback = MeshletLodFallbackMode::l0;
@@ -1007,9 +994,8 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "rt/kitchen-sink-on",
 			.cfg = {.cullReplay = CullReplayMode::gpuSync},
 			.runtime = {.meshletOverlay = true,
-				.meshletDebug = true,
+				.meshletInstrument = MeshletInstrument::tint,
 				.meshletCoplanar = MeshletCoplanarMode::ne,
-				.meshletTint = true,
 				.meshletSwitch = true,
 				.meshletCull = true,
 				.meshletShadowLodFallback = MeshletLodFallbackMode::l0,
@@ -1018,7 +1004,8 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "combo/all-blocks-off",
 			.cfg = {.pickingProbeX = 640, .uiClickProbeY = 200, .cameraProbeKey = 'W'},
 			.shadow = {.pcss = kTuningAll, .evssm = kTuningAll},
-			.runtime = {.meshletAssets = false, .meshletOverlay = true, .meshletDebug = true,
+			.runtime = {.meshletAssets = false, .meshletOverlay = true,
+				.meshletInstrument = MeshletInstrument::offset,
 				.meshletMdiShadow = true}},
 	};
 	return kCases;

@@ -323,9 +323,10 @@ export struct MeshletAssembly {
  * modelEntry=false 且晚于克隆调用 = picking/highlight 重放天然跳过）、`assembleBackEnd`
  * 之前；三个 sampler/RT 槽经各自幂等 ensure 重取 = 与模型条目同号。门关
  * （meshletAssets=false）= 连槽号都不领、一条条目都不建（逐位不变构造性成立）。
- * @param cfg 运行配置（读 meshletAssets 门 + meshletDebug/meshletTint 两枚 SPV 变体位：
- *   debug = 阳性对照（判据 3），tint = ★0.5-b2 双臂阳性对照，同真时 tint 优先 + warn。
- *   🔴 债-105 起这两枚**只在 meshlet.overlay 开时**才被采纳——变体烘进的是 `switch` 原位取代
+ * @param cfg 运行配置（读 meshletAssets 门 + meshletInstrument 三态 SPV 变体位：
+ *   offset = 阳性对照（判据 3），tint = ★0.5-b2 双臂阳性对照（债-129 S2 起一枚三值键，
+ *   原 debug/tint 两布尔的让位规则已随合并消失）。
+ *   🔴 债-105 起本键**只在 meshlet.overlay 开时**才被采纳——变体烘进的是 `switch` 原位取代
  *   共用的那批条目，叠加段关着也能改条目 = 诊断渗进产品路 ⟹ 关时强制 base + 偏离默认才 warn）
  * @param sceneData scene data 服务（★1-a2-i：`MeshletCullService` 要它的槽号与 buffer 句柄）
  * @return 簇化轴的 GPU 侧服务持有者 `MeshletAssembly`（★M-1a 起两格）：

@@ -148,13 +148,22 @@ return {
         -- `switch` 原位取代的宿主，关 overlay ≠ 关条目，否则 `switch` 静默失去宿主）。
         -- 生效条件**不含** `assets`（同 `mdi_shadow` 定性），但 `overlay = true` + `assets = false`
         -- = 没有条目可采 ⟹ 装配层出声，不静默空开关。
-        -- 🔴 本键关时 `debug` / `tint` 两枚**条目级**变体位一律取 base（它们会改 `switch` 共用的
+        -- 🔴 本键关时 `instrument` **条目级**变体位（三档全部）一律取 base（它会改 `switch` 共用的
         --   条目 = 叠加仪器渗进产品取代路），且偏离默认时 warn 出声。
-        -- ⚠ 想跑 α 的四臂判据（coplanar / debug / tint）必须显式开本键，否则仪器没有消费者。
+        -- ⚠ 想跑 α 的四臂判据（coplanar / instrument=offset/tint）必须显式开本键，否则仪器没有消费者。
         overlay = false,
-        -- ★1-a1ii-α 阳性对照档（判据 3）：叠加改用 DEBUG_OFFSET SPV 变体（clip.z 拉向
-        -- 相机 + 翻法线）⟹ 叠加真正写像素，图像必变。assets 关时无意义。
-        debug = false,
+        -- ★1-a1ii-α + ★0.5-b2 阳性对照仪器位（债-129 S2：原 debug/tint 两布尔 → 一枚三值键，
+        -- `aa` 三态先例复刻；原「同真 ⟹ tint 优先」的让位形态**写不出来**，让位规则已删）：
+        --   "none"   = 正常叠加（base SPV：共面 + eLess ⟹ 零写入）
+        --   "offset" = DEBUG_OFFSET SPV 变体（clip.z 拉向相机 + 翻法线）⟹ 叠加真正赢得深度
+        --              测试并写像素、图像必变 = 判据 3 的区分器（原 debug = true）
+        --   "tint"   = TINT SPV 变体（着色输入 = 常数：normal/uv/tangent 全写死，clip 一 bit
+        --              不动 ⟹ 深度与覆盖集与底逐位同，只有"写回的颜色"不同 ⟹ 逐 primitive
+        --              平色块）= 共面双臂的阳性对照：coplanar=equal + tint 图必须变 = equal
+        --              臂的非空洞证明；coplanar=off + tint 必须 = 基线（eLess 共面全拒）
+        -- 未知值 = 启动 fail-fast（aa/present_mode 纪律：静默回落 = 仪器臂根本没跑而判据全绿）。
+        -- assets 关时无意义（条目根本不建）。
+        instrument = "none",
         -- ★0.5-b2 共面双臂：叠加那批 draw 自带的深度比较档（动态状态，只作用叠加 draw，
         -- pass 与旧路径状态序列不动；off = 不碰 = 与门关逐 bit 同 = A1 构造性保证）。
         --   "off"   = 现行 eLess（共面 ⟹ 全拒零写入）
@@ -164,18 +173,12 @@ return {
         --   但叠加画的是该资产的**全套 primitive（含被遮挡面）**，而被遮挡面的深度永远 ≠ buffer
         --   里那个正面的深度 ⟹ NOT_EQUAL 在被遮挡区**恒放行**（实测放行 29.6% 屏 = 被遮挡面积，
         --   且链式写到最后画的 primitive 赢）。要救它得先把叠加限制到前向可见像素（stencil/prepass）。
-        --   位置逐位同这条改由 equal 臂的**放行集**承担：实测 32.74% ≈ debug 覆盖足迹 34.27%。
+        --   位置逐位同这条改由 equal 臂的**放行集**承担：实测 32.74% ≈ offset 覆盖足迹 34.27%。
         -- 未知值 = 启动 fail-fast（aa/present_mode 纪律：静默回落 = 四臂假绿的地基事故）。
-        -- 与 debug/tint 正交；assets 关时无意义（叠加零 draw）。
+        -- 与 instrument 正交；assets 关时无意义（叠加零 draw）。
         -- 🔴 债-105 起**还要 overlay = true 才有消费者**：叠加段关 = 一条叠加 draw 都不采 ⟹ 本档
         --   没有作用对象（生效档 INFO 会当场点出来，别把"双臂在跑"读进日志）。
         coplanar = "off",
-        -- ★0.5-b2 双臂阳性对照用：叠加改用 TINT SPV 变体（着色输入 = 常数：normal/uv/
-        -- tangent 全写死，clip 一 bit 不动 ⟹ 深度与覆盖集与底逐位同，只有"写回的颜色"
-        -- 不同 ⟹ 逐 primitive 平色块）。coplanar=equal + tint 图必须变 = equal 臂的
-        -- 非空洞证明；coplanar=off + tint 必须 = 基线（eLess 共面全拒）。
-        -- 与 debug 同真时 tint 优先（warn 出声，不建组合变体）。assets 关时无意义。
-        tint = false,
         -- ★1-a1ii-β-1 原位取代档：= true（且 assets = true）时，门开资产在主 opaque 段里
         -- 由簇路径 draw **1:1 原位**顶掉旧 mesh draw（同 objectIndex / 同 pushData / 同段内
         -- 位置，只换管线条目与 task 数 = 2×L0 簇数），而不是 α 那种「旧路径照画 + 共面影子

@@ -69,10 +69,11 @@ module;
  *     不是单测而是
  *     **A4 的 counters**（互换 ⟹ 叠加段不再采 draw ⟹ `overlay=true` 臂的 `draw.count` 从 8172
  *     掉回 6601）与 **A6 的变图**（debug/tint 臂根本不会变）。⟹ 交验收时 A4/A6 不能省。
- *   · **装配层那三步进不了单测**：`wireMeshletOverlayActivation` 的 emplace/出声、
- *     `pickMeshletMeshVariant` 的「overlay 关 ⟹ 强制 base」都要 registry + 设备级资产表 + 日志单例
- *     （`main` 分区单元，不是库）。防线 = 验收判据 A6b（图 = 出厂锚 + 告警出声）与 A8（门关
- *     `grep -ci meshlet` = 0）。
+ *   · ~~**装配层那三步进不了单测**~~ 之一已收口（债-129 S2）：`pickMeshletMeshVariant` 原住
+ *     `module main:meshlets` 实现分区（rgl_tests 链不到 main = 当时不可达的真根因，与 registry
+ *     无关——函数本体是纯的），已下移到 shader_registry，三档选档 + overlay 关强制 base
+ *     现由本文件「七」节直打。`wireMeshletOverlayActivation` 的 emplace/出声仍要 registry +
+ *     设备级资产表 + 日志单例（防线 = 验收判据 A6b 与 A8，不变）。
  *   · **烘焙不受 overlay 门管辖**这件事（β-1 取代段的宿主不能丢）在单测里**测不到**——
  *     `bakeMeshletEntries` 要 ShaderRegistry/设备。防线 = 该函数头的钉死注释 + 一条**专门跑
  *     `switch=true + overlay=false` 的臂**（若烘焙被误挂到 overlay 门下，那臂会静默退回旧路径：
@@ -93,6 +94,7 @@ import scene_forward_types_generated;    // ObjectClusterRange（区间表的条
 import material_types_generated;         // DrawArgs（push 字节的真实类型，判 pushData 身份）
 import meshlet_cull_types_generated;     // kSlotsPerCluster（×2 契约的 CPU 端规格常量）
 import runtime_config;                   // 配置键 meshlet.overlay 的解析契约
+import shader_registry;                  // pickMeshletMeshVariant / MeshletMeshVariant（债-129 S2 下移到本模块 = 单测可达）
 
 namespace RGL {
 namespace {
@@ -475,6 +477,35 @@ TEST_CASE("runtime_config：meshlet.overlay 默认 false、探针 true 命中、
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletOverlay == false);
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 七、pickMeshletMeshVariant 三档选档（债-129 S2：函数下移到 shader_registry 后单测可达）
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("pickMeshletMeshVariant：instrument 三档各返回正确变体；overlay 关 = 一律 base（让位分支已删）") {
+	// 🔴 三档返回语义与合并前**逐字不变**（约束红线）：none→base、offset→debugOffset、tint→tint。
+	// 原「tint 与 debug 同真 ⟹ tint 优先」的用例**整删**——两布尔已合并为一枚三值键，
+	// 该输入**不可构造**，让位分支连同规则一起消失（「消灭的是一个真实可达态」的实测证据 =
+	// 合并前基线第四行：overlay+debug+tint 三真截图与 tint 单开**逐位同** = /tmp/opencode/
+	// o1_premerge_anchors.txt，合并后这个实验永远做不了 = 旧写法配不出来）。
+	// 变异红线：① tint/offset 两档 return 互换 → overlay 开两断言红；
+	//           ② overlay 闸门删掉 → overlay 关三断言全红（债-105 归属裁决 = 仪器渗进产品路）；
+	//           ③ none 档改成返回 debugOffset → none 断言红（出厂叠加 = 正常档）。
+	RuntimeConfig on;
+	on.meshletOverlay = true;
+	CHECK(pickMeshletMeshVariant(on) == MeshletMeshVariant::base);  // instrument = none（默认）
+	on.meshletInstrument = MeshletInstrument::offset;
+	CHECK(pickMeshletMeshVariant(on) == MeshletMeshVariant::debugOffset);
+	on.meshletInstrument = MeshletInstrument::tint;
+	CHECK(pickMeshletMeshVariant(on) == MeshletMeshVariant::tint);
+	// 🔴 overlay 关 = 一律 base（债-105 的归属裁决：变体位归叠加段，三档全钉）
+	for (const MeshletInstrument instr : {MeshletInstrument::none, MeshletInstrument::offset,
+	                                      MeshletInstrument::tint}) {
+		RuntimeConfig off;  // overlay = false（出厂默认）
+		off.meshletInstrument = instr;
+		CHECK(pickMeshletMeshVariant(off) == MeshletMeshVariant::base);
 	}
 }
 

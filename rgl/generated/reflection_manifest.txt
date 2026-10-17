@@ -45,7 +45,7 @@ d384c4e40bc07203fc39826859f878557702875f  rgl/shaders/light.frag.slang
 46d0384f70d0fdc2610988b0df184f60a5af46c8  rgl/shaders/light.mesh.slang
 46123e26816075fb7c388dd9cc226e2ef3de3bd8  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
-741d3391ae7184e1bbbdc355ed1691ee3029b486  rgl/shaders/meshlet.mesh.slang
+d8bc6ab1df5c304f916c4158f0617ff2c58b0838  rgl/shaders/meshlet.mesh.slang
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 8439c29da821034d058d952a21d882a6626e92dd  rgl/shaders/model.frag.slang
 297805826f7fae6014ac5599acda57d70fe00873  rgl/shaders/model.mesh.slang
@@ -62,7 +62,7 @@ ccf4c96b375b022bf18940173e22ac94747ba290  rgl/shaders/scene.slang
 e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
 c2357e16a0468e2fa625e1110b14e66ad3678748  rgl/shaders/shadow.slang
-7b30d2f4c879e4b0069cb93be27af80ce4df1b0b  rgl/shaders/shadow_meshlet.mesh.slang
+186b8bedcada9b347a42568dcc4a5eb5a57324c2  rgl/shaders/shadow_meshlet.mesh.slang
 94d722f0ca3207721aab0566232a6a837743237a  rgl/shaders/shadow_meshlet.task.slang
 406e63ed0f8761fc4dedf61194d0b270f366c21a  rgl/shaders/sky.slang
 16f0cb648512ffe90e6f6079ef54483d9f9fe889  rgl/shaders/skybox.frag.slang
@@ -98,7 +98,7 @@ d384c4e40bc07203fc39826859f878557702875f  rgl/shaders/light.frag.slang
 46d0384f70d0fdc2610988b0df184f60a5af46c8  rgl/shaders/light.mesh.slang
 46123e26816075fb7c388dd9cc226e2ef3de3bd8  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
-741d3391ae7184e1bbbdc355ed1691ee3029b486  rgl/shaders/meshlet.mesh.slang
+d8bc6ab1df5c304f916c4158f0617ff2c58b0838  rgl/shaders/meshlet.mesh.slang
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 8439c29da821034d058d952a21d882a6626e92dd  rgl/shaders/model.frag.slang
 297805826f7fae6014ac5599acda57d70fe00873  rgl/shaders/model.mesh.slang
@@ -115,7 +115,7 @@ ccf4c96b375b022bf18940173e22ac94747ba290  rgl/shaders/scene.slang
 e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
 c2357e16a0468e2fa625e1110b14e66ad3678748  rgl/shaders/shadow.slang
-7b30d2f4c879e4b0069cb93be27af80ce4df1b0b  rgl/shaders/shadow_meshlet.mesh.slang
+186b8bedcada9b347a42568dcc4a5eb5a57324c2  rgl/shaders/shadow_meshlet.mesh.slang
 94d722f0ca3207721aab0566232a6a837743237a  rgl/shaders/shadow_meshlet.task.slang
 406e63ed0f8761fc4dedf61194d0b270f366c21a  rgl/shaders/sky.slang
 16f0cb648512ffe90e6f6079ef54483d9f9fe889  rgl/shaders/skybox.frag.slang
@@ -150,7 +150,7 @@ d384c4e40bc07203fc39826859f878557702875f  rgl/shaders/light.frag.slang
 46d0384f70d0fdc2610988b0df184f60a5af46c8  rgl/shaders/light.mesh.slang
 46123e26816075fb7c388dd9cc226e2ef3de3bd8  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
-741d3391ae7184e1bbbdc355ed1691ee3029b486  rgl/shaders/meshlet.mesh.slang
+d8bc6ab1df5c304f916c4158f0617ff2c58b0838  rgl/shaders/meshlet.mesh.slang
 b4e1ba49e66440300ecb1edb896f74f534571df2  rgl/shaders/meshlet_cull.comp.slang
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 8439c29da821034d058d952a21d882a6626e92dd  rgl/shaders/model.frag.slang
@@ -168,7 +168,7 @@ ccf4c96b375b022bf18940173e22ac94747ba290  rgl/shaders/scene.slang
 e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
 c2357e16a0468e2fa625e1110b14e66ad3678748  rgl/shaders/shadow.slang
-7b30d2f4c879e4b0069cb93be27af80ce4df1b0b  rgl/shaders/shadow_meshlet.mesh.slang
+186b8bedcada9b347a42568dcc4a5eb5a57324c2  rgl/shaders/shadow_meshlet.mesh.slang
 94d722f0ca3207721aab0566232a6a837743237a  rgl/shaders/shadow_meshlet.task.slang
 406e63ed0f8761fc4dedf61194d0b270f366c21a  rgl/shaders/sky.slang
 16f0cb648512ffe90e6f6079ef54483d9f9fe889  rgl/shaders/skybox.frag.slang

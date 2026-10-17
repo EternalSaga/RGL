@@ -235,7 +235,7 @@ void main(
 #endif
         verts[v].position = clip;
 #if defined(MESHLET_TINT)
-        // 共面双臂阳性对照（★0.5-b2，门 `meshlet.tint`）：着色输入（normal/uv/切线+手性）
+        // 共面双臂阳性对照（★0.5-b2，`meshlet.instrument = "tint"` 档）：着色输入（normal/uv/切线+手性）
         // 全写死成常数 ⟹ 叠加写回**逐 primitive 的平色块**；position/positionOS 一 bit
         // 不动 ⟹ 深度与覆盖集与底**逐位同**（= 与 DEBUG_OFFSET 正相反：那个动深度动着色，
         // 这个只动着色）。于是 coplanar=equal + 本变体图**必须变**（共面像素经 eEqual 放行

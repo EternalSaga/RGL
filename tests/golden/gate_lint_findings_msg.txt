@@ -139,22 +139,18 @@ meshlet.shadow_lod	shadow_lod ≥ 0 但 assets = false：簇四段 buffer 的描
 ### rt/overlay-on
 ### rt/overlay-offenable
 meshlet.overlay	overlay 的生效条件**不含** assets（它的宿主是叠加段自己），但 assets = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
-### rt/debug-only
-meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
-### rt/debug-offenable
-meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+### rt/instrument-offset
+meshlet.instrument	instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint 两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 "none"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+### rt/instrument-offset-offenable
+meshlet.instrument	instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint 两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 "none"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
 meshlet.overlay	overlay 的生效条件**不含** assets（它的宿主是叠加段自己），但 assets = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
-### rt/tint-only
-meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；assets 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
-### rt/tint-debug
-meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
-meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；assets 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
-### rt/tint-debug-overlay
-meshlet.tint	tint 与 debug 同真 ⟹ tint 优先、debug 让位（不建组合 SPV 变体：判据 3 只用 tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
-### rt/tint-debug-offenable
-meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+### rt/instrument-tint
+meshlet.instrument	instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint 两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 "none"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+### rt/instrument-tint-offenable
+meshlet.instrument	instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint 两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 "none"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
 meshlet.overlay	overlay 的生效条件**不含** assets（它的宿主是叠加段自己），但 assets = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
-meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；assets 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
+### rt/instrument-offset-overlay-ok
+### rt/instrument-tint-overlay-ok
 ### rt/coplanar-eq
 meshlet.coplanar	coplanar 双臂只作用**叠加段**那批 draw：assets = false（无条目）或 overlay = false（零采集）⟹ 没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / 对账三条回落路，那是装配期事实，判不了
 ### rt/coplanar-ne-offenable
@@ -200,23 +196,21 @@ meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer �
 ### rt/kitchen-sink-off
 meshlet.coplanar	coplanar 双臂只作用**叠加段**那批 draw：assets = false（无条目）或 overlay = false（零采集）⟹ 没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / 对账三条回落路，那是装配期事实，判不了
 meshlet.cull	cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 assets && switch，单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch 的回落路不写配置）
-meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+meshlet.instrument	instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint 两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 "none"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
 meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.assets + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
 meshlet.overlay	overlay 的生效条件**不含** assets（它的宿主是叠加段自己），但 assets = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
 meshlet.shadow_lod_fallback	shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 assets 开时才有消费者（逐模型选级住在 wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）
 meshlet.switch	switch 需 assets：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代
-meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；assets 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
 ### rt/kitchen-sink-on
 meshlet.cull	cull 与 switch 同款限制：只在 diagnostics.cull_replay = "cpu" 生效（它挂在取代档上，非默认档下 switch 本身就不生效）
 meshlet.switch	switch 只在 diagnostics.cull_replay = "cpu" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）
-meshlet.tint	tint 与 debug 同真 ⟹ tint 优先、debug 让位（不建组合 SPV 变体：判据 3 只用 tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
 ### combo/all-blocks-off
 camera_probe.key	camera_probe.frame=0（探针关）：按键是死值
 evssm.max_penumbra	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
 evssm.min_footprint_texels	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
 evssm.search_radius	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
 evssm.sun_degrees	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
-meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+meshlet.instrument	instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint 两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 "none"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
 meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.assets + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
 meshlet.overlay	overlay 的生效条件**不含** assets（它的宿主是叠加段自己），但 assets = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
 meshlet.shadow_lod	shadow_lod ≥ 0 但 assets = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = assets）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留

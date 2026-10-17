@@ -12,6 +12,7 @@ import environment;  // Environment（架构债务续账步骤 3：env 单例/sk
 import asset_table;  // AssetTable（F 拆出：不再经内核透传）
 import shader;
 import scene_config;
+import runtime_config;  // RuntimeConfig（pickMeshletMeshVariant 入参：overlay 门 + instrument 三态位）
 import material_types_generated;
 import vkerror;
 
@@ -32,21 +33,51 @@ export enum class ClonePurpose : uint8_t {
 };
 
 /**
- * 簇路径叠加条目的 **mesh SPV 变体**（★1-a1ii-α debug 档 + ★0.5-b2 tint 档）。
+ * 簇路径叠加条目的 **mesh SPV 变体**（★1-a1ii-α debug 档 + ★0.5-b2 tint 档；
+ * 债-129 S2 起由配置键 `meshlet.instrument` 三态直接选档，原 `meshlet.debug`/`meshlet.tint`
+ * 两布尔的「同真 ⟹ tint 优先」让位规则随合并**结构性消失**——该非法态写不出来）。
  *
  * 门 = 选 SPV 变体不是运行时 flag（2026-10-02 slang fp 重排教训，同 IZB/PCSS/EVSSM 纪律）：
  *  · `base`        = `meshlet.mesh.spv`（正常叠加：共面 + eLess ⟹ 零写入）
  *  · `debugOffset` = `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`（clip.z 拉向相机 + 翻法线）
  *  · `tint`        = `meshlet.mesh_MESHLET_TINT.spv`（着色输入写常数、clip 不动；共面双臂
  *                    的阳性对照，`meshlet.coplanar` 的 equal/ne 两臂靠它做非空洞证明）
- * tint/debug 同真时装配层选 tint 优先 + warn（判据 3 只用 tint、判据 4 只用 offset，
- * 从不同时用，不建组合变体）。
  */
 export enum class MeshletMeshVariant : uint8_t {
 	base = 0,        ///< 正常叠加档
-	debugOffset = 1, ///< `meshlet.debug`：沿视向偏移 + 翻法线
-	tint = 2,        ///< `meshlet.tint`：着色输入写常数、深度不动
+	debugOffset = 1, ///< `meshlet.instrument = "offset"`：沿视向偏移 + 翻法线
+	tint = 2,        ///< `meshlet.instrument = "tint"`：着色输入写常数、深度不动
 };
+
+/**
+ * 叠加 mesh SPV 变体选档（★0.5-b2 的三档 base/debug/tint + **债-105** 的归属裁决 +
+ * **债-129 S2** 的类型消灭：原「tint 与 debug 同真 = tint 优先」的让位分支已删——
+ * 配置层是一枚三值 `MeshletInstrument`，同真形态**不可表示**，无需也让位）。
+ *
+ * 🔴 变体位**归叠加段所有**：`overlay = false` 时**一律 base**——这是**条目级**开关（变体经
+ * `bakeMeshletEntries` 的 `variant` 烘进**条目**），而那批条目同时是 β-1 原位取代的宿主
+ * （`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 叠加段关着也能改产品路的几何
+ * （DEBUG_OFFSET 把 clip.z 拉向相机 = 取代段整体错位；TINT 把着色输入写死 = 产品路变平色块）。
+ * 这不是「仪器没宿主」而是「仪器渗进产品」。孤立组合（仪器开了但被强制归 base）的出声
+ * 自债-106 起在 **gate_lint**（meshlet.instrument 规则）——原就近 warn
+ * `warnMeshletVariantInstruments` 的判据是纯配置组合，同一根因不许多处各喊一条
+ * （影子真相源），随迁移删除。
+ *
+ * 三档返回语义（债-129 S2 合并前后逐字不变）：none→base、offset→debugOffset、tint→tint。
+ * 住在 shader_registry（= `MeshletMeshVariant` 与 SPV 路径表的 owner）= 单测可达：
+ * 原住 `module main:meshlets` 实现分区，rgl_tests 链不到 main（既有覆盖缺口，本刀收口）。
+ * @param cfg 运行配置（读 overlay 门 + instrument 三态位）
+ * @return 本跑该烘的 mesh SPV 变体
+ */
+export inline MeshletMeshVariant pickMeshletMeshVariant(const RuntimeConfig& cfg) {
+	if (!cfg.meshletOverlay)
+		return MeshletMeshVariant::base;
+	if (cfg.instrumentIsTint())
+		return MeshletMeshVariant::tint;
+	if (cfg.instrumentIsOffset())
+		return MeshletMeshVariant::debugOffset;
+	return MeshletMeshVariant::base;  // instrument = none = 正常叠加档
+}
 
 /**
  * 管线表一条（Phase 4 批次 2：从 vkrenderer.cppm 迁入，Vulkan 层零 entt）：
