@@ -846,7 +846,11 @@ export const RgGraphDesc& deferredRenderGraphDesc();
  * **首个带 depth 输出的 opaque drawMesh pass 之后**（scene depth 已写 = 点选做 depth
  * 测试得可见层；picking 管线侧 depthWrite=false，不污染后续 transparent 段）。
  * 调用点 = main 装配层且 `diagnostics.picking` 门控（默认关 = 不调用 = 图逐位同，D10）。
- * 无 depth 输出 opaque pass 的图（offscreen DIAG 变体）不支持：原样不改返回 false。
+ * 🔴 债-129 S3-C：调用点拿到 false = **抛 std::runtime_error 拒启动**（旧行为是 warn 后继续跑 =
+ * 点选静默不可用）。本装饰的返回契约不变（false = 「落没落」的单一来源，单测直接吃它）。
+ * ⚠ 内建三图（forward / deferred / offscreen）**都有**这种 pass ⟹ 三条路线都支持本装饰
+ * （实测 2026-10-17：`--variant offscreen --set diagnostics:picking=true` 走到的是 highlight 那条
+ * 锚点、不是这条；旧注释写「offscreen 变体不支持」是错的，已改准）。缺它的只有自定义 passes。
  * @param desc 图声明（原地修改：追加 attachment + pass）
  * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
  */

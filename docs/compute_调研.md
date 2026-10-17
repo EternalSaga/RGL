@@ -1669,6 +1669,12 @@ tonemap pass（`fsr != nullptr` 且 `fsrInputs()` 有值 = 门开而无锚点）
 仍走 context 行）。顺带删掉一条死分支（`fsr: 输入附件不齐` 文案引擎里不存在，且"输入不齐"
 现行设计就是降级 warn 不是失败）。
 
+🔴 **本段的两处「现行」已被推翻（2026-10-17 注，勿照抄）**：① velocity / SSR 的「图形态不支持」
+放行模式已随 债-129 **S3-C 整条删除**——包装层现在是 `false → 抛 std::runtime_error`，图形态接不了
+就是启动失败，不再有「放行」这一档；②「输入不齐现行设计就是降级 warn」也不再成立，`inputsReady`
+那半已交 throw / compile，**只剩设备轴**（`shader16Supported`）仍是合法降级（§3.4.2 裁定它不进
+compile 拒）。本段作为**当时的做法**保留。
+
 #### 验收读数（本机 AMD 8060S / RADV STRIX_HALO）
 
 - **结案判据**：`just smoke --variant forward` → **PASS errors=0** warnings=2（两条 = izb_mask /

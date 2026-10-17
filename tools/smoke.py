@@ -727,19 +727,14 @@ def verdicts(code: int, log: str, cfg: VerdictCfg, *,
     velRequested = (cfg.velocity_field or fsrRequested
                     or set_switch_on(cfg.overrides, "runtime", "velocity_field"))
     vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
-    velUnsupported = "velocity: 图形态不支持" in log
     if velRequested and not vel:
-        # 区分两种"没建 RT"：**图形态不支持**（装饰器 warn 后正常跳过，offscreen 变体用
-        # blit 上屏，无"写 swapchain 且采色"的 pass = 与 decorateTaaPass 同判据）与
-        # **静默没落图**（键名漂了 / 日志文案改了 / 装饰器漏调）。前者是正确行为，
-        # 一律 FAIL 会把"正确不支持"报成缺陷，反过来也不许它拿"不支持"当遮羞布：
-        # 必须真的看到那条 warn 才算数。
-        if not velUnsupported:
-            fail("请求 velocity_field（--velocity-field 或 --set velocity_field=true 或 aa=fsr "
-                 "隐含）但日志里既没有 velocity RT 行、也没有"
-                 "「velocity: 图形态不支持」告警 ⟹ 装饰器静默没落图"
-                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）", say=say)
-        say("速度场: 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
+        # 🔴 债-129 S3-C 删掉了本处的一条**逃生门**（原：看到引擎「velocity: 图形态不支持」那条
+        # warn 就 ✓ 放行）。删的理由不是"判据太多"，是**引擎不再发那条 warn**：decorateVelocityOrWarn
+        # 现在抛 std::runtime_error 拒启动，而拒启动由上面 `code != 0` 那条 fail 接住（位置在本判据
+        # **之前** ⟹ 不会装绿）。留着放行档 = 给一条引擎已不发、但可能被谁加回来的文案留遮羞布。
+        fail("请求 velocity_field（--velocity-field 或 --set velocity_field=true 或 aa=fsr "
+             "隐含）但日志里没有 velocity RT 行 ⟹ 装饰器静默没落图"
+             "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）", say=say)
     if not velRequested and vel:
         fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
              " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效", say=say)
@@ -751,14 +746,14 @@ def verdicts(code: int, log: str, cfg: VerdictCfg, *,
     # 网格上工作）、trace RT = 渲染网格 × 0.5 向下取整（口径 = C++ scaleRtExtent）。
     ssrRt = re.search(r"ssr \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     ssrTraceRt = re.search(r"ssr_trace \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
-    ssrUnsupported = "ssr: 图形态不支持" in log
     if ssrRequested and not (ssrRt and ssrTraceRt):
-        if not ssrUnsupported:
-            fail("请求 ssr（--ssr 或 --set ssr.enabled=true）但日志里 trace/apply 两行 RT 不齐"
-                 f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}），"
-                 "也没有「ssr: 图形态不支持」告警 ⟹ 装饰器静默没落图或只落了一半"
-                 "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）", say=say)
-        say("SSR    : 本图变体不支持（装饰器已 warn 并跳过）✓ 非错误")
+        # 🔴 债-129 S3-C：同 velocity，「ssr: 图形态不支持」那条逃生门已删——三条 skip（顺序 /
+        # 锚点 / G-buffer 契约表）现在全部由 decorateSsrOrWarn 抛异常拒启动，其中 ③（forward 图）
+        # 是 compile **放过**的那条，以前只有 warn，现在 `--variant forward --ssr` 起不来。
+        fail("请求 ssr（--ssr 或 --set ssr.enabled=true）但日志里 trace/apply 两行 RT 不齐"
+             f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}）"
+             " ⟹ 装饰器静默没落图或只落了一半"
+             "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）", say=say)
     if not ssrRequested and (ssrRt or ssrTraceRt):
         fail(f"默认档（ssr.enabled 关）却建了 ssr RT：{(ssrRt or ssrTraceRt).group(0)}"
              " ⟹ 门关不拢，「门开 = 门关逐位相同」红线的前提失效", say=say)
@@ -778,11 +773,13 @@ def verdicts(code: int, log: str, cfg: VerdictCfg, *,
     # 正向 = 门开必须看到 vendor context 构造行；反向 = 门关**一行都不许有**——FSR 是
     # 图外 compute，门关不拢时截图未必变（本批它的输出尚无消费者），只看画面会漏。
     fsr = re.search(r"FsrUpscaler: context 就绪[^\n]*?render=(\d+)x(\d+) upscale=(\d+)x(\d+)", log)
-    # 引擎自己的「开门但接不起来」降级（computeFsrUsable，main_scene）：图形态不支持
-    # （offscreen 图无 scene_hdr/velocity/tonemap，或缺 shader16）时 warn **点名原因位**
-    # 并正常不接 = 正确行为。与 velocity/SSR 的「图形态不支持」放行同判据：必须真看到
-    # 那条 warn 才算数，不许拿"不支持"当遮羞布。（原 `fsr: 输入附件不齐` 分支是死码：
-    # 引擎无此文案，且"输入不齐"现行设计就是这条降级 warn，不是失败。）
+    # 引擎自己的「开门但接不起来」降级（computeFsrUsable，main_scene）。🔴 债-129 S3-C 之后这条
+    # 降级**只剩设备轴**：四个条件里 velocityDecorated / 输入齐备都是图形态轴，而图形态轴现在由
+    # 装饰包装层拒启动（配了接不了 = 进程起不来，走 `code != 0` 那条 fail），走不到这里；剩下的
+    # `shader16Supported()` 是**设备事实**，§3.4.2 已裁定它**不进** compile 拒（否则同一份配置换台
+    # 机器起不来，撞「工作机器不著书」）⟹ 本放行档**永久合法**，与 velocity/ssr 那两条被删的不同类。
+    # 纪律不变：必须真看到那条 warn 才算数，不许拿"接不起来"当遮羞布。
+    # （原 `fsr: 输入附件不齐` 分支是死码：引擎无此文案，且"输入不齐"现行设计就是这条降级 warn。）
     fsrDegraded = re.search(r'aa="fsr" 开门但接不起来[^\n]*', log)
     if fsrRequested and not fsr:
         if fsrDegraded:
@@ -822,7 +819,8 @@ def verdicts(code: int, log: str, cfg: VerdictCfg, *,
     # fsr 时域调参生效核对。**必须读「生效」而不是「请求」**：日志行报的是引擎实际接上的
     # 档位，而配置里写的可能是另一回事（"静默换臂"的引擎侧版本就藏在这个差里）。
     # 批 14.6 三态之后「TAA 在图 = true 且 temporal 请求开」已不可能同时成立（aa 一个槽位），
-    # 所以这里判关只可能是：velocity 没进图 ⟹ fsrUsable 假 / 图形态不支持 / 本来就没请求。
+    # 所以这里判关只可能是：fsrUsable 假（🔴 债-129 S3-C 后**只剩设备轴** shader16——图形态轴
+    # 那两条现在由装饰包装层拒启动，走不到这里）/ 本来就没请求。
     fsrTemp = re.search(r"fsr temporal: (开|关).*?fsr_temporal = (\w+)，TAA 在图 = (\w+)", log)
     # 🔴 两条判据的口径**故意不对称**，别"顺手统一"：
     #   正向只认具名旗标 `--fsr-temporal`（guard_flags 已保证它必须配 aa=fsr，请求了就必须看到）；
@@ -892,8 +890,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--ssr", action="store_true",
                     help="runtime.lua ssr 块 enabled = true（屏幕空间反射，批 15.3B 起 = "
                          "trace + apply 两 pass）。双向核对：开了没建齐 ssr_trace/ssr 两行 RT "
-                         "且无「图形态不支持」warn = FAIL；没开却建了 = FAIL（门关不拢 = "
-                         "「门开=门关逐位相同」红线失效）")
+                         "= FAIL；没开却建了 = FAIL（门关不拢 = 「门开=门关逐位相同」红线失效）。"
+                         "🔴 债-129 S3-C 起没有「图形态不支持」这一档：forward / offscreen 图配 "
+                         "ssr.enabled=true 是**引擎拒启动**（smoke 报「引擎非零退出」）")
     ap.add_argument("--aa", choices=("off", "fsr", "taa"), default=None,
                     help="runtime.lua aa（批 14.6 抗锯齿三态开关）：off = 出厂默认（无 TAA "
                          "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开 "
@@ -1159,6 +1158,8 @@ def selftest(quiet: bool = False) -> list[str]:
     # 有十几处，逐个追行号只会制造"改了一处、其余照旧漂"的假象，故在此一次性声明）。
     VEL = "[0] [info] [render_graph_rtslot.cppm:148] velocity (RGBA16F, 像素单位 prev−cur): 1280x720 slot 5"
     VEL_SMALL = VEL.replace("1280x720", "640x360")
+    # 🔴 VEL_NO / SSR_NO 是**历史文案**夹具（债-129 S3-C 起引擎不再发这两条 warn，改成拒启动）：
+    # 它们如今只服务一条判据 = 「旧逃生门的文案不再算数」，见 ⑧/⑨ 的 must_fail。
     VEL_NO = "[0] [warning] [main_impl.cppm:404] velocity: 图形态不支持速度场装饰（锚点略）"
     SSR = "[0] [info] [render_graph_rtslot.cppm:195] ssr (RGBA16F, 成片+屏幕空间反射): 1280x720 slot 6"
     SSR_SMALL = SSR.replace("1280x720", "640x360")
@@ -1295,10 +1296,14 @@ def selftest(quiet: bool = False) -> list[str]:
     must_fail("请求 0.5 生效 1.0 必须红", "引擎实际生效 1.0", 0, vlog(), vcfg(render_scale=0.5))
     must_pass("请求 1.0 生效 1.0 不红（上一条的红不是恒真）", 0, vlog(), vcfg(render_scale=1.0))
 
-    # ⑧ velocity_field：双向核对（门开必须有行、门关一行不许有）
-    must_fail("请求 velocity 但没建 RT 也没 warn", "请求 velocity_field",
+    # ⑧ velocity_field：双向核对（门开必须有行、门关一行不许有）。🔴 债-129 S3-C：原来那条
+    #    「图形态不支持 = 正确行为，放行」的 must_pass 已**反转成 must_fail**——引擎不再 warn 而是
+    #    拒启动，旧文案不再构成放行理由（本条同时是「工具不许装绿」的反向用例：拿旧 warn 来骗过
+    #    velocity 判据，必须红）。引擎真拒启动时红在「引擎非零退出」那条，见 ②。
+    must_fail("请求 velocity 但没建 RT", "请求 velocity_field",
               0, vlog(), vcfg(velocity_field=True))
-    must_pass("图形态不支持 = 正确行为，放行", 0, vlog(VEL_NO), vcfg(velocity_field=True))
+    must_fail("旧「图形态不支持」warn 不再放行 velocity（S3-C 删逃生门）", "请求 velocity_field",
+              0, vlog(VEL_NO), vcfg(velocity_field=True))
     must_fail("门关不拢：默认档却建了 velocity RT", "却建了 velocity RT", 0, vlog(VEL), vcfg())
     must_fail("velocity RT ≠ 渲染网格必须红", "速度场必须与深度同网格",
               0, vlog(VEL_SMALL), vcfg(velocity_field=True))
@@ -1306,9 +1311,12 @@ def selftest(quiet: bool = False) -> list[str]:
     #    「门关」的假设去判一门开着的图（批 N+1 实测四条全中招）
     must_pass("--set 开 velocity 也算门开", 0, vlog(VEL), vcfg(overrides=["velocity_field=true"]))
 
-    # ⑨ ssr：门开必须 trace + apply **两行都在**（只缺一行 = 半条链，单行判据抓不住）
+    # ⑨ ssr：门开必须 trace + apply **两行都在**（只缺一行 = 半条链，单行判据抓不住）。
+    #    🔴 债-129 S3-C：同 ⑧，「图形态不支持」的 must_pass 反转成 must_fail（forward 图配 ssr
+    #    现在是引擎拒启动，走 ② 的「引擎非零退出」；旧文案不再构成放行理由）。
     must_fail("请求 ssr 只建了一半必须红", "请求 ssr（", 0, vlog(SSR), vcfg(ssr=True))
-    must_pass("ssr 图形态不支持 = 正确行为，放行", 0, vlog(SSR_NO), vcfg(ssr=True))
+    must_fail("旧「图形态不支持」warn 不再放行 ssr（S3-C 删逃生门）", "请求 ssr（",
+              0, vlog(SSR_NO), vcfg(ssr=True))
     must_fail("门关不拢：默认档却建了 ssr RT", "却建了 ssr RT", 0, vlog(SSR), vcfg())
     must_fail("ssr(apply) ≠ 渲染网格必须红", "apply 的消费者",
               0, vlog(SSR_SMALL, SSR_TRACE), vcfg(ssr=True))
@@ -1393,12 +1401,11 @@ def selftest(quiet: bool = False) -> list[str]:
               vcfg(gbuf=1, expect_file="screenshots/gbuffer_1.png", size=(1280, 720)))
     must_fail("velocity 行不是 RGBA16F 格式 = 不是那张 RT", "请求 velocity_field",
               0, vlog(VEL_OTHER_FMT), vcfg(velocity_field=True))
-    #     三条"图形态不支持"逃生门各自只认自己那一条 warn：不认前缀的话，ssr 的 warn
-    #     会替 velocity 开门（反之同理）——逃生门变成通用遮羞布
-    must_fail("velocity 请求了、日志里只有 ssr 的不支持 warn", "请求 velocity_field",
-              0, vlog(SSR_NO), vcfg(velocity_field=True))
-    must_fail("ssr 请求了、日志里只有 velocity 的不支持 warn", "请求 ssr（",
-              0, vlog(VEL_NO), vcfg(ssr=True))
+    #     🔴 债-129 S3-C 删掉了这里原本的两条「逃生门互不串门」用例（velocity / ssr 各一条）：
+    #     那两条逃生门本身随「warn → 拒启动」消失，用例的**理由**（不认前缀就会互相开门）不再存在。
+    #     取代它们的是 ⑧/⑨ 里两条更强的 must_fail（拿**匹配**的旧文案来骗也照样红）。
+    #     唯一幸存的逃生门 = 下面的 fsrDegraded（设备轴 shader16，§3.4.2 裁定它不进 compile 拒），
+    #     它的"锚不许被削薄"两条（FSR_AA_ECHO / DEGRADE_OTHER）仍然有效、原样保留。
     must_fail("ssr 只建了 trace 一行（apply 缺）必须红", "请求 ssr（", 0, vlog(SSR_TRACE), vcfg(ssr=True))
     must_fail("ssr_trace 行不是 RGBA16F 格式 = 不是那张 RT", "请求 ssr（",
               0, vlog(SSR, SSR_TRACE_OTHER_FMT), vcfg(ssr=True))

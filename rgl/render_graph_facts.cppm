@@ -75,7 +75,7 @@ std::optional<RgFsrColorInput> graphFsrColorInput(
 	//  前提删掉了）。论证链：本档要被选中 ⟺ 图里有 `ssr_applied` 且 `ao_applied` / `taa_out`
 	//  都不在 ⟹ ① ssr 装饰成功了（要锚点 + 全 G-buffer 契约表）；② 要有人拿这个答案就得 FSR
 	//  真接线 ⟹ `aaWantsFsr()` 为真（`main_impl` 装饰侧与装配侧取的是**同一个** `aaWantsFsr()`，
-	//  不存在「FSR 接了但 ao_apply 没被调」的配置）⟹ `decorateAoApplyOrWarn` 必被调；③ 而
+	//  不存在「FSR 接了但 ao_apply 没被调」的配置）⟹ `decorateAoApplyOrThrow` 必被调；③ 而
 	//  ao_apply 剩下的两条跳过条件在这里都不成立：B 类「taa 在图里」与 ssr 自己的 B 类同命中
 	//  taa（不可能一个跳一个插），C 类锚点与 ssr 共用同一个 `swapchainColorConsumerIndex`
 	//  （ssr 都过了）⟹ ao_apply **照插**（原 A 类「无 ao 附件」已删）。于是只剩两个出口：

@@ -176,26 +176,6 @@ export void checkPushDataLimits(const DeviceContext& device);
  * @note 违约 → 抛 std::runtime_error
  */
 export void validateEnvironmentContract(const SceneConfig& scene);
-
-/**
- * 加载 configs/render_graph.lua + compileRenderGraph（校验 + barrier 布局链推导，任何图
- * 错误启动期抛 std::runtime_error）+ variant 求值 deferredMode（Phase 7 路线选路：
- * forward(默认)/deferred/offscreen——后两者为内建 exclusive 图变体）。
- * @param taaEnabled 批 12.6：「TAA 要不要进图」（true = decorateTaaPass，结果随
- *        CompiledGraphResult::taaDecorated 带回；offscreen 变体装饰失败 = false）。
- *        批 14.6 起调用点传 `RuntimeConfig::aaWantsTaa()`（原 scene.lua taa.enabled 已删）
- * @param velocityEnabled 批 14.4：configs/runtime.velocity_field（逐像素速度场装饰；
- *        aa 为 fsr 时该键已在解析期被隐含打开，本形参对隐含关系无感知）
- * @param fsrEnabled      批 14.5 第三批：「FSR 要不要接」（批 14.6 起调用点传
- *        `aaWantsFsr()`，原 fsr_upscaler 键已删）。它在这里**只**决定
- *        「要不要插 AO 施加专用 pass」（FSR 当时域滤波器 ⟹ AO 必须在它之前施加）；
- *        FSR 本身能不能接是装配层的事，两者不耦合（理由见 decorateAoApplyOrWarn）。
- * @param ssrEnabled      批 15.1 前半：configs/runtime.lua `ssr.enabled`（屏幕空间反射
- *        装饰；与 aa 三态键正交，结果随 CompiledGraphResult::ssrDecorated 带回）。
- */
-export CompiledGraphResult compileGraphOrThrow(const char* path, bool taaEnabled,
-	bool velocityEnabled = false, bool fsrEnabled = false, bool ssrEnabled = false);
-
 /** 按 file 去重的已上传模型（instancing：同文件一次解析一次上传，entities 共享资产）。 */
 export struct UploadedModel {
 	std::string file;

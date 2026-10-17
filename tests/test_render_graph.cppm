@@ -1796,7 +1796,7 @@ TEST_CASE("decorateSsrPass 图形态跳过：blit 上屏变体 / G-buffer 契约
 
 TEST_CASE("decorateSsrPass 时序跳过：taa / ao_apply 已在图里（装饰太晚）→ false 且不动图；阳性配对") {
     // 这条把 main_impl 的「SSR 先于 taa / ao_apply 装饰」调用序不变量变成**结构性**的。
-    // 没有它：把 decorateSsrOrWarn 挪到 taa / ao_apply 之后，图**仍然自洽**（能编译、无
+    // 没有它：把 decorateSsrOrThrow 挪到 taa / ao_apply 之后，图**仍然自洽**（能编译、无
     // hazard、无 warning），只是 SSR 静默建在时域滤波之后（抖动网格不匹配 + SSR 不被
     // 滤波），图/布局/像素三个层面都无异常——单测与冒烟全绿抓不到（phase15_plan §3.2
     // 缺口 2，主 agent 实测）。有了它：症状变成「SSR 静默消失」= smoke --ssr 双向核对
