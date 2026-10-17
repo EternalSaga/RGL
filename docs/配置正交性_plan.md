@@ -942,6 +942,30 @@ constexpr，**谓词面自己不能成为新的抄写点**（哲学 1：访问�
 **明确不做**：色输入链两处合一（装配层那条要按档**条件领建 RT 堆槽**，门关 = 堆槽零变化是逐位性质，
 改「先问链头再领槽」会动领建序）——已由 16 组合表钉住同解（`965f146`），那是当前形态下的最强判据。
 
+#### 🔴 下一刀（2026-10-17 用户指路：研究砍 forward / offscreen）
+
+**用户的设计种子（原话）**：「**offscreen 是固有能力，讲道理和渲染模式没有任何关系**。」
+
+⟹ 今天 `RgGraphVariant{forward, deferred, offscreen}` 把**两条正交轴**塞进一枚枚举：
+**光照路径**（forward / deferred）与**输出目标**（采样上屏 / 画进图像再 blit 上屏）。这正是本债
+「不正交」的标准形态，只是长在图变体上而不是长在配置键上。
+
+两条**可机器验**的后果（下一刀拿它们当判据，别只当感想）：
+1. offscreen 只能是 forward 形——`offscreenRenderGraphDesc` 复用 `opaque`/`skybox`/`transparent`
+   三段（`render_graph_builtin.cppm:119-138`）⟹ **「deferred + 离屏」今天表达不出来**，
+   而真实引擎里"渲到图像再呈现"恰恰是主形态。
+2. 我这几天做的 **C 类 5 条硬失败，全部触发面就是这枚枚举的第三值**（锚点判据「写 swapchain
+   且 sampleRead 场景色」在 blit 呈现的图上必然无落点）。轴一分开，这 5 条的语义才说得清：
+   它们真正拒的不是"离屏"，是"**呈现方式与能力的接线假设不匹配**"。
+
+⚠ 本轮已实测的事实，下一刀直接用别重查：**源配置无一使用 offscreen**（`configs/`、`qa/configs/`
+零命中）；**forward 无任何逐位锚点**（锚点小节 0 条）；**闭式解探针 `qa/configs/analytic` 是
+forward-only**（`render_graph.lua:31` + `scene.lua:21` 的 forward 规格）⟹ 它是五层里唯一不吃基线
+图像的判据，**删 forward 前必须先把它重立到 deferred**，否则是拆自己的判据换维护面。
+另两条活雷（二相性自己长出来的直接证据）：配置文件找不到 → warn 一句「using default 3-pass graph」
+（**pass 数是错的**）+ 返回 forward，而**出厂默认是 deferred** ⟹ 路径写错静默换渲染器；
+同一种"规格缺失"deferred 静默回落 `deferred_geometry`、forward 直接 throw（`main_scene.cppm:293-300`）。
+
 #### S2 配置层类型消灭（拍板 A + C 的键名 / 键合并半）
 
 - 交付：`meshlet.instrument`（none/offset/tint，两布尔 → 三值）→ `meshlet.mode`

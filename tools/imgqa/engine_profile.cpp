@@ -331,8 +331,6 @@ std::vector<std::pair<std::string, std::string>> fsrKeyValues(const ProfileOpts&
         std::snprintf(sc, sizeof sc, "%g", o.renderScale);
         kv.emplace_back("render_scale", sc);
     }
-    if (o.velocityField)
-        kv.emplace_back("velocity_field", "true");
     if (o.aa == Aa::Fsr) {
         kv.emplace_back("aa", "\"fsr\"");
         kv.emplace_back("temporal", lb(o.fsrTemporal));

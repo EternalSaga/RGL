@@ -165,7 +165,7 @@ export enum class PresentModePref {
  */
 export enum class AaMode {
 	off,  // 默认 = 出厂态：无 TAA 无 FSR（红线 A 那张图 `fdece9d0…`）
-	fsr,  // FSR3-upscaler 做抗锯齿（隐含 velocity_field，见 RuntimeConfig::velocityField）
+	fsr,  // FSR3-upscaler 做抗锯齿（隐含打开速度场，见 RuntimeConfig::velocityField）
 	taa,  // 自研 TAA 做抗锯齿（图形态开关 = 本键推导，scene.lua `taa` 块只剩调参）
 };
 
@@ -301,11 +301,11 @@ export struct RuntimeConfig {
 	 * RT、不建管线条目 ⟹ **结构性**逐位不变（不是"有但旁路"，与 ao 的 strength=0 早退
 	 * 是两种不同的红线机制；与 taa 同构）。
 	 *
-	 * 为什么保持**独立键**而不是并进 `aa`（批 14.6 裁决）：它有非 FSR 消费者——批 14.4
-	 * 起的 TAA 逐像素重投影线要它，与「谁做抗锯齿」无关。但 `aa` 为 fsr 时它被**隐含
-	 * 打开**（FSR 的 motionVectors 输入就是那张图）——隐含只发生在解析期一处
-	 * （runtime_config_impl.cppm 的 `applyAaKey` 段），本字段因此仍是**单一真相源**，
-	 * 消费侧不需要知道隐含关系的存在。
+	 * 🔴 债-129 S2.5-C（2026-10-17）：`velocity_field` lua 键**已撤并**，本字段降为
+	 * **纯派生件**——唯一置重点 = `applyAaKey`（aa=fsr 隐含打开，FSR 的 motionVectors
+	 * 输入就是那张图），消费侧对派生关系无感知。旧「独立键（TAA 重投影线是非 FSR 消费者）」
+	 * 裁决已被逐位实测推翻：aa=off / aa=taa 两档上 velocity 开关逐位相同（→ 本文档
+	 * docs/配置正交性_plan.md 拍板 C 的 ①–④ 档表）。
 	 *
 	 * 开 = 每帧多一个全屏 pass（读 depth、写 RGBA16F）+ 一张渲染分辨率 RGBA16F RT。
 	 */

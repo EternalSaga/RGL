@@ -461,7 +461,6 @@ class Cfg:
     size: tuple[int, int] | None = None
     frames: int = 8
     render_scale: float | None = None
-    velocity_field: bool = False
     clip: int | None = None
     fsr_temporal: bool = False
     fsr_jitter: bool = False
@@ -477,7 +476,6 @@ class Cfg:
                 + f" size={f'{self.size[0]}x{self.size[1]}' if self.size else '(随配置)'}"
                 + f" frames={self.frames}"
                 + f" render_scale={self.render_scale if self.render_scale is not None else '(随配置)'}"
-                + f" velocity_field={'on' if self.velocity_field else '(随配置)'}"
                 + (f" clip={self.clip}" if self.clip is not None else "")
                 + (f" set={list(self.overrides)}" if self.overrides else ""))
 
@@ -502,7 +500,7 @@ class Shot:
 
 def stage(cfg: Cfg, shot_file: str) -> None:
     smoke.stage_configs(False, cfg.variant, shot_file, cfg.frames, cfg.size,
-                        cfg.render_scale, cfg.velocity_field, cfg.aa,
+                        cfg.render_scale, cfg.aa,
                         cfg.clip, cfg.fsr_temporal, cfg.fsr_jitter,
                         overrides=list(cfg.overrides))
 
@@ -1022,7 +1020,7 @@ def cfg_from(args: argparse.Namespace) -> Cfg:
     # size 解析复用 smoke.parse_size：同一旗标有两种宽容度 = 一条路放行另一条路报错
     return Cfg(variant=args.variant, aa=args.aa, size=smoke.parse_size(args.size),
                frames=args.frames, render_scale=args.render_scale,
-               velocity_field=args.velocity_field, clip=args.clip,
+               clip=args.clip,
                fsr_temporal=args.fsr_temporal, fsr_jitter=args.fsr_jitter,
                timeout=args.timeout, overrides=tuple(args.overrides or ()))
 
@@ -1033,7 +1031,6 @@ def add_cfg_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--size")
     p.add_argument("--frames", type=int, default=8, help="第 N 帧截图（默认 8，同 just smoke）")
     p.add_argument("--render-scale", type=float)
-    p.add_argument("--velocity-field", action="store_true")
     p.add_argument("--clip", type=int)
     p.add_argument("--fsr-temporal", action="store_true")
     p.add_argument("--fsr-jitter", action="store_true")

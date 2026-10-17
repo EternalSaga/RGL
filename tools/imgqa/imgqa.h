@@ -253,10 +253,6 @@ struct ProfileOpts {
     /// runtime.lua `render_scale`。1.0 = **不写键** = 交付态（渲染网格 = 后缓冲逐像素）。
     /// ⚠ 创建期量（RT/深度按它分配）⟹ 只能靠重启换档，**不能** `/param` 热改。
     double renderScale = 1.0;
-    /// runtime.lua `velocity_field`（逐像素速度场）。false = 不写键。
-    /// 批 14.6：`aa == Fsr` 时**引擎解析期隐含打开**（旧「开 FSR 却忘开 velocity ⟹ 静默
-    /// 量到双线性」的失效形态由引擎侧消除，本工具不再替引擎补依赖，守卫随之删除）。
-    bool velocityField = false;
     /// runtime.lua `fsr` 块 `temporal`（让 vendor 累积历史）。false = 纯空间 EASU+RCAS。
     /// 仅 `aa == Fsr` 时被消费（其余态 = 空开关，`checkFsrOpts` 抛）。与 TAA 的互斥
     /// **不再需要守卫**：aa 一个槽位装不下两个时域滤波器。

@@ -21,21 +21,12 @@ return {
     -- 与债-37 的 Wayland 分数缩放正交：那条管「逻辑点 → 窗口像素」，本键管「窗口像素 → 渲染像素」。
     -- 生效现场看启动日志 "render scale = ... → render WxH (swapchain WxH)"。
     render_scale = 1.0,
-    -- velocity_field（Phase 14 批 14.4）：逐像素速度场（motion vectors）总开关。
-    -- 关（默认）= 渲染图里**根本没有** velocity pass（装饰器不被调用），不领 RT、不建
-    -- 管线条目 ⟹ 交付路径逐位不变（结构性，不是"有但旁路"）。开 = 每帧多一个全屏 pass
-    -- （读 depth 写 RGBA16F）+ 一张渲染分辨率 RGBA16F RT；口径 = 渲染分辨率像素 · prev−cur · y 向下。
-    -- 为什么保持**独立键**（批 14.6 裁决）：它有非 FSR 消费者——批 14.4 的 TAA 逐像素
-    -- 重投影线要它，与「谁做抗锯齿」无关。但 aa 为 fsr 时它被**隐含打开**（FSR 的
-    -- motionVectors 输入就是那张图）——隐含只发生在解析期一处，本键因此仍是单一真相源。
-    -- **创建期量**：改它要走重启。
-    -- 生效现场看启动日志 "velocity (RGBA16F, 像素单位 prev−cur): WxH slot N"。
-    velocity_field = false,
 
     -- ── 批 14.6：抗锯齿三态开关——「谁做抗锯齿」是**一个槽位**，不是两个布尔 ──
     --   "off" = 出厂默认：无 TAA 无 FSR（**红线 A 那张图** `fdece9d0…`，逐位不变回归基准）
     --   "fsr" = FSR3-upscaler 做抗锯齿（vendor context + 图外 compute + 四张私有图；
-    --           隐含打开 velocity_field；它自己的调参在下面 `fsr` 块里）
+    --           隐含打开逐像素速度场——velocity 由本键派生，**不再是独立配置键**
+    --           （债-129 S2.5-C 撤并，旧 velocity_field 键已删）；调参在下面 `fsr` 块里）
     --   "taa" = 自研 TAA 做抗锯齿（图形态开关；原 scene.lua 的 taa.enabled 键已删，
     --           调参留在 scene.lua 的 `taa` 块：clip_mode / feedback / jitter_scale / …）
     -- 缺键 = "off"。未知值 = **启动 fail-fast**（present_mode 的既有纪律，不静默回落：
@@ -43,7 +34,8 @@ return {
     -- 为什么是三态互斥而不是两个布尔（拍板记录）：两个布尔的失效形态 = 「两个都开然后
     -- 引擎静默关掉一个」（旧 resolveFsrTemporal 强制 FSR 时域关，配置里却还写着 true）
     -- ——申报值与生效值分家，看配置会以为开着；三态让这种写法**结构上不存在**。
-    -- 生效现场看启动日志 "fsr temporal: …" / "taa (RGBA16F): …" / "FsrUpscaler: context 就绪"。
+    -- 生效现场看启动日志 "fsr temporal: …" / "taa (RGBA16F): …" / "FsrUpscaler: context 就绪"；
+    -- 速度场生效现场 = "velocity (RGBA16F, 像素单位 prev−cur): WxH slot N"（仅 aa="fsr" 时出现）。
     aa = "off",
 
     -- FSR 自己的调参（批 14.6 收块：原扁平的 fsr_upscaler / fsr_temporal / fsr_jitter 三键

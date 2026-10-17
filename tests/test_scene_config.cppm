@@ -781,7 +781,7 @@ TEST_CASE("runtime_config：aa 三态（批 14.6；缺键 = off、三值命中�
 		CHECK(r->aaWantsFsr() == false);
 		CHECK(r->velocityField == false);
 	}
-	// fsr 态**隐含** velocity_field（FSR 的 motionVectors 输入就是那张图）。
+	// fsr 态**隐含**打开速度场（FSR 的 motionVectors 输入就是那张图）。
 	// 变异红线：删掉 applyAaKey 里 `cfg.velocityField = true` 这一行 → 本条红，而失效形态是
 	// 「FSR 静默退化成双线性放大」（vendor 拿不到速度场就每帧 reset），判据不会替引擎喊。
 	{
@@ -793,24 +793,25 @@ TEST_CASE("runtime_config：aa 三态（批 14.6；缺键 = off、三值命中�
 		CHECK(r->aaWantsTaa() == false);
 		CHECK(r->velocityField == true);  // 隐含打开
 	}
-	// 隐含关系是**单向且强制**的：显式 velocity_field = false 也压不过 aa = fsr（解析顺序 =
-	// 先读 velocity_field 再 applyAaKey，见 runtime_config_impl）。变异红线：把两行解析调个
-	// 顺序（applyAaKey 先跑）→ 本条红，且红的是「谁赢」这条契约而不是某个默认值。
+	// 旧键压不过派生（债-129 S2.5-C 撤并后仍成立的半边）：`velocity_field = false` 已无人读，
+	// aa = fsr 的派生照常为 true。变异红线：解析器重新 readBoolKey("velocity_field") → 本条
+	// 不红（两态同真）——真正钉「键已死」的是下面反向用例，本条钉的是「旧键写法不炸也不改判」。
 	{
 		TempLua f("rt_aa_fsr_vel_off", R"lua(return { aa = "fsr", velocity_field = false })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->velocityField == true);
 	}
-	// 反向独立性：velocity_field 有自己的非 FSR 消费者（批 14.4 逐像素重投影线），所以
-	// off/taa 态下它必须**照配置走**、不被 aa 清掉。变异红线：在 applyAaKey 的 off/taa 支
-	// 里补一句 `cfg.velocityField = false`「归一化」→ 本条红（那会把重投影线的开关吃掉）。
+	// 反向（债-129 S2.5-C 撤并判据本体）：旧「非 FSR 消费者」来路已死——velocity_field = true
+	// × aa = off 不再打开速度场（键不被解析器读，lintUnknownRuntimeKeys warn 点名）。旧形态
+	// 「velocity_field=true × aa=off = 每帧白付全屏 pass + RT」被**结构性**消灭。
+	// 变异红线：解析器重新读该键 → 本条红（velocityField 被置 true）。
 	{
 		TempLua f("rt_aa_off_vel_on", R"lua(return { aa = "off", velocity_field = true })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->aaWantsFsr() == false);
-		CHECK(r->velocityField == true);
+		CHECK(r->velocityField == false);  // 键已撤并 = 纯派生件，只有 aa=fsr 能置真
 	}
 	{  // 未知值 = fail-fast（present_mode 同纪律：静默回落 = 你以为开着抗锯齿在量图）
 		TempLua f("rt_aa_bad", R"lua(return { aa = "msaa" })lua");

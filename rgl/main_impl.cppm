@@ -401,7 +401,7 @@ void wireTuningContexts(entt::registry& rg, const RuntimeConfig& runtime) {
  * 静默拿到出厂图」= 本债的病本体（§项目哲学 4）。抛出与 compile 失败同一条路：main 的 catch 打
  * 「错误: {}」并返回 -1 ⟹ smoke 的「引擎非零退出必须 FAIL」直接吃到（工具侧不必再钉文案）。
  * 消息三段 = ①哪枚配置键 ②**具体哪条判据**没命中（判据函数名，不是"图形态不支持"）③怎么修。
- * @param capability 配置键与请求值（如 `velocity_field = true`）
+ * @param capability 配置键/能力与请求值（如 `ssr.enabled = true`）
  * @param why 未命中的判据本体（装饰器里那条 `return false` 的判据名 + 它的语义）
  * @param fix 怎么改配置才起得来（换 variant / 关该能力）
  * @return 只为能被 `throw` 用（调用点 `throw decorationRefused(…)`，永不返回正常值）
@@ -424,9 +424,9 @@ bool decorateVelocityOrThrow(RgGraphDesc& desc, bool velocityEnabled) {
 		return false;
 	if (decorateVelocityPass(desc))
 		return true;
-	throw decorationRefused("velocity_field = true", "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」"
+	throw decorationRefused("velocity（aa=\"fsr\" 隐含打开）", "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」"
 		"且「sampleRead 场景色附件」（速度场 pass 的落点）；offscreen 变体用 composite blit 上屏（transferRead ≠ sampleRead）必无落点",
-		"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 velocity_field = false（aa=\"fsr\" 隐含打开它）");
+		"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"taa\"（runtime.lua，速度场由 aa 派生）");
 }
 
 /**
@@ -499,7 +499,7 @@ bool decorateSsrOrThrow(RgGraphDesc& desc, bool ssrEnabled) {
  * 加载 configs/render_graph.lua + `compileRenderGraph`（校验 + barrier 布局链推导）+ variant
  * 求值 `deferredMode`（forward(默认) / deferred / offscreen 三张内建 exclusive 图变体）。
  *
- * 四个图形态开关全部由 `RuntimeConfig` 派生（`aaWantsTaa()` / `velocity_field` / `aaWantsFsr()` /
+ * 四个图形态开关全部由 `RuntimeConfig` 派生（`aaWantsTaa()` / `velocityField` / `aaWantsFsr()` /
  * `ssr.enabled`）——**单一真相源在 runtime_config**，调用点不逐项推导，省行也防漏传。
  *
  * 🔴 **失败即起不来**（债-129 S3-C，2026-10-17）：任何图错误**或任何「配置请求了本图接不了的能力」**

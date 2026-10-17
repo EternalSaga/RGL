@@ -1350,6 +1350,9 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
 - `velocity_field` 保持**独立键**（批 14.4 的逐像素重投影线是它的非 FSR 消费者），但 `aa = "fsr"`
   在**解析期隐含打开**它，唯一发生点 = `applyAaKey` 内一行 ⟹ `velocityField` 仍是单一真相源、
   消费侧对隐含关系无感知；`off/taa` 态不碰它 ⟹ 不会凭空冒出 velocity pass。
+  ⚠ **本条已被推翻**（债-129 S2.5-C，2026-10-17）：「非 FSR 消费者」经逐位实测不成立，
+  `velocity_field` 键**已撤并删除**，`velocityField` 降为纯派生件（唯一置重点仍是 `applyAaKey`
+  那一行）→ `docs/配置正交性_plan.md` 拍板 C。
 
 ### 红线：四条截图逐位复现（`just shot --frames 8`，基底 = 仓库 `configs/`）
 

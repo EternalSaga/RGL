@@ -360,12 +360,13 @@ def set_value(overrides: list[str] | None, target: str, key: str) -> str | None:
 def set_switch_on(overrides: list[str] | None, target: str, key: str) -> bool:
     """`--set` 有没有把某个布尔开关打开（VALUE ∈ {true, 1}，大小写不敏感）。
 
-    🔴 **为什么"门关不拢"类反向判据必须问这一句**：`--ssr` / `--velocity-field` 这类**具名
-    旗标**只是配置的一条来路，`--set ssr.enabled=true` 是另一条**等价**来路（低频/一次性臂
+    🔴 **为什么"门关不拢"类反向判据必须问这一句**：`--ssr` 这类**具名旗标**只是配置的一条来路，
+    `--set ssr.enabled=true` 是另一条**等价**来路（低频/一次性臂
     走它，见 `--set` 的 help）。反向判据若只看具名旗标，就会在「用 --set 开的门」上把
     **门开**读成**门关不拢**——批 N+1 实测四条全部中招：`--set ssr.enabled=true` /
     `--set velocity_field=true` / `--set aa="taa"` / `--set aa="fsr"`（最后这条还是被
-    隐含依赖 velocity_field 撞的）。护栏反过来咬自己人时，唯一的绕行办法就是手改配置副本，
+    隐含依赖 velocity_field 撞的；⚠ 其中 velocity_field 那条已随债-129 S2.5-C 撤并，
+    上面是当时的实测记录）。护栏反过来咬自己人时，唯一的绕行办法就是手改配置副本，
     而那正是本工具的立项目标里点名要消灭的双源。
     """
     return (set_value(overrides, target, key) or "").lower() in {"true", "1"}
@@ -406,7 +407,7 @@ def png_size(path: Path) -> tuple[int, int] | None:
 
 def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames: int,
                   size: tuple[int, int] | None, render_scale: float | None,
-                  velocity_field: bool = False, aa: str | None = None,
+                  aa: str | None = None,
                   clip: int | None = None,
                   fsr_temporal: bool = False, fsr_jitter: bool = False,
                   ssr: bool = False,
@@ -442,9 +443,6 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
         # 越界值不在这里挡：引擎侧 clampRenderScale 是口径的唯一权威，工具重复实现一遍
         # = 两处规则漂移的机会。工具只负责**事后核对实际生效值**（见 main 里的核对）。
         patch_lua(runtime, "render_scale", repr(float(render_scale)))
-    if velocity_field:
-        # 批 14.4：逐像素速度场。创建期量（决定图里有没有 velocity pass），无热重载。
-        patch_lua(runtime, "velocity_field", "true")
     if ssr:
         # 批 15.1 前半：屏幕空间反射。同为创建期量（决定图里有没有 ssr pass；15.3B 起 =
         # trace + apply 两个）。键 = ssr 块里的 enabled（行首键名全文件唯一，唯一性由
@@ -458,8 +456,8 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
         # 每个臂必须是**自己写出来的那个配置**——不写键 = 拿出厂默认 = 想量纯空间却静默跑成
         # 时域+抖动（静默换臂）。旗标缺省 = false = 纯空间臂（EASU+RCAS，vendor 每帧 reset、
         # 无历史 ⟹ 按构造无鬼影）；时域臂 = --fsr-temporal（+ --fsr-jitter 才是设计点，
-        # 守卫在下面）。velocity_field 不用这里打开：aa=fsr 时**引擎解析期隐含打开**
-        # （单一来源在 applyAaKey），旧版工具替引擎补依赖的写法随扁平键一起退役。
+        # 守卫在下面）。速度场不用这里打开：aa=fsr 时**引擎解析期隐含打开**（唯一置重点在
+        # applyAaKey；velocity_field 键已随债-129 S2.5-C 撤并，工具不再替引擎补依赖）。
         patch_lua(runtime, "temporal", "true" if fsr_temporal else "false")
         patch_lua(runtime, "jitter", "true" if fsr_jitter else "false")
     # ── 历史裁剪档位 ──
@@ -606,7 +604,6 @@ class VerdictCfg:
     dims: tuple[int, int] | None = None       # PNG 头里的真实宽高（读不到 = None）
     size: tuple[int, int] | None = None       # --size 请求值
     render_scale: float | None = None         # --render-scale 请求值
-    velocity_field: bool = False              # --velocity-field
     ssr: bool = False                         # --ssr
     fsr_temporal: bool = False                # --fsr-temporal
     fsr_jitter: bool = False                  # --fsr-jitter
@@ -711,32 +708,34 @@ def verdicts(code: int, log: str, cfg: VerdictCfg, *,
     if gbuf is not None and size and render_grid != size:
         fail(f"请求 --size {size[0]}x{size[1]}，dump_gbuf 档的渲染网格却是 "
              f"{render_grid[0]}x{render_grid[1]}——--size 没生效（llm_shot.size 被别处盖掉？）", say=say)
-    # velocity_field 生效核对（批 14.4）。同 render_scale 的纪律：patch 只保证"配置里写了"，
-    # 不保证"引擎按它建了 RT"。**反向同样要核**：默认档不该出现 velocity RT 行——出现了就说明
-    # 门关不拢（图里多了一个 pass，而逐位不变红线单看截图未必抓得住）。
+    # velocity 生效核对（批 14.4；债-129 S2.5-C 撤并键后改由 aa 派生）。同 render_scale 的
+    # 纪律：patch 只保证"配置里写了"，不保证"引擎按它建了 RT"。**反向同样要核**：默认档不该
+    # 出现 velocity RT 行——出现了就说明门关不拢（图里多了一个 pass，而逐位不变红线单看截图
+    # 未必抓得住）。
     # ── 「这扇门到底开没开」的统一口径 ──────────────────────────────────────────
     # 🔴 三条来路必须并成一条，否则下面的**反向**判据（门关不拢）会拿「门关」的假设去判
     # 一门其实开着的图，把正确行为报成缺陷：
-    #   ① 具名旗标：--ssr / --velocity-field / --aa taa|fsr
+    #   ① 具名旗标：--ssr / --aa taa|fsr
     #   ② `--set [runtime:]KEY=VALUE` 这条**等价**来路（低频/一次性臂的唯一入口）
-    #   ③ 引擎解析期的**隐含依赖**：aa=fsr 隐含 velocity_field（单一来源在 applyAaKey）
+    #   ③ 引擎解析期的**隐含依赖**：aa=fsr 隐含打开速度场（唯一置重点在 applyAaKey）
+    # 🔴 债-129 S2.5-C：velocity_field 键已撤并 ⟹ velocity 的来路**只剩 aa=fsr 一条**，
+    # 判据不再收独立输入（留一个能独立置真的字段 = 在工具层复刻刚删掉的不正交形态）。
     # aa_eff 在 main 开头算（guard_flags 也要它），这里只派生其余三态。
     taaRequested = cfg.aa_eff == "taa"
     fsrRequested = cfg.aa_eff == "fsr"
     ssrRequested = cfg.ssr or set_switch_on(cfg.overrides, "runtime", "ssr.enabled")
-    velRequested = (cfg.velocity_field or fsrRequested
-                    or set_switch_on(cfg.overrides, "runtime", "velocity_field"))
+    velRequested = fsrRequested
     vel = re.search(r"velocity \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     if velRequested and not vel:
         # 🔴 债-129 S3-C 删掉了本处的一条**逃生门**（原：看到引擎「velocity: 图形态不支持」那条
         # warn 就 ✓ 放行）。删的理由不是"判据太多"，是**引擎不再发那条 warn**：decorateVelocityOrWarn
         # 现在抛 std::runtime_error 拒启动，而拒启动由上面 `code != 0` 那条 fail 接住（位置在本判据
         # **之前** ⟹ 不会装绿）。留着放行档 = 给一条引擎已不发、但可能被谁加回来的文案留遮羞布。
-        fail("请求 velocity_field（--velocity-field 或 --set velocity_field=true 或 aa=fsr "
-             "隐含）但日志里没有 velocity RT 行 ⟹ 装饰器静默没落图"
+        fail("请求 velocity（aa=fsr 隐含，债-129 S2.5-C 起无独立键/旗标）但日志里没有 velocity RT 行"
+             " ⟹ 装饰器静默没落图"
              "（配置键名漂了 / 启动日志文案改了 / 装饰调用被删）", say=say)
     if not velRequested and vel:
-        fail(f"默认档（velocity_field 关）却建了 velocity RT：{vel.group(0)}"
+        fail(f"默认档（aa 非 fsr ⟹ velocity 关）却建了 velocity RT：{vel.group(0)}"
              " ⟹ 门关不拢，「图里没有这个 pass」的逐位不变红线失效", say=say)
     # ssr 生效核对（批 15.1 前半；批 15.3 子步 B 起 = **两 RT 两 pass**）。同 velocity 的
     # 双向纪律：正向 = 门开必须 **trace 与 apply 两行都在**（只缺一行 = 半条链，图能跑但
@@ -883,10 +882,6 @@ def parse_args() -> argparse.Namespace:
                     help="runtime.lua render_scale（内部渲染分辨率倍率，批 14.3；"
                          "不给 = 用配置基准里的值）。会**核对引擎实际生效值**，"
                          "传了没生效即 FAIL，不会静默跑在默认档上")
-    ap.add_argument("--velocity-field", action="store_true",
-                    help="runtime.lua velocity_field = true（逐像素速度场，批 14.4）。"
-                         "双向核对：开了没建 velocity RT = FAIL；没开却建了 = FAIL（门关不拢）。"
-                         "aa=fsr 时无需给：引擎解析期已隐含打开")
     ap.add_argument("--ssr", action="store_true",
                     help="runtime.lua ssr 块 enabled = true（屏幕空间反射，批 15.3B 起 = "
                          "trace + apply 两 pass）。双向核对：开了没建齐 ssr_trace/ssr 两行 RT "
@@ -895,8 +890,9 @@ def parse_args() -> argparse.Namespace:
                          "ssr.enabled=true 是**引擎拒启动**（smoke 报「引擎非零退出」）")
     ap.add_argument("--aa", choices=("off", "fsr", "taa"), default=None,
                     help="runtime.lua aa（批 14.6 抗锯齿三态开关）：off = 出厂默认（无 TAA "
-                         "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开 "
-                         "velocity_field，调参走 --fsr-temporal/--fsr-jitter）；taa = 自研 TAA "
+                         "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开"
+                         "逐像素速度场——velocity 由 aa 派生，债-129 S2.5-C 起不再是独立键，"
+                         "调参走 --fsr-temporal/--fsr-jitter）；taa = 自研 TAA "
                          "做抗锯齿（原 --taa，调参 --clip）。互斥是**结构性的**——旧「--taa 撞 "
                          "--fsr-temporal」那类组合根本表达不出来。不给 = 用配置基准里的值。"
                          "双向核对：请求了没建对应 pass = FAIL；没请求却建了 = FAIL（门关不拢）")
@@ -981,7 +977,7 @@ def main() -> int:
     gbuf = gbuf_channel(args.overrides)
     expect_file = f"screenshots/gbuffer_{gbuf}.png" if gbuf is not None else shot_file
     stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
-                  args.render_scale, args.velocity_field, args.aa,
+                  args.render_scale, args.aa,
                   args.clip, args.fsr_temporal, args.fsr_jitter,
                   ssr=args.ssr, config_base=args.config_base,
                   overrides=args.overrides)
@@ -991,7 +987,6 @@ def main() -> int:
           f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
           f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}"
-          f"  velocity_field={'on' if args.velocity_field else '(随配置)'}"
           f"  ssr={'on' if args.ssr else '(随配置)'}"
           f"  aa={args.aa or '(随配置)'}"
           + (f"  fsr(temporal={'on' if args.fsr_temporal else 'off'}"
@@ -1015,7 +1010,7 @@ def main() -> int:
     errors, warnings = verdicts(code, log, VerdictCfg(
         expect_file=expect_file, shot_exists=exists,
         dims=png_size(shot_path) if exists else None, size=size,
-        render_scale=args.render_scale, velocity_field=args.velocity_field,
+        render_scale=args.render_scale,
         ssr=args.ssr, fsr_temporal=args.fsr_temporal, fsr_jitter=args.fsr_jitter,
         clip=args.clip, sync=args.sync, aa_eff=aaEff, overrides=args.overrides,
         gbuf=gbuf))
@@ -1296,20 +1291,24 @@ def selftest(quiet: bool = False) -> list[str]:
     must_fail("请求 0.5 生效 1.0 必须红", "引擎实际生效 1.0", 0, vlog(), vcfg(render_scale=0.5))
     must_pass("请求 1.0 生效 1.0 不红（上一条的红不是恒真）", 0, vlog(), vcfg(render_scale=1.0))
 
-    # ⑧ velocity_field：双向核对（门开必须有行、门关一行不许有）。🔴 债-129 S3-C：原来那条
-    #    「图形态不支持 = 正确行为，放行」的 must_pass 已**反转成 must_fail**——引擎不再 warn 而是
-    #    拒启动，旧文案不再构成放行理由（本条同时是「工具不许装绿」的反向用例：拿旧 warn 来骗过
-    #    velocity 判据，必须红）。引擎真拒启动时红在「引擎非零退出」那条，见 ②。
-    must_fail("请求 velocity 但没建 RT", "请求 velocity_field",
-              0, vlog(), vcfg(velocity_field=True))
-    must_fail("旧「图形态不支持」warn 不再放行 velocity（S3-C 删逃生门）", "请求 velocity_field",
-              0, vlog(VEL_NO), vcfg(velocity_field=True))
+    # ⑧ velocity（债-129 S2.5-C 撤并键后 = aa=fsr 派生）：双向核对（门开必须有行、门关一行不许有）。
+    #    🔴 债-129 S3-C：原来那条「图形态不支持 = 正确行为，放行」的 must_pass 已**反转成
+    #    must_fail**——引擎不再 warn 而是拒启动，旧文案不再构成放行理由（本条同时是「工具不许
+    #    装绿」的反向用例：拿旧 warn 来骗过 velocity 判据，必须红）。引擎真拒启动时红在
+    #    「引擎非零退出」那条，见 ②。
+    must_fail("请求 velocity（aa=fsr 隐含）但没建 RT", "请求 velocity（aa=fsr",
+              0, vlog(), vcfg(aa_eff="fsr"))
+    must_fail("旧「图形态不支持」warn 不再放行 velocity（S3-C 删逃生门）", "请求 velocity（aa=fsr",
+              0, vlog(VEL_NO), vcfg(aa_eff="fsr"))
     must_fail("门关不拢：默认档却建了 velocity RT", "却建了 velocity RT", 0, vlog(VEL), vcfg())
     must_fail("velocity RT ≠ 渲染网格必须红", "速度场必须与深度同网格",
-              0, vlog(VEL_SMALL), vcfg(velocity_field=True))
-    #    `--set velocity_field=true` 是与具名旗标**等价**的来路：不认它，反向判据就会拿
-    #    「门关」的假设去判一门开着的图（批 N+1 实测四条全中招）
-    must_pass("--set 开 velocity 也算门开", 0, vlog(VEL), vcfg(overrides=["velocity_field=true"]))
+              0, vlog(VEL_SMALL, FSR), vcfg(aa_eff="fsr"))
+    #    🔴 债-129 S2.5-C：`--set velocity_field=true` **不再是开门来路**（键已撤并，引擎侧
+    #    由 lintUnknownRuntimeKeys warn 点名）。留一条能独立置真的输入 = 在工具层复刻刚删掉的
+    #    不正交形态——本用例钉的就是「velocity RT 出现而 aa 非 fsr」必须红（原 must_pass
+    #    「--set 开 velocity 也算门开」随撤并反转）。
+    must_fail("--set velocity_field=true 不再是开门来路（S2.5-C 撤并）", "却建了 velocity RT",
+              0, vlog(VEL), vcfg(overrides=["velocity_field=true"]))
 
     # ⑨ ssr：门开必须 trace + apply **两行都在**（只缺一行 = 半条链，单行判据抓不住）。
     #    🔴 债-129 S3-C：同 ⑧，「图形态不支持」的 must_pass 反转成 must_fail（forward 图配 ssr
@@ -1399,8 +1398,8 @@ def selftest(quiet: bool = False) -> list[str]:
     must_pass("gbuf 档 --size 落到渲染网格就不红（丢掉不等号必须红在这里）", 0,
               vlog(shot_line("gbuffer_1.png"), drop="截图已保存"),
               vcfg(gbuf=1, expect_file="screenshots/gbuffer_1.png", size=(1280, 720)))
-    must_fail("velocity 行不是 RGBA16F 格式 = 不是那张 RT", "请求 velocity_field",
-              0, vlog(VEL_OTHER_FMT), vcfg(velocity_field=True))
+    must_fail("velocity 行不是 RGBA16F 格式 = 不是那张 RT", "请求 velocity（aa=fsr",
+              0, vlog(VEL_OTHER_FMT), vcfg(aa_eff="fsr"))
     #     🔴 债-129 S3-C 删掉了这里原本的两条「逃生门互不串门」用例（velocity / ssr 各一条）：
     #     那两条逃生门本身随「warn → 拒启动」消失，用例的**理由**（不认前缀就会互相开门）不再存在。
     #     取代它们的是 ⑧/⑨ 里两条更强的 must_fail（拿**匹配**的旧文案来骗也照样红）。
@@ -1426,8 +1425,8 @@ def selftest(quiet: bool = False) -> list[str]:
     #     外部输出形态的占位——引擎自己不发它，钉的是锚定，不是某条引擎文案）
     must_pass("后缓冲核对只认 Swapchain 那一行（别的 extent: 行不得顶替）", 0,
               "[0] [info] [driver] surface extent: 640x360 (当前模式)\n" + vlog(), vcfg())
-    must_fail("velocity 行没申报 slot = 不是那张 RT 行", "请求 velocity_field",
-              0, vlog(VEL_NO_SLOT), vcfg(velocity_field=True))
+    must_fail("velocity 行没申报 slot = 不是那张 RT 行", "请求 velocity（aa=fsr",
+              0, vlog(VEL_NO_SLOT), vcfg(aa_eff="fsr"))
     must_fail("taa 行不是 RGBA16F 格式 = 不是那张 RT", "TAA pass 静默没进图",
               0, vlog(TAA_OTHER_FMT), vcfg(aa_eff="taa"))
     must_fail("别的 RGBA16F 行带 out slot，不许顶掉 taa 的名字锚", "TAA pass 静默没进图",

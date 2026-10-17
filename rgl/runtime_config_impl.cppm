@@ -27,7 +27,6 @@ constexpr std::string_view kRuntimeKeys[]{
 	"headless_size",
 	"win_size",
 	"render_scale",
-	"velocity_field",
 	"aa",
 	"fsr.temporal",
 	"fsr.jitter",
@@ -256,9 +255,9 @@ void readFloatKey(const sol::table& root, const char* key, float& dst) {
 	if (*raw == "off")
 		cfg.aa = AaMode::off;
 	else if (*raw == "fsr") {
-		// fsr 态**隐含打开** velocity_field（FSR 的 motionVectors 输入就是那张图）。
-		// 隐含只发生在本处这一行（解析期归一化 ⟹ velocityField 仍是单一真相源，
-		// 消费侧对隐含关系无感知）；off/taa 态不碰它 ⟹ 不会凭空冒出 velocity pass。
+		// fsr 态**隐含打开**速度场（FSR 的 motionVectors 输入就是那张图）。债-129 S2.5-C：
+		// velocity_field lua 键已撤并，velocityField 是**纯派生件**——本行是全项目唯一置重点
+		// （消费侧对派生关系无感知）；off/taa 态不碰它 ⟹ 不会凭空冒出 velocity pass。
 		cfg.aa = AaMode::fsr;
 		cfg.velocityField = true;
 	} else if (*raw == "taa")
@@ -596,7 +595,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * fail-fast 键链（★0.5-b2，认知复杂度预算）：把「解析失败返回错误消息」的键串成一条，
  * `loadRuntimeConfig` 只留一个 if+return（两处各一个曾把认知复杂度顶到 16>15）。
  * 新增 fail-fast 键 = 在此加一行，不再往 loadRuntimeConfig 里添 if。
- * 顺序契约：applyAaKey 必须先于 readFsrBlock（aa=fsr 隐含 velocity_field 在其内一行）；
+ * 顺序契约：applyAaKey 必须先于 readFsrBlock（aa=fsr 隐含打开速度场在其内一行）；
  * readMeshletBlock 只读 meshlet 块、与其他键零耦合，链尾即可。
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
@@ -698,11 +697,8 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 		readSize("win_size", cfg.winWidth, cfg.winHeight);
 
 		applyRenderScale(root, cfg.renderScale, logger, *trace);  // 批 14.3：内部渲染分辨率倍率
-		// velocity_field（批 14.4）= 逐像素速度场总开关（缺键 = false = 图里没有 velocity
-		// pass）。「FSR 依赖 velocity」的判据不在这里——运行期取实际图形态，见 RuntimeConfig
-		// 注释；批 14.6 起 aa 为 fsr 时本键被隐含打开（唯一发生点 = applyAaKey 内一行）。
-		trace->read.emplace_back("velocity_field");
-		readBoolKey(root, "velocity_field", cfg.velocityField);
+		// velocityField 不从键读：velocity_field 键已随债-129 S2.5-C 撤并，它是纯派生件，
+		// 唯一置重点 = applyAaKey 内一行（aa=fsr 隐含打开）。
 		// fail-fast 键链（aa 三态 + ★0.5-b2 meshlet.coplanar 三态；未知值 = 启动报错退出，
 		// 不静默回落——四臂主判据的假绿防线，→ applyFailFastKeys 注释）
 		if (auto err = applyFailFastKeys(root, cfg, path, *trace); err)
