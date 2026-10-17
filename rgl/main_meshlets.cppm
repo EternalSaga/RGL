@@ -79,13 +79,13 @@ bool writeMeshletSectionDescriptors(DeviceContext& device, Resources& resources,
  * 对外经 `wireMeshletPostRegistration` 第三步进入）。三步：门关早退（零 ctx 零日志 = 「门关
  * `grep -ci meshlet` = 0」护栏）→ emplace 生效标记 → 按**事实**出声或打印生效档。
  *
- * 🔴 **生效条件里没有 `meshlet.enable`**（同 `mdi_shadow` 的定性：`meshlet` 块里生效条件不依赖
- * `enable` 的键）——本键的宿主是叠加段自己。但条目的**烘焙**条件挂在 `wireMeshletBindings` 的
- * `slots`（= `enable`）上 ⟹「overlay 开 + enable 关」= 没有条目可采 = **零 draw 而日志一行不出**
+ * 🔴 **生效条件里没有 `meshlet.assets`**（同 `mdi_shadow` 的定性：`meshlet` 块里生效条件不依赖
+ * `assets` 的键）——本键的宿主是叠加段自己。但条目的**烘焙**条件挂在 `wireMeshletBindings` 的
+ * `slots`（= `assets`）上 ⟹「overlay 开 + assets 关」= 没有条目可采 = **零 draw 而日志一行不出**
  * 的静默空开关（§18.9 第 9 条抓到的同一形态）。所以这里读**事实**（有没有资产带着簇管线条目）
- * 而不是配置意图：无产物 / 多产物回落 / 零模型命中这几条回落路都不写配置，只比 `enable` 会漏。
+ * 而不是配置意图：无产物 / 多产物回落 / 零模型命中这几条回落路都不写配置，只比 `assets` 会漏。
  * 孤立组合 = **出声但仍 emplace**（标记只代表「本段采集开启」，画不画由 `collectMeshletOverlay`
- * 的判据 1 决定）——别把门改成 `enable && overlay`，那等于把两件事焊回一处，`switch` 的宿主与
+ * 的判据 1 决定）——别把门改成 `assets && overlay`，那等于把两件事焊回一处，`switch` 的宿主与
  * 叠加段的门重新纠缠。
  * @param registry 场景 registry（emplace 目标 + MeshRef 事实扫描；🔴 **必须在实体注册之后**）
  * @param assets   资产表（读 `meshletPipelineIndex` = 条目宿主在不在）
@@ -104,9 +104,9 @@ void wireMeshletOverlayActivation(entt::registry& registry, const AssetTable& as
 	});
 	if (hosts == 0) {
 		if (logger)
-			logger->warn("meshlet: overlay 开但**没有一条簇管线条目可采**（meshlet.enable 关 / 无簇产物 "
+			logger->warn("meshlet: overlay 开但**没有一条簇管线条目可采**（meshlet.assets 关 / 无簇产物 "
 						 "/ 多产物回落 / 零模型命中）—— 叠加段零 draw，本跑画面与 overlay 关逐位相同；"
-						 "要它生效请把 meshlet.enable 一并置 true（条目的烘焙条件挂在那枚门上）");
+						 "要它生效请把 meshlet.assets 一并置 true（条目的烘焙条件挂在那枚门上）");
 		return;
 	}
 	if (logger)
@@ -203,7 +203,7 @@ SwitchCoverage auditMeshletSwitch(entt::registry& registry, const AssetTable& as
 void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
 	const RuntimeConfig& cfg, const DeviceContext& device) {
 	auto* logger = RLLogger::getInstance();
-	if (!cfg.meshletEnable || !cfg.meshletSwitch)
+	if (!cfg.meshletAssets || !cfg.meshletSwitch)
 		return;  // 门关 / 不切 = 零 ctx 零日志（门关 grep meshlet = 0 护栏）
 	// ①.5 设备发射规格核对（口径 → checkMeshletDeviceFit）。放在门关之后、其余判据之前：
 	// 规格不成立时后面每一步都毫无意义，且这条**与配置无关**——配置一样、换机器就会变。
@@ -267,10 +267,10 @@ void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
  * 门关的「零新命令」由 `wireMeshletCull` 不把服务交给 Renderer 来保证。
  */
 std::optional<MeshletBindingSlots> wireMeshletBindings(Resources& resources,
-	DeviceContext& device, const MeshletGeometryStore& meshletGeometry, bool meshletEnable,
+	DeviceContext& device, const MeshletGeometryStore& meshletGeometry, bool meshletAssets,
 	SceneDataService& sceneData, std::unique_ptr<MeshletCullService>& cullService) {
 	auto* logger = RLLogger::getInstance();
-	if (!meshletEnable)
+	if (!meshletAssets)
 		return std::nullopt;  // 门关 = 连号都不领（逐位不变构造性成立）
 	cullService.reset();  // 下面任何一条回落路径都必须让服务为空（Renderer 据此零命令）
 	if (meshletGeometry.byFile.empty())
@@ -332,7 +332,7 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 	const MeshletGeometryStore& meshletGeometry, const std::optional<MeshletBindingSlots>& slots,
 	MeshletMeshVariant variant) {
 	// 🔴 **关 overlay ≠ 关条目**（债-105 的宿主契约，别再往这条门上挂任何东西）：本函数的存在
-	// 条件只有 `slots`（= `meshlet.enable`），而**不**看 `meshlet.overlay`。理由是这批条目同时是
+	// 条件只有 `slots`（= `meshlet.assets`），而**不**看 `meshlet.overlay`。理由是这批条目同时是
 	// 两个消费者的宿主——① α 影子叠加段（`collectMeshletOverlay`，由 overlay 门决定采不采 draw）、
 	// ② β-1 的原位取代（`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）。把烘焙挪进 overlay 门下
 	// ⟹ `overlay = false` 时 `switch` **静默失去宿主**（取代分支整个不成立，画面回到旧路径而日志
@@ -423,7 +423,7 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
 		// ⟹ 本批的"生效"证据不能是 INFO（什么都没生效）。出声，别静默（同 wireMeshletCull
 		// 「服务缺位而出声」的第二道护栏纪律）。
 		if (logger)
-			logger->warn("meshlet: 阴影簇管线条目**未装配** —— meshlet.enable 开且簇产物存在，"
+			logger->warn("meshlet: 阴影簇管线条目**未装配** —— meshlet.assets 开且簇产物存在，"
 						 "但没有一个已上传模型的产物文件命中（shadow_lod={} 无消费者）",
 				cfg.meshletShadowLod);
 		return;
@@ -440,7 +440,7 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
 // ─── ★M-1a：阴影段真 MDI 行表 GPU 载体的接线（零消费者，一条 draw 都不接）───────────
 /**
  * 载体接线（§19.5 的 ★M-1 接缝）。四步，顺序即代码：
- *  ① 门关早退（`!meshletEnable` 或 `meshletShadowLod < 0`）= **连号都不领**（先例 =
+ *  ① 门关早退（`!meshletAssets` 或 `meshletShadowLod < 0`）= **连号都不领**（先例 =
  *     `wireMeshletBindings` 首行；「门关 grep -ci meshlet = 0」的护栏）；
  *  ② 读**生效事实**而不是配置意图：ctx 里没有 `MeshletShadowLodTable` = 阴影簇路径根本没生效
  *     （设备规格不够 / 逐资产对账失败 / 零槽可切 三条回落路都不写配置）⟹ 不建载体，
@@ -461,7 +461,7 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
  * 与「阴影 draw 改用 MDI 形态」（那条才是选 SPV 变体/选条目的门，§19.2 D2）是两件事。
  * ⟹ 出厂默认（`mdi_shadow = false`）也建载体但零消费者，图像逐位不变。
  * ★M-1b 落地形态（本挂号的答复）：binding 34（定案 22 被 sceneHeader 占，见
- * shadow_meshlet.mesh.slang 的 ⚠ 注）的槽号**仍**从宿主条件链取（本服务构造 = enable +
+ * shadow_meshlet.mesh.slang 的 ⚠ 注）的槽号**仍**从宿主条件链取（本服务构造 = assets +
  * shadow_lod + 选级表三判据，不因 mdi_shadow 改动）；「`= false` 时零消费者」升级为
  * 「`= false` 时零条目零 ctx，`= true` 而载体缺位时第⑤步 wireMeshletMdiShadowActivation
  * WARNING 出声」——静默空开关不成立。
@@ -478,13 +478,13 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
  *    🔴 不在这里重述 `collectShadowCasters` 的四条判据（那是第三处真相源）。
  * @param registry 场景 registry（读 `MeshletShadowLodTable` = 生效事实；🔴 必须注册之后）
  * @param resources 资源层（领槽 + VMA 分配器 + 描述符堆）
- * @param cfg       运行配置（读 `meshletEnable` / `meshletShadowLod` 两枚宿主条件）
+ * @param cfg       运行配置（读 `meshletAssets` / `meshletShadowLod` 两枚宿主条件）
  * @return 载体服务；门关 / 阴影簇路径未生效 / 上界为 0 = nullptr（零 buffer 零槽零日志）
  * @throw std::runtime_error 服务构造失败（领槽 / buffer / 描述符；启动期一次性路径）
  */
 std::unique_ptr<MeshletShadowArgsService> wireMeshletShadowArgs(entt::registry& registry,
 	Resources& resources, DeviceContext& device, const RuntimeConfig& cfg) {
-	if (!cfg.meshletEnable || cfg.meshletShadowLod < 0)
+	if (!cfg.meshletAssets || cfg.meshletShadowLod < 0)
 		return nullptr;  // 门关 = 连号都不领
 	const auto* lod = registry.ctx().find<MeshletShadowLodTable>();
 	if (lod == nullptr)
@@ -548,7 +548,7 @@ uint32_t bindMdiShadowEntryToAssets(ShaderRegistry& pipelines, const AssetTable&
  *
  * ## 早退与出声（债-106 的孤立空开关形态）
  *  · `!meshletMdiShadow` → **零条目零 INFO 零 ctx**（A2 出厂构造性：那条条目根本不存在）；
- *  · 键开而宿主不在（载体 nullptr = enable 关 / shadow_lod<0 / 选级表全零；或簇槽 nullopt）
+ *  · 键开而宿主不在（载体 nullptr = assets 关 / shadow_lod<0 / 选级表全零；或簇槽 nullopt）
  *    → **WARNING 出声**（配置说开了而实际没跑，同 `wireMeshletCull` 的第二道护栏）；
  *  · 有载体但零资产带 474 条目（理论不可达——载体成立要求选级表非零，而建表的资产判据同源）
  *    → 也出声，不静默不激活。
@@ -566,7 +566,7 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
 	if (!assembly.shadowArgs || !assembly.bindingSlots) {
 		if (logger)
 			logger->warn("meshlet: mdi_shadow 开但宿主不在（行表载体 {} / 簇 buffer 槽 {}）—— 阴影段"
-						 "继续逐条簇 draw，本开关**不生效**。宿主条件 = meshlet.enable + "
+						 "继续逐条簇 draw，本开关**不生效**。宿主条件 = meshlet.assets + "
 						 "shadow_lod ≥ 0 + 选级表非零（§19.6：生效条件不含 mdi_shadow 本身）",
 				assembly.shadowArgs ? "已建" : "未建", assembly.bindingSlots ? "已领" : "未领");
 		return;
@@ -624,7 +624,7 @@ MeshletAssembly wireMeshletOverlay(Resources& resources,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, const RuntimeConfig& cfg,
 	SceneDataService& sceneData) {
 	MeshletAssembly assembly;
-	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, cfg.meshletEnable,
+	const auto slots = wireMeshletBindings(resources, device, meshletGeometry, cfg.meshletAssets,
 		sceneData, assembly.cullService);
 	// ★M-1b：槽位快照进 assembly（第⑤步 `wireMeshletMdiShadowActivation` 烘 MDI 条目要复用
 	// binding 17-20；此刻是本函数局部的 nullopt/值，nullopt 原样传下去 = 与早退判据同一事实）。
@@ -650,7 +650,7 @@ MeshletAssembly wireMeshletOverlay(Resources& resources,
  * 执行器零 set）→ 交 setter + INFO 打印**生效**档（四臂假绿的第二道机器护栏）。
  */
 void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg) {
-	if (!cfg.meshletEnable)
+	if (!cfg.meshletAssets)
 		return;  // 门关 = 零调用零日志（门关 grep meshlet = 0 护栏；setter 保持默认 nullopt）
 	std::optional<vk::CompareOp> op;
 	std::string_view modeName = "off";
@@ -689,7 +689,7 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
  */
 void wireMeshletCull(Renderer& renderer, entt::registry& registry, const RuntimeConfig& cfg,
 	MeshletCullService* cullService) {
-	if (!cfg.meshletEnable || !cfg.meshletCull)
+	if (!cfg.meshletAssets || !cfg.meshletCull)
 		return;  // 门关 = 零调用零日志（Renderer 成员恒 nullptr ⟹ 帧首一条命令都不多）
 	auto* logger = RLLogger::getInstance();
 	if (cullService == nullptr) {
@@ -752,7 +752,7 @@ void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets&
 	const MeshletAssetStore& meshlets, const AssetTable& assetTable, ShaderRegistry& pipelines,
 	Resources& resources,
 	const RuntimeConfig& cfg, DeviceContext& device, MeshletAssembly& assembly) {
-	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletEnable, cfg.meshletCull,
+	wireClusterRangeTable(registry, uploaded, meshlets, cfg.meshletAssets, cfg.meshletCull,
 		assembly.cullService.get(), assetTable, cfg, device);
 	wireMeshletSwitch(registry, assetTable, cfg, device);
 	wireMeshletOverlayActivation(registry, assetTable, cfg);

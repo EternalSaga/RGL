@@ -820,7 +820,7 @@ TEST_CASE("runtime_config：meshlet.mdi_shadow 默认 false、探针 true 命中
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletMdiShadow == false);
-		TempLua g("rt_mdi_nokey", R"lua(return { meshlet = { enable = true } })lua");
+		TempLua g("rt_mdi_nokey", R"lua(return { meshlet = { assets = true } })lua");
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
 		CHECK(r2->meshletMdiShadow == false);

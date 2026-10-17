@@ -180,7 +180,7 @@ std::optional<std::array<uint32_t, 5>> gBufferSlotsAndLightEntry(
  *  ★1-a0：加载成功后同处挂簇产物 4 段 GPU 上传（边界与回落口径 → meshlet_geometry）。 */
 UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
 	SamplerLibrary& samplers, AssetTable& assets, const SceneConfig& scene,
-	bool meshletEnable, MeshletAssetStore& meshlets, MeshletGeometryStore& meshletGeometry) {
+	bool meshletAssets, MeshletAssetStore& meshlets, MeshletGeometryStore& meshletGeometry) {
 	UploadedAssets out;
 	// A0：内建几何（架构债务 1 方案 B）——entities 里有 cube 就上传内建 cube 资产，
 	// 与普通模型的顶点槽同属"几何段"（先于任何纹理槽）；先于模型循环上传 = 与旧
@@ -229,7 +229,7 @@ UploadedAssets uploadModelAssets(DeviceContext& device, Resources& resources,
 		// 不碰上面的上传路径、不建条目、不领 heap slot ⟹ 图像仍逐位不变。
 		// aa_target 是内存合成模型（key 不是文件路径，无"路径旁的产物"可言）不适用。
 		// 上传的失败口径（WARNING + 不落容器）→ meshlet_geometry::uploadMeshletGeometryInto。
-		if (!meshletEnable || target)
+		if (!meshletAssets || target)
 			return;
 		if (const MeshletAsset* loaded = loadMeshletForModel(key, meshlets); loaded != nullptr)
 			uploadMeshletGeometryInto(*loaded, key, meshletGeometry, resources.getAllocator(), device.getDevice());

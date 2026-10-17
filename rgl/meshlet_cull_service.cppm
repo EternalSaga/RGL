@@ -67,7 +67,7 @@ export inline constexpr std::string_view kMeshletVisibleFlagsAttachment = "meshl
 export class MeshletCullService {
 	public:
 	/**
-	 * 构造（启动期一次，门 `meshlet.enable` 开且簇产物就绪才建）：领两张 heap 槽 +
+	 * 构造（启动期一次，门 `meshlet.assets` 开且簇产物就绪才建）：领两张 heap 槽 +
 	 * 建标志 buffer（device-local，`vkCmdFillBuffer` 填 1）+ 建 compute shader object
 	 * （4 binding 的 heap mapping 在此烘死）。剔除项表**留到 uploadItems 再建**——
 	 * 本函数被调时（`wireMeshletBindings`）实体还没注册、剔除项表还没扫出来。

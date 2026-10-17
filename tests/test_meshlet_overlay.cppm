@@ -433,12 +433,12 @@ TEST_CASE("runtime_config：meshlet.overlay 默认 false、探针 true 命中、
 	{  // 成员初始化默认路径（不看 lua 文件）= 债-105 的"出厂不白付"全靠这一枚默认
 		CHECK(RuntimeConfig{}.meshletOverlay == false);
 	}
-	{  // 缺块 / 缺键 = 保持默认 false（门不会因为 enable 或别的键被顺手打开）
+	{  // 缺块 / 缺键 = 保持默认 false（门不会因为 assets 或别的键被顺手打开）
 		TempLua f("rt_ovl_default", "return {}\n");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletOverlay == false);
-		TempLua g("rt_ovl_nokey", R"lua(return { meshlet = { enable = true } })lua");
+		TempLua g("rt_ovl_nokey", R"lua(return { meshlet = { assets = true } })lua");
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
 		CHECK(r2->meshletOverlay == false);
@@ -455,13 +455,13 @@ TEST_CASE("runtime_config：meshlet.overlay 默认 false、探针 true 命中、
 		REQUIRE(r.has_value());
 		CHECK(r->meshletOverlay == false);
 	}
-	{  // 本键**不**与 enable 焊死：enable=false + overlay=true 读到的仍是 overlay=true
+	{  // 本键**不**与 assets 焊死：assets=false + overlay=true 读到的仍是 overlay=true
 		// （孤立组合由装配层按事实出声，配置层不做隐含耦合 = 交付物 (1) 的红线）
-		TempLua f("rt_ovl_orphan", R"lua(return { meshlet = { enable = false, overlay = true } })lua");
+		TempLua f("rt_ovl_orphan", R"lua(return { meshlet = { assets = false, overlay = true } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletOverlay == true);
-		CHECK(r->meshletEnable == false);
+		CHECK(r->meshletAssets == false);
 	}
 	{  // 非布尔 = **启动失败**点名键（meshlet 块全部布尔键同纪律：静默回落 = 截图判据整批假绿）
 		for (const char* bad : {R"lua(return { meshlet = { overlay = "yes" } })lua",

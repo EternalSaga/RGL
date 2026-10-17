@@ -533,7 +533,7 @@ void fillTuningTail(FrameDrawList& out, const SceneBounds& bounds, const SsrTuni
  *  四张表同构（state 或 ctx → span，录制期读取即完成使命），一处镜像比四处散写更难漏掉一张。
  *  前三张的存储住在 `RenderListState`（本 system 每帧填）；第四张是**启动期静态数据**，住在
  *  registry ctx（装配层 `wireClusterRangeTable` 写，生产者与"为什么走 ctx" → ClusterRangeTable
- *  注释），本层只搬 span。门 `meshlet.enable` 关 = ctx 无该条目 = 空 span ⟹ 执行器把 scene data
+ *  注释），本层只搬 span。门 `meshlet.assets` 关 = ctx 无该条目 = 空 span ⟹ 执行器把 scene data
  *  该区写成**全 0**（逐位不变）。 */
 void mirrorObjectTables(FrameDrawList& out, entt::registry& rg, const RenderListState& state) {
 	out.sceneData.objectMatrices = std::span<const glm::mat4>{state.matrices};
@@ -622,7 +622,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 本层只读；不 emplace = 不切 = 逐位不变）。判定只有一处，理由 → MeshletSwitchOn 注释。
 	// 簇化轴：两枚 ctx 生效标记一次读齐（overlay = 债-105 的叠加段自有门，出厂关 ⟹ 一条叠加
 	// draw 都不采 = 拿回 +1571 draws / +1.59ms；inPlace = ★1-a1ii-β-1 原位取代）。🔴 overlay 的
-	// 生效条件**不含** meshlet.enable（同 mdi_shadow 定性）；enable 关时条目没烘，那种孤立组合由
+	// 生效条件**不含** meshlet.assets（同 mdi_shadow 定性）；assets 关时条目没烘，那种孤立组合由
 	// 装配层 wireMeshletOverlayActivation 按事实出声，不在这里静默，也不在这里补条件。
 	const auto [meshletOverlay, meshletInPlace] = meshletActivations(rg);
 	// 簇化轴 ★18-B2：阴影远级联 LOD 选级表（装配层 wireClusterRangeTable 判定后 emplace，

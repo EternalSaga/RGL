@@ -99,7 +99,7 @@ export [[nodiscard]] std::expected<MeshletRangeScan, std::string> scanClusterRan
  *
  * 下标 = objectSlot（= `MeshRef.objectSlot` = shader 的 `objectIndex`），容量 = 实例矩阵槽数；
  * 无簇产物的实例留**全 0 条目**（`count = 0` ⟹ ★1-a1 的 mesh shader 天然零 group）。
- * 门 `meshlet.enable` 关 = 装配层根本不建本 ctx ⟹ span 空 ⟹ scene data 该区保持全 0。
+ * 门 `meshlet.assets` 关 = 装配层根本不建本 ctx ⟹ span 空 ⟹ scene data 该区保持全 0。
  */
 export struct ClusterRangeTable {
 	/** 按 objectSlot 索引的表条目（与 `ObjectDraw` 等三张 per-object 表同一条索引）。 */
@@ -156,7 +156,7 @@ export MeshletCullItemTable buildClusterCullItems(ClusterRangeTable& table);
  *
  * 住在 registry ctx 的理由与 `ClusterRangeTable` 完全同款——**同一个生产者/消费者一对**：
  * 装配层 `wireMeshletSwitch` 在启动期判定并 emplace，`renderListSystem` 每帧 find 只读。
- * 「生效」这件事**只判定一次**（`enable && switch && cull_replay == cpu && 逐资产对账通过`），
+ * 「生效」这件事**只判定一次**（`assets && switch && cull_replay == cpu && 逐资产对账通过`），
  * 消费者重述条件 = 两处真相源迟早漂（本项目的反复教训）。
  *
  * **存在即生效**（不 emplace = 不切）：与 `ClusterRangeTable` 的「门关 = ctx 无条目 = 执行器
@@ -172,9 +172,9 @@ export struct MeshletSwitchOn {};
  * `wireMeshletOverlayActivation` 在启动期判定并 emplace，`renderListSystem` 每帧 find 只读，
  * 判据落在 `collectMeshletOverlay` 的第五枚条件上。
  *
- * 🔴 **生效条件不含 `meshlet.enable`**（本键与 `mdi_shadow` 同定性）：本标记只决定「叠加段采不采
- * draw」，条目的烘焙条件仍挂在 `enable` 上（那些条目同时是 `switch` 原位取代的宿主）。二者解耦的
- * 后果是 `overlay = true` + `enable = false` 这种**孤立组合**——装配层出声（判据 = 有没有条目这个
+ * 🔴 **生效条件不含 `meshlet.assets`**（本键与 `mdi_shadow` 同定性）：本标记只决定「叠加段采不采
+ * draw」，条目的烘焙条件仍挂在 `assets` 上（那些条目同时是 `switch` 原位取代的宿主）。二者解耦的
+ * 后果是 `overlay = true` + `assets = false` 这种**孤立组合**——装配层出声（判据 = 有没有条目这个
  * 事实，不是配置意图），不静默空开关。
  *
  * 关（默认）= 不 emplace = 叠加段一条 draw 都不采 ⟹ 出厂拿回 +1571 draws / +4713 vkCmd /

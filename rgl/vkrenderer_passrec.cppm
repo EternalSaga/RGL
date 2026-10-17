@@ -577,7 +577,7 @@ void Renderer::executePassDraws(vk::raii::CommandBuffer& cmd, const RgPassPlan& 
 		// 与底共面 + eLess ⟹ 零像素写入，A1/A2 逐位不变的构造性保证）。独立向量不进
 		// 候选序对账（FrameDrawList::meshletCalls 注释）；`cull_replay=gpu_sync` 走上面
 		// cullDriver 分支 = 本分支不执行 = 叠加静默跳过（本批不接 DGC，★1-b 再议）。
-		// 门 meshlet.enable 关 = 空向量 = 零 draw 零开销。
+		// 门 meshlet.assets 关 = 空向量 = 零 draw 零开销。
 		// ★0.5-b2：叠加 draw 自带深度比较（coplanar = equal/ne 时 loop 前 set loop 后复原，
 		// 复原目标 = 本 pass 段首 applyDynamicState 用的值）；off/门关 = 零 set，本 pass 的
 		// 命令流与旧逐 bit 同（→ executeMeshletOverlay 注释）。

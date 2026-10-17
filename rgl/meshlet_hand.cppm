@@ -58,7 +58,7 @@ import meshlet_asset;
  * `kL0Only` 档下非 L0 簇**一条字节都不读**。这不只是省遍历：「过滤形态不读被过滤数据」必须
  * 可证——单测用「非 L0 簇填垃圾字节（局部索引 255），`kL0Only` 照样绿而 `kAll` 报错」钉住它。
  *
- * ## 真产物统计锚（★0.5-c 判据 4；常驻证据 = 引擎启动 INFO，门 `meshlet.enable` 开才有）
+ * ## 真产物统计锚（★0.5-c 判据 4；常驻证据 = 引擎启动 INFO，门 `meshlet.assets` 开才有）
  * 装配层（`main:meshlets`）对全表跑 `kL0Only` 并 INFO 报 `total / negative / l0TriangleCount`：
  * bistro 上 `total == 2,832,120 == header.l0TriangleCount`（遍历恰好覆盖 L0、不重不漏）且
  * `negative == 2,322,319`（packer 在**源 glb** 上独立量的逐三角读数）。两个数**同时**对上 =

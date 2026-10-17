@@ -1007,29 +1007,29 @@ TEST_CASE("runtime_config：meshlet 块（★0-b1 簇路径总门）——缺块
 	// 「键被静默忽略」都得到 true ⟹ 用例失去判别力（翻默认最容易留下的假绿形态）。
 	// 变异红线声明：
 	//   ① 默认值翻回 false → 「缺块回落」与「RuntimeConfig{} 成员初始化」两条断言红。
-	//   ② readMeshletBlock 漏读 enable / 键名打错 → 「显式关门」红（探针值 false 读不到 = 恒 true）。
+	//   ② readMeshletBlock 漏读 assets / 键名打错 → 「显式关门」红（探针值 false 读不到 = 恒 true）。
 	//   ③ 加了扁平键双读兼容 → 「顶层 meshlet_enable = false 什么都不发生」红（两个真相源反模式）。
 	{  // 成员初始化默认路径（不看 lua 文件的默认值 = 主 agent 验收口径）
-		CHECK(RuntimeConfig{}.meshletEnable == true);
+		CHECK(RuntimeConfig{}.meshletAssets == true);
 	}
 	{  // 缺块 = 出厂默认（★18-C 起 = 开）
 		TempLua f("rt_meshlet_default", "return {}\n");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletEnable == true);
+		CHECK(r->meshletAssets == true);
 	}
 	{  // 块内键名命中（🔴 探针值 **false** ≠ 默认 true：漏读即恒 true，显式关门会静默失效）
-		TempLua f("rt_meshlet_off", R"lua(return { meshlet = { enable = false } })lua");
+		TempLua f("rt_meshlet_off", R"lua(return { meshlet = { assets = false } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletEnable == false);
+		CHECK(r->meshletAssets == false);
 	}
 	{  // **没有**扁平键的兼容双读（两个真相源 = 本项目反复登记的反模式）
 		// 探针取 false：默认已是 true，取 true 就分不出「忽略」与「读到」。
 		TempLua f("rt_meshlet_flat", R"lua(return { meshlet_enable = false })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletEnable == true);
+		CHECK(r->meshletAssets == true);
 	}
 }
 
@@ -1050,13 +1050,13 @@ TEST_CASE("runtime_config：meshlet.switch（★1-a1ii-β-1 原位取代）—�
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletSwitch == false);
-		TempLua g("rt_mswitch_nokey", R"lua(return { meshlet = { enable = true } })lua");
+		TempLua g("rt_mswitch_nokey", R"lua(return { meshlet = { assets = true } })lua");
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
 		CHECK(r2->meshletSwitch == false);
 	}
 	{  // 块内键名命中（探针值 true ≠ 默认 false，漏读即红）
-		TempLua f("rt_mswitch_on", R"lua(return { meshlet = { enable = true, switch = true } })lua");
+		TempLua f("rt_mswitch_on", R"lua(return { meshlet = { assets = true, switch = true } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletSwitch == true);
@@ -1070,7 +1070,7 @@ TEST_CASE("runtime_config：meshlet.switch（★1-a1ii-β-1 原位取代）—�
 		}
 	}
 	{  // 同块其余三枚布尔同享严格面（本批把整块换掉，不是只换 switch）
-		TempLua f("rt_mswitch_strict_siblings", R"lua(return { meshlet = { enable = "on" } })lua");
+		TempLua f("rt_mswitch_strict_siblings", R"lua(return { meshlet = { assets = "on" } })lua");
 		CHECK_FALSE(loadRuntimeConfig(f.pathStr()).has_value());
 		TempLua g("rt_mswitch_strict_debug", R"lua(return { meshlet = { debug = 0 } })lua");
 		CHECK_FALSE(loadRuntimeConfig(g.pathStr()).has_value());
@@ -1079,7 +1079,7 @@ TEST_CASE("runtime_config：meshlet.switch（★1-a1ii-β-1 原位取代）—�
 
 TEST_CASE("runtime_config：meshlet.shadow_lod（★18-B1 阴影段选级）——默认 5、三态取值、严格整数面") {
 	// 判据来源 = 实读 readMeshletBlock / readStrictIntKey。🔴 ★18-C 起默认 **5**（用户拍板
-	// 「默认开 D=5」，与 enable = true 同时给默认，避免本键落在「开了但不生效」的形态）。
+	// 「默认开 D=5」，与 assets = true 同时给默认，避免本键落在「开了但不生效」的形态）。
 	// −1 / 0 / N≥1 是三条**语义不同**的档（−1 = 关、0 = §18.6 判据 2 的阳性对照 L0 臂、
 	// N≥1 = uniform 选级），解析层必须原样透传、不得合并。
 	// 🔴 探针一律避开默认值 5（取 7）：默认 = 探针 ⟹ 「读到」与「静默忽略」不可区分。
@@ -1098,7 +1098,7 @@ TEST_CASE("runtime_config：meshlet.shadow_lod（★18-B1 阴影段选级）—�
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		CHECK(r->meshletShadowLod == 5);
-		TempLua g("rt_mlod_nokey", R"lua(return { meshlet = { enable = true } })lua");
+		TempLua g("rt_mlod_nokey", R"lua(return { meshlet = { assets = true } })lua");
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
 		CHECK(r2->meshletShadowLod == 5);
@@ -1908,7 +1908,7 @@ TEST_CASE("债-11 扫描面非空 + 交付 configs 零 warn：configs/{scene,run
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 债-129 第三刀：嵌套未知键护栏（拍板 A「meshlet.enable 改名」的硬前置）
+// 债-129 第三刀：嵌套未知键护栏（拍板 A「meshlet.assets 改名」的硬前置，旧名按拍板原文引）
 // collectPresentKeys 对**键表声明了 `块.` 点分前缀**的块下钻一层记 `块.子键`；
 // lint 对点分名走键表精确成员、无点名保持顶层前缀语义。五个 loader 同治。
 // 🔴 变异红线（整组）：① 下钻段注释掉 → 五条阳性锚点全红；② 前缀条件去掉（无条件钻）

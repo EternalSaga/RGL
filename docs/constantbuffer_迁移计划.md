@@ -124,7 +124,7 @@ StructuredBuffer<uint>            clusterVisible;
 🔴 **分支点锚点必须在开批之前记下**，事后补锚点 = 把"和什么比"这件事交给记忆。
 现行锚点：门关 `54e406655f16faf0674b382818bd589f875c8ee0705cdec1c109d5ff1a72df4f`。
 ⚠ 2026-10-12 起**门关 ≠ 出厂默认**（★18-C 翻了 `meshlet` 默认）：到达门关要显式
-`--set meshlet.enable=false --set meshlet.shadow_lod=-1`，出厂默认是另一个锚 → 总账红线声明块。
+`--set meshlet.assets=false --set meshlet.shadow_lod=-1`，出厂默认是另一个锚 → 总账红线声明块。
 
 ### 3.3 反射接入门槛
 
@@ -333,7 +333,7 @@ StructuredBuffer 在本机 stride 正确"，但**推翻一条用户定下的红�
 
 | 档 | 命令 | sha256 |
 |---|---|---|
-| **门关**（护栏态） | `just shot --set meshlet.enable=false --set meshlet.shadow_lod=-1` | `54e406655f16faf0674b382818bd589f875c8ee0705cdec1c109d5ff1a72df4f` |
+| **门关**（护栏态） | `just shot --set meshlet.assets=false --set meshlet.shadow_lod=-1` | `54e406655f16faf0674b382818bd589f875c8ee0705cdec1c109d5ff1a72df4f` |
 | **出厂默认**（meshlet 开） | `just shot`（不带 `--set`） | `95edc8ccd7a4f2a5d72094007a68aa5b0fa41aed7d490397b30730fa7dc7908c` |
 
 门关档实测**仍 = 文档旧锚** `54e40665…`（★18-A/B1/B2/C 只动 meshlet 路径）。

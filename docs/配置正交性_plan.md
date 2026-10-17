@@ -132,7 +132,7 @@ velocity buffer 是因为不需要」），引擎内真消费者只有 FSR（+ R
 
 | 键（出厂值） | 类 | 依据（消费者 file:line） | 处置 |
 |---|---|---|---|
-| enable (true) | **④** | 本体 = 资源分配：4 段簇 buffer + 描述符槽 + 条目烘焙宿主（wireMeshletBindings main_meshlets.cppm:269-319）；块内 9 键的宿主条件**不统一含它**（overlay/mdi_shadow 不含、debug/tint 经条目间接含）= 「总门」是假象 | 从「总门」位降级为资源门（改名或改注释 + 逐键宿主条件注释修正）；拍板点 A |
+| enable (true) | **④** | 本体 = 资源分配：4 段簇 buffer + 描述符槽 + 条目烘焙宿主（wireMeshletBindings main_meshlets.cppm:269-319）；块内 9 键的宿主条件**不统一含它**（🔴 实测 = 8 枚含、**只有 `overlay` 不含**，仅经「条目烘不烘」间接受影响；原写「overlay/mdi_shadow 不含」**是错的**，见 §7 拍板 A 落地记录）= 「总门」是假象 | 从「总门」位降级为资源门（改名或改注释 + 逐键宿主条件注释修正）；拍板点 A |
 | overlay (false) | **①** | 与 switch 互斥，现靠运行期抑制 + 两层各喊一次（lint gate_lint_impl.cppm:265-270 要 overlay=true；装配 :246-250 switch 生效就喊——**出厂 overlay=false 开 switch 时只有装配层喊，lint 沉默**，配对表证实） | 与 switch 合一枚 `meshlet.mode` 三值（off/overlay/switch） |
 | debug (false) | **①** | 两枚布尔表达 base/debug/tint 三选一（pickMeshletMeshVariant :136-144 只判 overlay） | 与 tint 合一枚三值键 |
 | tint (false) | **①** | 同上 + 让位规则（lint :244-248「tint 优先、debug 让位」——让位是两布尔的产物，三值后消失） | 同上 |
@@ -647,9 +647,15 @@ readSsrBlock 头注释（runtime_config_impl.cppm:315-327）明确裁决「confi
 - 裁 (a) 的依据：`enable` 的**本体是资源分配**（§2.2 ④：4 段簇 buffer + 描述符槽 + 条目烘焙宿主），
   而 §8.1 目标形态写「**资源分配不出现在配置面**」。
 - ⚠ **把"谎"说精确，免得改错东西**：不是「`enable` 不是开关」——它关了就等于走旧路径（红线 A 的定义
-  就是 `--set meshlet.enable=false`）。谎在**「它是块内 9 键的总开关」那一句**：`mdi_shadow` 按设计
-  不受它管（§2.2：生效条件不含本键 = 正确）、`overlay` 只**间接**受它管（`main_meshlets.cppm:107-109`
-  的 warn 自陈「条目的烘焙条件挂在那枚门上」）。
+  就是 `--set meshlet.enable=false`）。谎在**「它是块内 9 键的总开关」那一句**：`overlay` 的生效前置
+  **不含**它（`main_meshlets.cppm:107-109` 的 warn 自陈「条目的烘焙条件挂在那枚门上」= 只**间接**受影响）。
+  🔴 **本句原写「`mdi_shadow` 按设计不受它管（= 正确）」是错的**，落地时实测纠正：
+  `wireMeshletShadowArgs`（`main_meshlets.cppm:487`）第一行 `if (!cfg.meshletAssets || cfg.meshletShadowLod < 0)
+  return nullptr;` ⟹ `mdi_shadow` 的宿主**含**资源门，与本文 §5「`mdi_shadow` 继承 `enable` 再加
+  `shadow_lod ≥ 0`」一致（那句才是对的）。错因 = 把 `mdi_plan.md` §19.6「生效条件不含**本键**」的
+  「本键」读成了 `enable`，实际指 `mdi_shadow` **自身**（出厂也建载体）。
+  ⚠ **结论不变但强度要如实降**：9 键里 8 枚的前置含它、1 枚不含 ⟹ 它不是「总门」的真正理由不是"多数键不归它管"，
+  而是**含它的那 8 枚把它当资源前置依赖、不是当模式开关**（路径选择语义归 `meshlet.mode`）。
 - **路径选择的语义不归本键**——那是 O1 已挂号的 `meshlet.mode`。⟹ 改名成资源门（`meshlet.assets` 一类；
   🔴 **定名在执行时按最终语义挑，名字是唯一付两次钱的东西**）与 O1 分工自洽：`assets` 答"资源在不在"，
   `mode` 答"走哪条路"。
@@ -661,6 +667,20 @@ readSsrBlock 头注释（runtime_config_impl.cppm:315-327）明确裁决「confi
 - (b) 保留键名，只修注释（含 §1.2 差异 ⑥ 的两条过期注释）。
   后果：零破坏；「总门」谎言保留，meshlet 块再加新键时继续借语义（本文 Q1 分类里 enable 的
   ④ 定性留在文档里，不落在代码里）。
+- ✅ **已落地（2026-10-17）**：键名硬切 `meshlet.assets`（无旧键双读兼容）+ C++ 字段 `meshletEnable`→`meshletAssets`；红线 A 哈希不变（新配方 `--set meshlet.assets=false --set meshlet.shadow_lod=-1` 实测命中 `54e40665…`）；历史叙述中的旧名按译名读（译名注 → `mdi_plan.md` 头部）。
+  🔴 **改名行为中性不是断言，是两道机器证明**：① 两份 committed 金标准重生成后逐行归一化 diff 为空
+  （差异**只有**键名/字段名替换）；② 出厂锚 `95edc8ccd7a4` 与红线 A 锚 `54e40665` 双双命中（主 agent 亲跑）。
+  **措辞层同刀补齐**：六处「总门」→「资源门」（`configs/runtime.lua` / `gate_lint*` / `runtime_config*`），
+  只改散文不动判据；🔴 落地时**纠正了本文两处错误**（§2.2 与上文「谎在…」，见该处标注）——
+  生效前置不含资源门的**只有 `overlay` 一枚**，`mdi_shadow` 含它。
+  ⚠ **本刀只完成 (a) 的名字与散文**：`meshlet.mode`（O1，答"走哪条路"）**仍未做**，资源门与模式轴的
+  正式分离是 O1 的账，不在本拍板射程。
+- ✅ **顺带落一条护栏（本债 ②「配了不生效且不指名」的元形态）**：committed 金标准从「env 未设即 no-op」
+  改为**默认校验**（`RGL_GATE_LINT_GOLDEN=<dir>` 才是重生成模式）。起因是**上一刀 `d5cb02b` 的真实漏网**——
+  改了门名 `izb`→`izb.on` 却没重生成，而**没有任何机器判据比对 committed golden** ⟹ 基线静默陈旧一整轮。
+  与「设备级用例无设备必须 FAIL 不 SKIP」是同一条极性的反面：**默认跳过的判据 = 假绿**。
+  `GUARD:` 变异红线（主 agent 亲验）：删 committed golden 任一行 ⟹ `just test` 红并点名 `文件:行号 漂了`；
+  把校验改回 no-op ⟹ 该红消失（证明红真由校验产生）。代价实测 0.003s，无「太慢所以默认跳过」的余地。
 
 **拍板 B：图作图事实提供者的射程** ✅ **已裁 (b)（2026-10-16 用户：「把需求申报进图，绝对值得做」）**
 - (a) 只出查询（O2）。后果：启动期 warn 保留（形态不变），漂移风险消除，消息形态 0 迁移；

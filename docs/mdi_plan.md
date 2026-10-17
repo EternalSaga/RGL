@@ -11,6 +11,7 @@
 > 项目 pin 的 `build/_deps/slang-prebuilt-src/bin/slangc` 2026.16 实跑，限额 = 本机 `vulkaninfo`）。
 > **性能数字绑机** = AMD Radeon 8060S / RADV STRIX_HALO / Mesa 26.2.3，换机先复测
 > （AGENTS「本机不著书」）。
+> ⚠ **译名注**：`meshlet.enable` 已于 2026-10-17 随债-129 拍板 A 改名 `meshlet.assets`，本文旧名按此读。
 
 ## 0. 结论速览与拍板
 
@@ -908,7 +909,7 @@ U = area( erode( M, 圆盘半径 r ) )              默认 r = 2
 ```bash
 for ch in 0 3; do
   python3 tools/smoke.py shot --name g${ch}_off --aa off --set diagnostics:dump_gbuf=$ch
-  python3 tools/smoke.py shot --name g${ch}_on  --aa off --set meshlet.enable=true --set diagnostics:dump_gbuf=$ch
+  python3 tools/smoke.py shot --name g${ch}_on  --aa off --set meshlet.assets=true --set diagnostics:dump_gbuf=$ch
   # 各自把 build/rgl/screenshots/gbuffer_$ch.png 存到不同目录再比（同名的两次跑会互相覆盖）
 done
 ```
@@ -1653,7 +1654,7 @@ fallback)` → 逐 prim `(start, count, level, triangles)` + 聚合锚 + **`cost
 | 态 | 怎么得到 | 截图锚 |
 |---|---|---|
 | 🔴 **出厂默认** | 什么都不给 | `95edc8cc…` |
-| **门关**（P5 护栏态）| `--set meshlet.enable=false --set meshlet.shadow_lod=-1` | `54e40665…` |
+| **门关**（P5 护栏态）| `--set meshlet.assets=false --set meshlet.shadow_lod=-1` | `54e40665…` |
 
 🔴 **P5 没有被废掉，被改掉的是「门关 = 出厂态」这个前提。** 实测显式门关**精确复现**
 `54e40665…` ⟹ 护栏仍可逐位到达。但每批「门关逐位不变」的验收命令从此**必须带上那两枚

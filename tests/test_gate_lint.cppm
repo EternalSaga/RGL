@@ -22,8 +22,8 @@ module;
  */
 #include <doctest/doctest.h>
 #include <algorithm>  // std::ranges::sort / unique / count（自由函数不经 BMI 保证传递，GMF 自带）
-#include <cstdlib>    // 金标准 harness：std::getenv（env 未设 = 用例 no-op）
-#include <fstream>    // 金标准 harness：基线落盘（仅 env 已设时）
+#include <cstdlib>    // 金标准 harness：std::getenv（env = 重生成模式；未设 = **校验模式，不是跳过**）
+#include <fstream>    // 金标准 harness：重生成模式落盘 + 校验模式读 committed golden
 #include <initializer_list>  // modules 坑：range-for 的花括号列表要真 STL 头（只 include doctest 不够）
 #include <string>     // std::string 的 operator<（同上：ranges::sort 比较 std::string 时要它）
 
@@ -92,7 +92,7 @@ constexpr ShadowConfig kShadowFwd{.izb = false};
 /**
  * 调用简写（债-106 后 lint 有九个入参）：三份 defaults 恒取出厂默认（旧用例本来就全传
  * `DiagnosticsConfig{}`），shadow 默认取出厂形态（csm + izb），runtime 默认取出厂态
- * （meshlet.enable = true + shadow_lod = 5，其余默认 = meshlet 规则全沉默）。
+ * （meshlet.assets = true + shadow_lod = 5，其余默认 = meshlet 规则全沉默）。
  * @param shadow 阴影侧生效值（forward 臂记得传 kShadowFwd）
  * @param runtime 运行配置生效值（meshlet 用例的变量在这；默认 = 出厂态）
  */
@@ -171,7 +171,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 例外名单 = 全表仅有的两枚「命中前缀但形状不是 owner」的键，各有判据：
 	//   · pcss.min_footprint_texels —— 结构性错位键（任何 mode 下都不生效），全表唯一，
 	//     🔴 必须留独立行、不许被块吞掉（吞了 = 丢掉这条判据）；
-	//   · meshlet.shadow_lod_fallback —— 链式前置（shadow_lod ≥ 0 && enable）且级别
+	//   · meshlet.shadow_lod_fallback —— 链式前置（shadow_lod ≥ 0 && assets）且级别
 	//     inertNote ≠ meshlet 块的 warn，塞不进块。
 	// 新增例外 = 评审裁决点，必须在此写明理由。
 	static const std::array<std::string_view, 2> kPrefixExceptions{
@@ -190,10 +190,10 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 TEST_CASE("gate_lint 基线：全默认配置（任何图/任何世界）零 findings") {
 	// 反向用例总锚：configs/diagnostics.lua 与 configs/shadow.lua 写满默认值的现实 =
 	// lint 必须沉默。变异红线：任何 nullptr 谓词行被改成恒真 → 本用例红。
-	// 🔴 债-106 起本锚同时是 **meshlet 出厂态**（enable = true + shadow_lod = 5，其余 8 枚
+	// 🔴 债-106 起本锚同时是 **meshlet 出厂态**（assets = true + shadow_lod = 5，其余 8 枚
 	// 默认）的总锚：lint() 的 runtime 默认参 = `RuntimeConfig{}` = 出厂态 ⟹ meshlet 申报
 	// （债-129 D 后 = 独立 10 行 + meshlet 块 8 枚键）谓词必须全部沉默（shadow_lod 那条的
-	// 判据是「≥ 0 且 !enable」而不是「偏离默认」，出厂两键同给正是为了让它不成立）。
+	// 判据是「≥ 0 且 !assets」而不是「偏离默认」，出厂两键同给正是为了让它不成立）。
 	// 变异红线：meshlet 任一行/任一枚块条目谓词改成恒真 → 本用例红。
 	const DiagnosticsConfig d;
 	// 结构体默认 = 交付形态（csm + **izb 关**，2026-10-10 换红线）。izb 关之后交付默认在
@@ -509,10 +509,10 @@ std::vector<GateFinding> lintRt(const RuntimeConfig& runtime) {
 		runtime);
 }
 
-/** 门关红线 A 的公共形态：enable = false + shadow_lod = -1（P5 验收态），再叠加传入的改动。 */
+/** 门关红线 A 的公共形态：assets = false + shadow_lod = -1（P5 验收态），再叠加传入的改动。 */
 RuntimeConfig redlineA(void (*tweak)(RuntimeConfig&) = nullptr) {
 	RuntimeConfig r;
-	r.meshletEnable = false;
+	r.meshletAssets = false;
 	r.meshletShadowLod = -1;
 	if (tweak)
 		tweak(r);
@@ -521,15 +521,15 @@ RuntimeConfig redlineA(void (*tweak)(RuntimeConfig&) = nullptr) {
 
 }  // namespace
 
-TEST_CASE("gate_lint meshlet 红线 A：门关态（enable=false + shadow_lod=-1，其余默认）除了该喊的不多喊") {
+TEST_CASE("gate_lint meshlet 红线 A：门关态（assets=false + shadow_lod=-1，其余默认）除了该喊的不多喊") {
 	// 门关态 = P5 逐位不变的验收态（旧锚 54e40665…），**不是**出厂态（shadow_lod = -1 已偏离
 	// 默认 5）——但它是**合法**态：meshlet 十门的期望集合 = 空（shadow_lod 判据要「≥ 0」，
 	// -1 = 本档关不是孤立；其余 9 枚未开/未偏离）。逐门钉 nullptr = 「不多喊」的机器形态；
 	// 全局零条只按 meshlet 前缀计——非 meshlet 侧本组合也应为零，但那是上面总锚的口径，
 	// 本用例的判据对象是 meshlet 块，别把两条红线焊成一条。
-	// 变异红线：任何 meshlet 规则改成「与 enable / 偏离态无关的恒真」→ 本用例红。
+	// 变异红线：任何 meshlet 规则改成「与 assets / 偏离态无关的恒真」→ 本用例红。
 	const auto fs = lintRt(redlineA());
-	for (const char* k : {"meshlet.enable", "meshlet.overlay", "meshlet.debug", "meshlet.tint",
+	for (const char* k : {"meshlet.assets", "meshlet.overlay", "meshlet.debug", "meshlet.tint",
 		 "meshlet.coplanar", "meshlet.switch", "meshlet.cull", "meshlet.shadow_lod",
 		 "meshlet.shadow_lod_fallback", "meshlet.mdi_shadow"})
 		CHECK(find(fs, k) == nullptr);
@@ -540,25 +540,25 @@ TEST_CASE("gate_lint meshlet 红线 A：门关态（enable=false + shadow_lod=-1
 	}) == 0);
 }
 
-TEST_CASE("gate_lint meshlet.shadow_lod：≥ 0 而 enable 关 = warn（★18-C 就近 WARNING 的正主）") {
-	{  // 正例：enable = false 而 shadow_lod 保持出厂 5 = 描述符槽没人给
+TEST_CASE("gate_lint meshlet.shadow_lod：≥ 0 而 assets 关 = warn（★18-C 就近 WARNING 的正主）") {
+	{  // 正例：assets = false 而 shadow_lod 保持出厂 5 = 描述符槽没人给
 		RuntimeConfig r;
-		r.meshletEnable = false;
+		r.meshletAssets = false;
 		const auto fs = lintRt(r);
 		REQUIRE(find(fs, "meshlet.shadow_lod") != nullptr);
 		CHECK(find(fs, "meshlet.shadow_lod")->severity == GateSeverity::warn);
 	}
-	{  // 反向①：出厂态（enable = true + shadow_lod = 5）不喊——判据是「≥ 0 且 !enable」，
+	{  // 反向①：出厂态（assets = true + shadow_lod = 5）不喊——判据是「≥ 0 且 !assets」，
 	   // 🔴 不是「偏离默认」（-1 也偏离默认，写成 deviated 红线 A 就红了）
 		CHECK(find(lintRt(RuntimeConfig{}), "meshlet.shadow_lod") == nullptr);
 	}
-	{  // 反向②：门关档（enable = false + shadow_lod = -1）不喊——本档关不是孤立组合
+	{  // 反向②：门关档（assets = false + shadow_lod = -1）不喊——本档关不是孤立组合
 		CHECK(find(lintRt(redlineA()), "meshlet.shadow_lod") == nullptr);
 	}
 }
 
-TEST_CASE("gate_lint meshlet.overlay：生效不含 enable，但 overlay && !enable = 没有条目可采") {
-	{  // 正例：overlay 开 + enable 关（红线 A 打底，别把 shadow_lod 的归因混进来）
+TEST_CASE("gate_lint meshlet.overlay：生效不含 assets，但 overlay && !assets = 没有条目可采") {
+	{  // 正例：overlay 开 + assets 关（红线 A 打底，别把 shadow_lod 的归因混进来）
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) { r.meshletOverlay = true; }));
 		REQUIRE(find(fs, "meshlet.overlay") != nullptr);
 		CHECK(find(fs, "meshlet.overlay")->severity == GateSeverity::warn);
@@ -566,25 +566,25 @@ TEST_CASE("gate_lint meshlet.overlay：生效不含 enable，但 overlay && !ena
 		CHECK(find(fs, "meshlet.overlay")->message.find("wireMeshletOverlayActivation")
 			!= std::string::npos);
 	}
-	{  // 反向：overlay 开 + enable 开 = 合法（条目烘焙宿主 = enable 的 slots）
+	{  // 反向：overlay 开 + assets 开 = 合法（条目烘焙宿主 = assets 的 slots）
 		RuntimeConfig r;
 		r.meshletOverlay = true;
 		CHECK(find(lintRt(r), "meshlet.overlay") == nullptr);
 	}
-	{  // 反向：overlay 关（出厂默认）任何 enable 态都不喊
+	{  // 反向：overlay 关（出厂默认）任何 assets 态都不喊
 		CHECK(find(lintRt(redlineA()), "meshlet.overlay") == nullptr);
 	}
 }
 
 TEST_CASE("gate_lint meshlet.debug / meshlet.tint：条目级变体位的死值与让位（三条规则）") {
-	{  // debug 正例①：enable 开 + overlay 关 = 强制归 base（债-105 的归属裁决）
+	{  // debug 正例①：assets 开 + overlay 关 = 强制归 base（债-105 的归属裁决）
 		RuntimeConfig r;
 		r.meshletDebug = true;
 		const auto fs = lintRt(r);
 		REQUIRE(find(fs, "meshlet.debug") != nullptr);
 		CHECK(find(fs, "meshlet.debug")->severity == GateSeverity::warn);
 	}
-	{  // debug 正例②：enable 关（overlay 开）= 条目根本不烘，也是死值
+	{  // debug 正例②：assets 关（overlay 开）= 条目根本不烘，也是死值
 	   // 🔴 这条同时钉住「门关 + 仪器开」不再静默——债-106 的挂号原文形态
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
 			r.meshletOverlay = true;
@@ -592,7 +592,7 @@ TEST_CASE("gate_lint meshlet.debug / meshlet.tint：条目级变体位的死值�
 		}));
 		CHECK(find(fs, "meshlet.debug") != nullptr);
 	}
-	{  // debug 反向：enable + overlay 都开 = 变体真被烘，不喊
+	{  // debug 反向：assets + overlay 都开 = 变体真被烘，不喊
 		RuntimeConfig r;
 		r.meshletOverlay = true;
 		r.meshletDebug = true;
@@ -605,7 +605,7 @@ TEST_CASE("gate_lint meshlet.debug / meshlet.tint：条目级变体位的死值�
 		r.meshletOverlay = true;
 		CHECK(find(lintRt(r), "meshlet.tint") == nullptr);
 	}
-	{  // 让位正例：enable + overlay 开 + tint 与 debug 同真 ⟹ tint 优先**恰一条**
+	{  // 让位正例：assets + overlay 开 + tint 与 debug 同真 ⟹ tint 优先**恰一条**
 	   // （overlay 开 ⟹ 两条死值规则都不成立，find 到的只能是让位规则那条）
 		RuntimeConfig r;
 		r.meshletOverlay = true;
@@ -631,20 +631,20 @@ TEST_CASE("gate_lint meshlet.debug / meshlet.tint：条目级变体位的死值�
 }
 
 TEST_CASE("gate_lint meshlet.coplanar：偏离 off 而无叠加 draw = warn；off 与合法组合不喊") {
-	{  // 正例①：enable 开 + overlay 关 + coplanar = equal（setter 设了但没有 draw 可作用）
+	{  // 正例①：assets 开 + overlay 关 + coplanar = equal（setter 设了但没有 draw 可作用）
 		RuntimeConfig r;
 		r.meshletCoplanar = MeshletCoplanarMode::equal;
 		const auto fs = lintRt(r);
 		REQUIRE(find(fs, "meshlet.coplanar") != nullptr);
 		CHECK(find(fs, "meshlet.coplanar")->severity == GateSeverity::warn);
 	}
-	{  // 正例②：enable 关 + coplanar = ne（红线 A 打底只变 coplanar）
+	{  // 正例②：assets 关 + coplanar = ne（红线 A 打底只变 coplanar）
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
 			r.meshletCoplanar = MeshletCoplanarMode::ne;
 		}));
 		CHECK(find(fs, "meshlet.coplanar") != nullptr);
 	}
-	{  // 反向：enable + overlay 都开 + coplanar = equal = 合法四臂档，不喊
+	{  // 反向：assets + overlay 都开 + coplanar = equal = 合法四臂档，不喊
 		RuntimeConfig r;
 		r.meshletOverlay = true;
 		r.meshletCoplanar = MeshletCoplanarMode::equal;
@@ -655,15 +655,15 @@ TEST_CASE("gate_lint meshlet.coplanar：偏离 off 而无叠加 draw = warn；of
 	}
 }
 
-TEST_CASE("gate_lint meshlet.switch：需 enable / 只在 cull_replay=cpu 生效 / 与 overlay 互斥（三条）") {
+TEST_CASE("gate_lint meshlet.switch：需 assets / 只在 cull_replay=cpu 生效 / 与 overlay 互斥（三条）") {
 	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
-	{  // 正例①：switch 开 + enable 关 = 无 draw 可取代（恰一条——cpu 默认档下另两条不成立）
+	{  // 正例①：switch 开 + assets 关 = 无 draw 可取代（恰一条——cpu 默认档下另两条不成立）
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) { r.meshletSwitch = true; }));
 		REQUIRE(find(fs, "meshlet.switch") != nullptr);
 		CHECK(gateFindings(fs, "meshlet.switch").size() == 1u);
 		CHECK(find(fs, "meshlet.switch")->severity == GateSeverity::warn);
 	}
-	{  // 正例②：enable 开 + switch 开 + cull_replay = gpu_sync = 段内换管线不在那条路上
+	{  // 正例②：assets 开 + switch 开 + cull_replay = gpu_sync = 段内换管线不在那条路上
 		DiagnosticsConfig d;
 		d.cullReplay = CullReplayMode::gpuSync;
 		RuntimeConfig r;
@@ -672,7 +672,7 @@ TEST_CASE("gate_lint meshlet.switch：需 enable / 只在 cull_replay=cpu 生效
 		REQUIRE(find(fs, "meshlet.switch") != nullptr);
 		CHECK(find(fs, "meshlet.switch")->message.find("wireMeshletSwitch") != std::string::npos);
 	}
-	{  // 正例③：enable + switch + overlay 同开（cpu 档）= 互斥，overlay 会被清空
+	{  // 正例③：assets + switch + overlay 同开（cpu 档）= 互斥，overlay 会被清空
 		RuntimeConfig r;
 		r.meshletSwitch = true;
 		r.meshletOverlay = true;
@@ -693,16 +693,16 @@ TEST_CASE("gate_lint meshlet.switch：需 enable / 只在 cull_replay=cpu 生效
 		CHECK(gateFindings(fs, "meshlet.switch")[0]->message.find("cull_replay")
 			!= std::string::npos);
 	}
-	{  // 反向：enable + switch（cpu 档、overlay 关）= 合法 β 形态，meshlet 侧零 findings
+	{  // 反向：assets + switch（cpu 档、overlay 关）= 合法 β 形态，meshlet 侧零 findings
 		RuntimeConfig r;
 		r.meshletSwitch = true;
 		CHECK(lintRt(r).empty());
 	}
 }
 
-TEST_CASE("gate_lint meshlet.cull：需 enable && switch；同款 cull_replay 限制（两条）") {
+TEST_CASE("gate_lint meshlet.cull：需 assets && switch；同款 cull_replay 限制（两条）") {
 	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
-	{  // 正例①：cull 开而 switch 关（enable 开）= 标志数组无消费者
+	{  // 正例①：cull 开而 switch 关（assets 开）= 标志数组无消费者
 		RuntimeConfig r;
 		r.meshletCull = true;
 		const auto fs = lintRt(r);
@@ -710,8 +710,8 @@ TEST_CASE("gate_lint meshlet.cull：需 enable && switch；同款 cull_replay �
 		CHECK(find(fs, "meshlet.cull")->severity == GateSeverity::warn);
 		CHECK(find(fs, "meshlet.cull")->message.find("wireMeshletCull") != std::string::npos);
 	}
-	{  // 正例②：cull + switch 同开而 **enable 关** = 仍无消费者。
-	   // 🔴 这条抓「把 enable && switch 弱化成只查 switch」的变异（a && b → b）：
+	{  // 正例②：cull + switch 同开而 **assets 关** = 仍无消费者。
+	   // 🔴 这条抓「把 assets && switch 弱化成只查 switch」的变异（a && b → b）：
 	   // 弱化后本组合（switch 开）谓词变假 ⟹ 本断言红。
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
 			r.meshletSwitch = true;
@@ -719,7 +719,7 @@ TEST_CASE("gate_lint meshlet.cull：需 enable && switch；同款 cull_replay �
 		}));
 		CHECK(find(fs, "meshlet.cull") != nullptr);
 	}
-	{  // 正例③：cull + switch + enable 但 cull_replay = gpuLagged = 同款限制（恰一条，
+	{  // 正例③：cull + switch + assets 但 cull_replay = gpuLagged = 同款限制（恰一条，
 	   // 宿主缺失那条不叠加——它的前置里 switch 已开）
 		DiagnosticsConfig d;
 		d.cullReplay = CullReplayMode::gpuLagged;
@@ -731,7 +731,7 @@ TEST_CASE("gate_lint meshlet.cull：需 enable && switch；同款 cull_replay �
 		CHECK(gateFindings(fs, "meshlet.cull")[0]->message.find("cull_replay")
 			!= std::string::npos);
 	}
-	{  // 反向：cull + switch + enable（cpu 档）= 合法 β+cull 形态，cull 不喊
+	{  // 反向：cull + switch + assets（cpu 档）= 合法 β+cull 形态，cull 不喊
 		RuntimeConfig r;
 		r.meshletSwitch = true;
 		r.meshletCull = true;
@@ -742,8 +742,8 @@ TEST_CASE("gate_lint meshlet.cull：需 enable && switch；同款 cull_replay �
 	}
 }
 
-TEST_CASE("gate_lint meshlet.shadow_lod_fallback：链式前置（lod ≥ 0 且 enable）；死值 = inertNote") {
-	{  // 正例①：fallback = l0 而 shadow_lod = -1（enable 开）= 选级整段不跑，调参残留
+TEST_CASE("gate_lint meshlet.shadow_lod_fallback：链式前置（lod ≥ 0 且 assets）；死值 = inertNote") {
+	{  // 正例①：fallback = l0 而 shadow_lod = -1（assets 开）= 选级整段不跑，调参残留
 		RuntimeConfig r;
 		r.meshletShadowLod = -1;
 		r.meshletShadowLodFallback = MeshletLodFallbackMode::l0;
@@ -751,13 +751,13 @@ TEST_CASE("gate_lint meshlet.shadow_lod_fallback：链式前置（lod ≥ 0 且 
 		REQUIRE(find(fs, "meshlet.shadow_lod_fallback") != nullptr);
 		CHECK(find(fs, "meshlet.shadow_lod_fallback")->severity == GateSeverity::inertNote);
 	}
-	{  // 正例②：fallback = l0 而 enable 关（shadow_lod 保持 5）= 链的第二条件
+	{  // 正例②：fallback = l0 而 assets 关（shadow_lod 保持 5）= 链的第二条件
 		RuntimeConfig r;
-		r.meshletEnable = false;
+		r.meshletAssets = false;
 		r.meshletShadowLodFallback = MeshletLodFallbackMode::l0;
 		CHECK(find(lintRt(r), "meshlet.shadow_lod_fallback") != nullptr);
 	}
-	{  // 反向：fallback = l0 + enable + shadow_lod = 5 = 有消费者（逐模型选级真读它），不喊
+	{  // 反向：fallback = l0 + assets + shadow_lod = 5 = 有消费者（逐模型选级真读它），不喊
 		RuntimeConfig r;
 		r.meshletShadowLodFallback = MeshletLodFallbackMode::l0;
 		CHECK(find(lintRt(r), "meshlet.shadow_lod_fallback") == nullptr);
@@ -767,12 +767,12 @@ TEST_CASE("gate_lint meshlet.shadow_lod_fallback：链式前置（lod ≥ 0 且 
 	}
 }
 
-TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = enable + shadow_lod ≥ 0（★M-1b 已接上，非零消费者）") {
+TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = assets + shadow_lod ≥ 0（★M-1b 已接上，非零消费者）") {
 	// 🔴 判据核实记录：★M-0 时代的「本批零消费者」已过期——★M-1b 落地后消费者 =
 	// wireMeshletMdiShadowActivation（烘条目 + 回填 + emplace）→ renderListSystem 读 ctx。
-	// 宿主条件（纯配置子集）= wireMeshletShadowArgs 第①步的 enable + shadow_lod ≥ 0；
+	// 宿主条件（纯配置子集）= wireMeshletShadowArgs 第①步的 assets + shadow_lod ≥ 0；
 	// 第三条（选级表非零）是装配期事实 ⟹ 装配层 warn 保留、lint 消息点名它（不判 error）。
-	{  // 正例①：mdi 开 + enable 关（红线 A 打底）= 载体必然不建（meshlet 块出声，键级消息
+	{  // 正例①：mdi 开 + assets 关（红线 A 打底）= 载体必然不建（meshlet 块出声，键级消息
 	   // 覆盖块级缺省——逐键归因自带 wireMeshletMdiShadowActivation 全名，断言不降格）
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) { r.meshletMdiShadow = true; }));
 		REQUIRE(find(fs, "meshlet.mdi_shadow") != nullptr);
@@ -780,7 +780,7 @@ TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = enable + shadow_lod ≥ 0（�
 		CHECK(find(fs, "meshlet.mdi_shadow")->message.find("wireMeshletMdiShadowActivation")
 			!= std::string::npos);
 	}
-	{  // 正例②：mdi 开 + enable 开 + shadow_lod = -1 = 宿主条件第二脚空了（独立残留行出声，
+	{  // 正例②：mdi 开 + assets 开 + shadow_lod = -1 = 宿主条件第二脚空了（独立残留行出声，
 	   // 消息保留逐键归因：点名装配层 wireMeshletMdiShadowActivation 的事实级 warn）
 		RuntimeConfig r;
 		r.meshletShadowLod = -1;
@@ -790,7 +790,7 @@ TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = enable + shadow_lod ≥ 0（�
 		CHECK(find(fs, "meshlet.mdi_shadow")->message.find("wireMeshletMdiShadowActivation")
 			!= std::string::npos);
 	}
-	{  // 反向：mdi 开 + 出厂两键（enable + shadow_lod = 5）= 宿主条件满足，不喊
+	{  // 反向：mdi 开 + 出厂两键（assets + shadow_lod = 5）= 宿主条件满足，不喊
 	   // （载体建没建 = 选级表事实，归装配层 wireMeshletMdiShadowActivation 出声）
 		RuntimeConfig r;
 		r.meshletMdiShadow = true;
@@ -812,16 +812,23 @@ TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = enable + shadow_lod ≥ 0（�
 // 行序 = 档内字典序（**集合语义**：块装配的 finding 发射顺序与独立行时代不同是允许的，
 // 内容不许变；级别枚举值 = GateSeverity 的 0/1/2 = inertNote/warn/error）。
 //
-// 怎么跑（🔴 env 未设 = 本用例 no-op：`just test` 零成本、不写文件）：
+// 怎么跑（🔴 **默认（无 env）= 校验模式**：现算一份与 committed 的比对，不一致即 FAIL 并点名
+// 漂的文件与行号；`RGL_GATE_LINT_GOLDEN=<dir>` = 重生成模式，写盘后自己 `git diff` 看）：
 //   RGL_GATE_LINT_GOLDEN=$PWD/tests/golden just test && git diff --exit-code tests/golden/
+// 极性为什么反过来（2026-10-17 实测咬人，不是假想）：旧形态「env 未设 = no-op」+ `tools/checks/`
+// 里没有任何东西比对 committed golden ⟹ 那份「已提交的基线」其实**没人验**；d5cb02b 把门名
+// `izb` 改成 `izb.on` 没重生成，committed golden 就这么静默陈旧了一整刀。判据同「设备级用例
+// 无设备必须 FAIL 不 SKIP」那条：**静默跳过 = 假绿**。代价实测整个 harness 0.79s，进 `just test` 可接受。
 // 重构后 diff 非空 = 输出面变了。评审确认是「等价改写」才准把基线更新与重构放进**同一刀**
 // （diff 本身就是评审材料）；diff 点名「消息被并成块消息 / 某档少一条」= 本 harness 要拦的
 // 正是这个形态——上一刀靠它抓出逐键归因丢失与断言降格。
 //
-// 变异红线：① kGateRules / kGateBlocks / kMeshletKeys 任一条目的触发或消息变 → 重生成基线
-// 的 git diff 点名；② 扫描表删档 → 用例数钉 90 先红（回归网不许静默缩小）；③ 把本用例改成
-// 无条件写文件 → `just test` 长出副作用（禁止）；④ 档位定义改动而输出没变 = 允许（档位是
-// 覆盖面不是判据本体），但覆盖面缩小时 ② 拦不住逐档语义——新增键时**先补档再挂号**。
+// 变异红线：① kGateRules / kGateBlocks / kMeshletKeys 任一条目的触发或消息变 → 校验模式直接红
+// （committed 没跟着改）；重生成基线的 git diff 点名改了什么；② 扫描表删档 → 用例数钉 90 先红
+// （回归网不许静默缩小）；③ 把本用例改成无条件写文件 → `just test` 长出副作用（禁止）；
+// ④ 档位定义改动而输出没变 = 允许（档位是覆盖面不是判据本体），但覆盖面缩小时 ② 拦不住逐档
+// 语义——新增键时**先补档再挂号**；⑤ 🔴 把校验模式改回「env 未设就 return」= 把 d5cb02b 那记
+// 假绿原样装回来（禁止；定位宏缺失同样必须红，不许回落成跳过）。
 // ═══════════════════════════════════════════════════════════════════════════
 
 namespace {
@@ -920,7 +927,7 @@ const std::vector<GoldenCase>& goldenCases() {
 		// ———— rt：runtime.lua 的 meshlet 块（红线 A 打底 = redlineA；其余指定初始化）————
 		{.name = "rt/factory"},
 		{.name = "rt/off-redline", .runtime = redlineA()},
-		{.name = "rt/off-lod5", .runtime = {.meshletEnable = false}},
+		{.name = "rt/off-lod5", .runtime = {.meshletAssets = false}},
 		{.name = "rt/overlay-on", .runtime = {.meshletOverlay = true}},
 		{.name = "rt/overlay-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) { r.meshletOverlay = true; })},
@@ -976,7 +983,7 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "rt/fallback-l0-lodneg",
 			.runtime = {.meshletShadowLod = -1, .meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
 		{.name = "rt/fallback-l0-offenable",
-			.runtime = {.meshletEnable = false, .meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
+			.runtime = {.meshletAssets = false, .meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
 		{.name = "rt/fallback-l0-ok",
 			.runtime = {.meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
 		{.name = "rt/mdi-offenable",
@@ -1011,22 +1018,17 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "combo/all-blocks-off",
 			.cfg = {.pickingProbeX = 640, .uiClickProbeY = 200, .cameraProbeKey = 'W'},
 			.shadow = {.pcss = kTuningAll, .evssm = kTuningAll},
-			.runtime = {.meshletEnable = false, .meshletOverlay = true, .meshletDebug = true,
+			.runtime = {.meshletAssets = false, .meshletOverlay = true, .meshletDebug = true,
 				.meshletMdiShadow = true}},
 	};
 	return kCases;
 }
 
-}  // namespace
-
-TEST_CASE("gate_lint 金标准 harness：90 档全组合扫描落盘（RGL_GATE_LINT_GOLDEN 未设 = no-op）") {
-	const char* outDir = std::getenv("RGL_GATE_LINT_GOLDEN");
-	if (outDir == nullptr || *outDir == '\0')
-		return;  // 🔴 env 未设 = no-op：`just test` 不写文件、零运行期成本（口径见段头注释）
-	CHECK(goldenCases().size() == 90u);  // 扫描面哨兵：删档 = 回归网静默缩小（变异红线 ②）
+/** 90 档全组合扫描 → 两份基线文本（触发面 keep / 归因面 msg）。校验与重生成**共用这一份**
+ *  装配代码：两条路各写一遍 = 两个真相源，改口径时必漂（本 harness 要拦的正是这个形态）。 */
+void buildGoldenBlobs(std::string& keep, std::string& msg) {
 	static const std::vector<RgPassPlan> kFwd = passesOf(defaultRenderGraphDesc());
 	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
-	std::string keep, msg;
 	for (const auto& c : goldenCases()) {
 		const std::span<const RgPassPlan> passes = c.fwd ? std::span{kFwd} : std::span{kDef};
 		const auto fs = lintDiagnosticsGates(c.cfg, DiagnosticsConfig{}, c.shadow, ShadowConfig{},
@@ -1045,13 +1047,101 @@ TEST_CASE("gate_lint 金标准 harness：90 档全组合扫描落盘（RGL_GATE_
 		for (const auto& l : msgLines)
 			msg += l + '\n';
 	}
-	const std::string dir{outDir};
-	std::ofstream keepFile{dir + "/gate_lint_findings.txt"};
-	std::ofstream msgFile{dir + "/gate_lint_findings_msg.txt"};
-	REQUIRE(keepFile.is_open());  // env 指了个写不进/不存在的目录 = 红，不静默吞
-	REQUIRE(msgFile.is_open());
-	keepFile << keep;
-	msgFile << msg;
+}
+
+/** 文本按行切开（末尾换行不产生空尾行 ⟹ 行号与 committed 文件的行号逐一对齐）。 */
+std::vector<std::string> splitLines(const std::string& text) {
+	std::vector<std::string> out;
+	std::size_t pos = 0;
+	while (pos < text.size()) {
+		const std::size_t nl = text.find('\n', pos);
+		if (nl == std::string::npos) {
+			out.push_back(text.substr(pos));
+			break;
+		}
+		out.push_back(text.substr(pos, nl - pos));
+		pos = nl + 1;
+	}
+	return out;
+}
+
+/// 差异报告最多点名的行数（整段位移时首处即根因位置，其余只报总数，防刷屏）。
+constexpr int kMaxDiffLines = 5;
+/// 校验模式实际比对过的基线份数（阳性锚点：用例断言读到 2 = 两份都真验了；
+/// 「env 未设就 return」的旧形态读到 0 —— 这条断言本身就是「没跳过」的机器判据）。
+int goldenVerifiedFiles = 0;
+
+/** committed golden 逐行读入（`ok = false` = 打不开，与「空文件」区分开——读不进来必须出声）。 */
+std::vector<std::string> readGoldenLines(const std::string& file, bool& ok) {
+	std::ifstream in{file};
+	ok = in.is_open();
+	std::vector<std::string> out;
+	for (std::string line; ok && std::getline(in, line);)
+		out.push_back(line);
+	return out;
+}
+
+/** 一份基线 vs 现算文本 → 差异报告（空串 = 一致）。逐行归因点名「哪个文件哪一行漂了」+
+ *  两侧实际内容，报错即地图（只说「golden 陈旧」= 让人自己 diff 找）。 */
+std::string diffGoldenFile(const std::string& file, const std::string& current) {
+	bool ok = false;
+	const std::vector<std::string> golden = readGoldenLines(file, ok);
+	if (!ok)
+		return file + " 打不开（golden 缺失 / RGL_GATE_LINT_GOLDEN_DIR 指向不存在的目录）\n";
+	++goldenVerifiedFiles;  // 走到这里 = 这份真的比过了
+	const std::vector<std::string> now = splitLines(current);
+	const std::size_t shared = std::min(golden.size(), now.size());
+	std::string report;
+	int shown = 0;
+	for (std::size_t i = 0; i < shared; ++i) {
+		if (golden[i] == now[i])
+			continue;
+		if (++shown <= kMaxDiffLines)  // 整段位移时前 kMaxDiffLines 行足够定位，别刷屏
+			report += file + ":" + std::to_string(i + 1) + " 漂了 ⟵ golden=`" + golden[i]
+				+ "` 现算=`" + now[i] + "`\n";
+	}
+	if (golden.size() != now.size())
+		report += file + ": 行数不同（golden " + std::to_string(golden.size()) + " 行 / 现算 "
+			+ std::to_string(now.size()) + " 行），首处差异在第 "
+			+ std::to_string(shared + 1) + " 行\n";
+	if (shown > kMaxDiffLines)
+		report += file + ": 差异行共 " + std::to_string(shown) + " 条（只列前 "
+			+ std::to_string(kMaxDiffLines) + " 条）\n";
+	return report;
+}
+
+}  // namespace
+
+TEST_CASE("gate_lint 金标准 harness：90 档全组合扫描（默认 = 校验 committed golden；RGL_GATE_LINT_GOLDEN=<dir> = 重生成）") {
+	CHECK(goldenCases().size() == 90u);  // 扫描面哨兵：删档 = 回归网静默缩小（变异红线 ②）
+	std::string keep, msg;
+	buildGoldenBlobs(keep, msg);
+	const char* const outDir = std::getenv("RGL_GATE_LINT_GOLDEN");
+	if (outDir != nullptr && *outDir != '\0') {  // 重生成模式（唯一会写文件的一条路）
+		const std::string dir{outDir};
+		std::ofstream keepFile{dir + "/gate_lint_findings.txt"};
+		std::ofstream msgFile{dir + "/gate_lint_findings_msg.txt"};
+		REQUIRE(keepFile.is_open());  // env 指了个写不进/不存在的目录 = 红，不静默吞
+		REQUIRE(msgFile.is_open());
+		keepFile << keep;
+		msgFile << msg;
+		return;
+	}
+	// 🔴 默认路 = **校验模式，不需要任何 env**（无 env 就 return = 假绿，变异红线 ⑤）。
+#ifndef RGL_GATE_LINT_GOLDEN_DIR
+	FAIL("RGL_GATE_LINT_GOLDEN_DIR 编译期宏没传（应由 tests/CMakeLists.txt 指向源树 tests/golden/）"
+		 "—— 定位不到基线目录必须红，不许静默跳过（先例：d5cb02b 改门名没重生成，committed golden 陈旧一整刀）");
+#else
+	std::string report = diffGoldenFile(RGL_GATE_LINT_GOLDEN_DIR "/gate_lint_findings.txt", keep)
+		+ diffGoldenFile(RGL_GATE_LINT_GOLDEN_DIR "/gate_lint_findings_msg.txt", msg);
+	if (!report.empty()) {
+		report += "重生成基线：RGL_GATE_LINT_GOLDEN=" RGL_GATE_LINT_GOLDEN_DIR " just test && git diff --exit-code tests/golden/\n";
+		FAIL(report);  // 红 = committed golden 与代码不一致，且消息里点名到文件:行号
+	}
+	// 阳性锚点：这条断言**只在默认路（无 env）执行** ⟹ 用例输出里 assertions ≥ 1 = 校验真跑了；
+	// 「env 未设就 return」的旧形态是 0 assertions（变异红线 ⑤ 的机器判据）。
+	CHECK_MESSAGE(goldenVerifiedFiles == 2, "校验模式必须逐份比对两份基线（份数 ≠ 2 = 校验没跑全）");
+#endif
 }
 
 }  // namespace RGL

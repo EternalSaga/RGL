@@ -53,7 +53,7 @@ export struct GateFinding {
  * diagnostics 侧 30 + shadow 侧 13 + runtime.lua **meshlet 块** 10（债-106 整块接管不挑键；
  * 债-129 第二刀 D：「子键配了但宿主不成立」的关系每块声明一份 owner，一门可多条规则——
  * 两个根因各一行消息；覆盖率钉去重门数 + variant 交叉校验）。第三个来源的射程裁决：
- * meshlet 块有「子键开而总门 `enable` 关」的孤立形态且前置全是纯配置组合；runtime.lua
+ * meshlet 块有「子键开而资源门 `assets` 关」的孤立形态且前置全是纯配置组合；runtime.lua
  * 其余块刻意不在射程 → `runtime_config_impl.cppm` 的 readSsrBlock 头注释。
  * 判据基准：bool 门 = true 才参与判定；数值/字符串门 = **偏离 defaults** 才参与
  * （configs/diagnostics.lua 显式写着 ~30 个默认值键，按「写了」喊就是噪音）。

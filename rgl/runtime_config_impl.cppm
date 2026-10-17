@@ -44,7 +44,7 @@ constexpr std::string_view kRuntimeKeys[]{
 	"wet.rough_hi",
 	"wet.ripple_amp",
 	"wet.puddle_freq_radii",
-	"meshlet.enable",
+	"meshlet.assets",
 	"meshlet.overlay",
 	"meshlet.debug",
 	"meshlet.tint",
@@ -84,7 +84,7 @@ bool declaresNestedKeys(std::string_view block) {
  * 「文件里实际出现的键」采集（diagnostics 的 collectPresentKeys 同构，未知键 lint
  * 的输入；present 来自文件本体不来自读取动作）。顶层键照旧记；债-129 第三刀：键表声明了
  * `块.` 点分前缀的块**下钻一层**，子键以 `块.子键` 追加——块内拼错的键此前完全静默
- * （拍板 A「meshlet.enable 改名 28 处」的硬前置护栏）。数组形子表（headless_size 的
+ * （拍板 A「meshlet.enable 改名 28 处」的硬前置护栏，旧名按拍板原文引）。数组形子表（headless_size 的
  * [1][2]）子键是数字不是字符串键 ⟹ 天然不贡献；非表值跳过；只钻一层不递归。
  * @param root 配置根表
  * @param trace 键轨迹（present 追加目标）
@@ -558,14 +558,16 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 }
 
 /**
- * `meshlet` 嵌套块解析（★0-b1 簇路径总门 + ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint +
+ * `meshlet` 嵌套块解析（★0-b1 簇路径**资源门**（assets：决定条目烘不烘、4 段簇 buffer 与描述符槽
+ * 在不在；不是块内 9 键的总门——生效前置不含它的只有 overlay，路径选择语义归 meshlet.mode，
+ * 三条语义的权威展开 → RuntimeConfig::meshletAssets 注释）+ ★1-a1ii-α debug 档 + ★0.5-b2 coplanar/tint +
  * ★1-a1ii-β-1 switch 原位取代档 + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级 +
  * ★M-0 mdi_shadow 真 MDI 档 + **债-105** overlay α 叠加段自己的门）：
- * `meshlet = { enable, overlay, debug, coplanar, tint, switch, cull, shadow_lod,
+ * `meshlet = { assets, overlay, debug, coplanar, tint, switch, cull, shadow_lod,
  * shadow_lod_fallback, mdi_shadow }`。
- * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletEnable = true` + `meshletShadowLod = 5`
+ * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletAssets = true` + `meshletShadowLod = 5`
  * = 出厂即开簇路径与阴影远级联 LOD，2026-10-12 用户拍板。P5「门关 = 逐位不变」**仍是硬护栏**，
- * 只是门关态现在要显式 `enable = false` + `shadow_lod = -1`（实测精确复现旧锚 54e40665…）。
+ * 只是门关态现在要显式 `assets = false` + `shadow_lod = -1`（实测精确复现旧锚 54e40665…）。
  * 逐键默认值唯一真相源 = RuntimeConfig 成员初始化，本行只列其余形态：`meshletOverlay = false` =
  * α 叠加段不采 draw（债-105，出厂不再白付 1.59ms）；`meshletDebug = false` =
  * 正常叠加档；`meshletCoplanar = off` = 不碰动态状态；`meshletTint = false` = 不选 tint 变体；
@@ -588,7 +590,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  */
 [[nodiscard]] static std::optional<std::string> readMeshletBlock(const sol::table& root,
 	RuntimeConfig& cfg, std::string_view path, RuntimeKeyTrace& trace) {
-	trace.read.emplace_back("meshlet.enable");
+	trace.read.emplace_back("meshlet.assets");
 	trace.read.emplace_back("meshlet.overlay");
 	trace.read.emplace_back("meshlet.debug");
 	trace.read.emplace_back("meshlet.tint");
@@ -602,7 +604,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 	if (!meshlet.valid() || !meshlet.is<sol::table>())
 		return std::nullopt;
 	// 顺序 = 键在 configs/runtime.lua 里的出现序；任一失败即返回（fail-fast，不收集后合并）
-	if (auto err = readStrictBoolKey(meshlet, "enable", cfg.meshletEnable, path))
+	if (auto err = readStrictBoolKey(meshlet, "assets", cfg.meshletAssets, path))
 		return err;
 	// 债-105 α 影子叠加段自己的门（默认 false ⟹ 出厂不再白付 +1.59ms）
 	if (auto err = readStrictBoolKey(meshlet, "overlay", cfg.meshletOverlay, path))
@@ -646,7 +648,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 	RuntimeConfig& cfg, std::string_view path, RuntimeKeyTrace& trace) {
 	if (auto err = applyAaKey(root, cfg, path, trace))
 		return err;
-	return readMeshletBlock(root, cfg, path, trace);  // ★0-b1 簇路径总门 + ★0.5-b2 coplanar 三态键
+	return readMeshletBlock(root, cfg, path, trace);  // ★0-b1 簇路径资源门（非总门，语义 → readMeshletBlock 头注）+ ★0.5-b2 coplanar 三态键
 }
 
 /**

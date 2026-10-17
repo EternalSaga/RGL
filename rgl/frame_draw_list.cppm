@@ -248,7 +248,7 @@ export struct SceneFrameData {
 	///   kSceneDataClusterRangeOffset）。**生产者不是本 system**：装配层启动期用
 	///   `meshlet_ranges::scanClusterRanges` 扫簇产物 groups → registry ctx `ClusterRangeTable`，
 	///   renderListSystem 每帧只搬 span（生命周期规则同 objectDraws：录制期读取即完成使命）。
-	///   门 `meshlet.enable` 关 = ctx 里根本没有那张表 = 空 span ⟹ 该区保持全 0。
+	///   门 `meshlet.assets` 关 = ctx 里根本没有那张表 = 空 span ⟹ 该区保持全 0。
 	///   读取点 = meshlet.mesh.slang（`base + (groupID.x >> 1)` = 全局簇下标（★1-a1ii-α″ 去索引发射后每簇固定 2 槽：
 /// 半区号 = `groupID.x & 1`，每槽 ≤ 85 三角，3×85 = 255 ≤ maxMeshOutputVertices）），
 	///   写它不改任何像素（门关逐位不变的构造性保证 = 方案 B 追加尾区，见 scene_data 该区注释）。
@@ -303,7 +303,7 @@ export struct FrameDrawList {
 	// cull_driver 重放路强依赖，插叠加 draw 会在非默认 cull 档打破对账；独立向量 = 对账
 	// 零感知。执行点 = executePassDraws 通用分支在 opaque 段之后盲执行（同 pass 同状态）；
 	// `cull_replay=gpu_sync` 走 cullDriver 分支 = 叠加静默跳过（本批不接 DGC，★1-b 再议）。
-	// 门 `meshlet.enable` 关 = 资产无 meshlet 条目 = 本向量恒空（逐位不变的构造性保证）。
+	// 门 `meshlet.assets` 关 = 资产无 meshlet 条目 = 本向量恒空（逐位不变的构造性保证）。
 	std::vector<DrawCall> meshletCalls;
 	// 阴影段的**分块边界**（kSceneShadowCascadeCount + 1 个）：boundaries[0] = 0，boundaries[c+1] = 级 c 的段尾。
 	// 为何不用 4 个独立向量：这 4 段在**同一张图集**上、为 4 个 pass 交替渲染，

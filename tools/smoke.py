@@ -260,9 +260,9 @@ def patch_lua(path: Path, key: str, value: str) -> None:
     引擎看着读了、判据看着在跑，其实跑在默认值上）。行首必须是键名（`headless_size`
     不会被 `size` 命中）。
 
-    **嵌套键用点号**（`meshlet.enable`）：先定位 `meshlet = {` 块，再在块内匹配 `enable`。
+    **嵌套键用点号**（`meshlet.assets`）：先定位 `meshlet = {` 块，再在块内匹配 `assets`。
     为什么必须有它：新门一律是嵌套块（`meshlet`/`wet`/`fsr`/`taa`/`ssr`），而裸子键
-    `enable` 能不能命中，取决于别的块有没有恰好同名的键——**那是运气不是护栏**
+    `assets` 能不能命中，取决于别的块有没有恰好同名的键——**那是运气不是护栏**
     （2026-10-12 实测：`--set enable=true` 当时唯一命中 meshlet 块，加第二个 `enable`
     就变成"命中 2 次"红，或更坏：静默改到别人的键）。裸键仍可用（旧调用逐字不变）。
     """
@@ -1094,7 +1094,7 @@ def selftest(quiet: bool = False) -> list[str]:
        f"同块两键连改互不破坏：{line(both, 'izb = {')}")
 
     # ③ 多行块与顶层键的旧路径逐字不变
-    ok("enable = true" in patched(runtime, ("meshlet.enable", "true")), "多行块子键仍可改")
+    ok("assets = true" in patched(runtime, ("meshlet.assets", "true")), "多行块子键仍可改")
     ok("{ 800, 600 }" in patched(runtime, ("headless_size", "{ 800, 600 }")), "顶层键仍可改")
 
     # ④ 两条护栏不能被上面的改动顺手关掉

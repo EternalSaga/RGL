@@ -467,12 +467,12 @@ bool warnIfMeshletDeviceUnfit(const DeviceContext& device) {
  * 一致性是构造出来的，不是两处各算再对账）；LOD 表**对账通过才 emplace**（存在即生效）。
  */
 void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& assets,
-                           const MeshletAssetStore& meshlets, bool meshletEnable, bool meshletCull,
+                           const MeshletAssetStore& meshlets, bool meshletAssets, bool meshletCull,
                            MeshletCullService* cullService, const AssetTable& assetTable,
                            const RuntimeConfig& cfg, const DeviceContext& device) {
-	if (!meshletEnable)
+	if (!meshletAssets)
 		return;  // 门关 = 一行都不走（逐位不变构造性成立；表不建 ⟹ scene data 该区全 0）。
-		         // 「shadow_lod ≥ 0 而 enable 关」的孤立组合自债-106 起由 gate_lint 启动期申报
+		         // 「shadow_lod ≥ 0 而 assets 关」的孤立组合自债-106 起由 gate_lint 启动期申报
 		         // （meshlet.shadow_lod 规则）——原就近 warnIfShadowLodOrphaned 的判据是纯配置
 		         // 组合，同一根因不许多处各喊一条（影子真相源），故随迁移删除。
 	std::map<std::string, MeshletRangeScan> scans;

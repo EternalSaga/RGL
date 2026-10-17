@@ -80,7 +80,8 @@ set(RGL_TEST_SOURCES
     test_camera_frame_yaw.cppm   # 帧驱动相机 yaw 闭式（门 frame_yaw 判据本体，temporal-motion 相机运动激励的地基）
     test_burst_protocol.cppm     # /shotburst 协议判据：形状六反向 + 绝对帧号锚点三态（债-89，跨进程逐帧复现的地基）
     test_aa_target.cppm          # 细线抗锯齿靶几何：数据自洽 / "确实细"载体判据（批 12.6 T4）
-    test_gate_lint.cppm          # 门组合自检：38 门申报表 + variant 交叉校验（gate_lint 批）
+    test_gate_lint.cppm          # 门组合自检：申报表覆盖率对账 + variant 交叉校验 + committed 金标准校验
+                                 # （🔴 门数不在这里抄——真相源 = `kGateRules` / `kGateBlocks`，抄一次漂一次）
     test_frisvad_tangent.cppm    # Frisvad 切线兜底：轴向/±Z 奇点/随机有限性（黑面 bug 回归）
     test_render_list_shadow.cppm # fillShadowData 尾区契约：splits 哨兵/VP 拷贝/texel/params 两态（12.3d）
     test_shadow_lod_emit.cppm    # §18 批 B2 阴影段 draw 构造：c0 恒旧路径/×2 唯一真相源/条数不变/索引公式（collect+emit 接缝）
@@ -240,6 +241,11 @@ target_compile_definitions(rgl_tests PRIVATE
 # 产物文本里的 `export struct`，理由与上面那条完全相同：探测未声明的名字是硬错误而非 SFINAE）。
 target_compile_definitions(rgl_tests PRIVATE
     RGL_CULL_TABLES_CPPM="${CMAKE_SOURCE_DIR}/rgl/generated/cull_tables_types_generated.cppm")
+# gate_lint 金标准目录的**源树绝对路径**（tests/test_gate_lint.cppm 的默认校验模式靠它定位
+# committed golden，🔴 **无需任何 env 就跑**——旧形态「env 未设 = no-op」是实测咬过人的假绿：
+# d5cb02b 改门名 izb→izb.on 没重生成，committed golden 静默陈旧无人验。env
+# RGL_GATE_LINT_GOLDEN=<dir> 保留为重生成模式。定位机制先例 = 上面两条源树路径宏）。
+target_compile_definitions(rgl_tests PRIVATE RGL_GATE_LINT_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/tests/golden")
 # 引擎 SPV 由 rgl 目标的 slang 规则产出：rgl_tests 直接依赖它，否则 `just test-gpu`
 # 单测目标时拿到陈旧 SPV（"改完 shader 没重建就报全通过"的 modules 环境坑同款）。
 add_dependencies(rgl_tests rgl)

@@ -363,13 +363,20 @@ export struct RuntimeConfig {
 	 */
 	WetTuning wet;
 	/**
-	 * 簇化渲染路径（meshlet 产物）总门（configs/runtime.lua `meshlet` 块 `enable` 键，★0-b1）。
+	 * 簇化渲染路径（meshlet 产物）**资源门**（configs/runtime.lua `meshlet` 块 `assets` 键，★0-b1）。
+	 *
+	 * 🔴 **资源门 ≠ 块内 9 键的总门**（拍板 A(a) 的语义本体，改名只做了名字、这句话才是本体）：
+	 * 本键决定簇条目烘不烘、4 段簇 buffer 与描述符槽在不在（`wireMeshletBindings` 的 `slots`）；
+	 * 生效前置**不含**它的只有 `meshlet.overlay` 一枚（它的宿主是叠加段自己，只经「条目烘不烘」
+	 * 间接受本键影响 → 本文件 `meshletOverlay` 注释），其余 8 枚键的前置含它但各自还带额外宿主
+	 * 条件（逐键 → `gate_lint_impl.cppm` 的 kMeshletKeys 逐键消息）；路径选择的语义归
+	 * `meshlet.mode`（O1 已挂号），不归本键。
 	 *
 	 * 🔴 **★18-C 起默认开**（2026-10-12 用户拍板：连同 `meshlet.shadow_lod = 5` 出厂）。
 	 * 这**没有废掉 P5**（「门关 = 逐位不变是硬护栏」仍是每批改渲染的必跑判据），改的只是
 	 * **门关不再是出厂态** ⟹ 验收口径跟着变：想要门关必须**显式**给
-	 * `--set meshlet.enable=false --set meshlet.shadow_lod=-1`（旧口径「出厂默认就是门关」已失效）。
-	 * 出厂默认截图锚随之从 `54e40665…`（门关）换成 `95edc8cc…`（enable + shadow_lod=5）；
+	 * `--set meshlet.assets=false --set meshlet.shadow_lod=-1`（旧口径「出厂默认就是门关」已失效）。
+	 * 出厂默认截图锚随之从 `54e40665…`（门关）换成 `95edc8cc…`（assets + shadow_lod=5）；
 	 * 两个锚都记在 `docs/mdi_plan.md` §18.11，引用锚的判据必须同时写明是哪一态。
 	 *
 	 * 拍板时明写的三条代价（读数绑本机 AMD 8060S，→ §18.9）：
@@ -383,26 +390,27 @@ export struct RuntimeConfig {
 	 * 逐资产门不在本键 = 「该资产有没有簇产物」（§7.8 拍板 3：产物缺失 → 回落现行路径，
 	 * 未打包资产零风险）。形态先例 = readSsrBlock（嵌套块，无扁平键双读兼容——两个真相源是
 	 * 本项目反复登记的反模式）；★1-a1ii-β-1 起本块布尔走 readStrictBoolKey（类型错 = 启动失败，
-	 * 理由 → 该函数注释）。债-106 已挂号：gate_lint 整块接管本块 10 枚键（「子键开了而总门关」
+	 * 理由 → 该函数注释）。债-106 已挂号：gate_lint 整块接管本块 10 枚键（「子键开了而资源门关」
 	 * 的孤立组合启动期申报，规则表 → `gate_lint_impl.cppm` 的 meshlet 段）。
 	 */
-	bool meshletEnable = true;
+	bool meshletAssets = true;
 	/**
 	 * α 影子**叠加段自己的**门（configs/runtime.lua `meshlet.overlay` 键，债-105，默认**关**）。
 	 *
-	 * 🔴 **本键的宿主是叠加段，不是 `meshlet.enable`**——生效条件里**不含** `enable`（同
-	 * `meshlet.mdi_shadow` 的定性：`meshlet` 块里生效条件不依赖 `enable` 的键）。理由不是洁癖：
-	 * 叠加条目的**烘焙**条件是 `wireMeshletBindings` 的 `slots`（= `enable`），而这些条目同时是
+	 * 🔴 **本键的宿主是叠加段，不是 `meshlet.assets`**——生效条件里**不含** `assets`（`meshlet` 块里
+	 * 生效条件不依赖 `assets` 的**唯一**一枚；`meshlet.mdi_shadow` 的宿主条件**含** assets——
+	 * 见其字段注释的三判据）。理由不是洁癖：
+	 * 叠加条目的**烘焙**条件是 `wireMeshletBindings` 的 `slots`（= `assets`），而这些条目同时是
 	 * β-1 `switch` 原位取代的宿主（`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 把烘焙挂到
 	 * 本键门下会让 `switch` **静默失去宿主**（见 `bakeMeshletEntries` 的钉死注释）。本键只决定
 	 * **采不采叠加 draw**，一条条目都不增减。
 	 *
-	 * **为什么要单独一枚**（债-105 的原文）：★18-C 翻默认后 `enable = true` 出厂，而叠加段的激活
+	 * **为什么要单独一枚**（债-105 的原文）：★18-C 翻默认后 `assets = true` 出厂，而叠加段的激活
 	 * 条件当时只有「有簇管线条目 + 区间表存在」⟹ 白付 **+1571 draws / +1.59ms 每帧**买一个
 	 * **一像素都不写**的验证脚手架（共面 + `eLess` 全拒）。α 已完工（★1-a1ii-α 的四臂判据），
 	 * 不该再绑在产品路径的开关上。
 	 *
-	 * ⚠ `overlay = true` 而 `enable = false` 时确实**没有条目可采**（`slots = nullopt` = 烘焙整段
+	 * ⚠ `overlay = true` 而 `assets = false` 时确实**没有条目可采**（`slots = nullopt` = 烘焙整段
 	 * 早退）——这种孤立组合自债-106 起由 **gate_lint** 启动期申报（meshlet.overlay 规则），装配层
 	 * `wireMeshletOverlayActivation` 另按「有没有条目可采」的**事实**出声（同因不同层：无产物 /
 	 * 多产物回落只有装配期看得见），不静默空开关。
@@ -416,11 +424,11 @@ export struct RuntimeConfig {
 	/**
 	 * 簇路径**阳性对照**档（configs/runtime.lua `meshlet.debug` 键，★1-a1ii-α）。
 	 *
-	 * = true（且 enable = true）时叠加条目改用 `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`
+	 * = true（且 assets = true）时叠加条目改用 `meshlet.mesh_MESHLET_DEBUG_OFFSET.spv`
 	 * 变体：clip.z 拉向相机 + 翻法线 ⟹ 叠加真正赢得深度测试并留下可见差异——判据 3
 	 * 「画了相同内容 vs 什么都没画」的区分器（docs/mdi_plan.md §11）。门 = 选 SPV 变体
 	 * 不是运行时 flag 分支（2026-10-02 slang fp 重排教训，同 IZB/PCSS/EVSSM 纪律）。
-	 * 默认关；enable 关时本键无意义（条目根本不建）。
+	 * 默认关；assets 关时本键无意义（条目根本不建）。
 	 * 🔴 **overlay 关时本键被强制归 base**（债-105）——变体烘进的是 `switch` 原位取代共用的那批
 	 * 条目，让叠加仪器改条目 = 把「clip.z 拉向相机」的几何错位带进产品路。偏离默认时由
 	 * gate_lint warn 出声（meshlet.debug 规则；原装配层就近 warn 已随债-106 迁入申报表）。
@@ -441,7 +449,7 @@ export struct RuntimeConfig {
 	 *
 	 * 🔴 `off`（默认）= **一条 setDepthCompareOp 都不发** ⟹ 门关与 off 档的动态状态序列
 	 * 逐 bit 不变（A1 判据的构造性保证）。未知值 = 启动 fail-fast（`aa` 三态键同纪律：
-	 * 静默回落会让「四臂哈希全同」的主判据整批假绿）。仅 `meshletEnable` 为真时有意义。
+	 * 静默回落会让「四臂哈希全同」的主判据整批假绿）。仅 `meshletAssets` 为真时有意义。
 	 * 🔴 **债-105 起还要 `meshlet.overlay` 为真才有消费者**：叠加段关 = 双臂没有任何 draw 可作用，
 	 * 这种孤立组合由 gate_lint 启动期申报（meshlet.coplanar 规则，债-106；生效档 INFO 在
 	 * `wireMeshletOverlayDepthCompare` 照打 = 「setter 真的设了」的生效证据，同因不同层——
@@ -451,7 +459,7 @@ export struct RuntimeConfig {
 	/**
 	 * 簇路径叠加的 **tint** SPV 变体档（configs/runtime.lua `meshlet.tint` 键，★0.5-b2）。
 	 *
-	 * = true（且 enable = true）时叠加条目改用 `meshlet.mesh_MESHLET_TINT.spv`：着色输入
+	 * = true（且 assets = true）时叠加条目改用 `meshlet.mesh_MESHLET_TINT.spv`：着色输入
 	 * 全写死成常数（normal/uv/tangent），**clip 一 bit 不动** ⟹ 深度与覆盖集与底逐位同，
 	 * 只有写回的颜色不同（逐 primitive 平色块）。它是双臂的**阳性对照**：
 	 *  · `coplanar=equal` + tint 图**必须变** = equal 臂的**非空洞证明**（若簇几何深度与旧
@@ -460,14 +468,14 @@ export struct RuntimeConfig {
 	 *
 	 * 与 `meshletDebug` 同真时**本键优先**（判据 3 只用 tint、判据 4 只用 offset，从不同时
 	 * 用，故不建第 4 个组合变体，改由装配层 warn 出声）。门 = 选 SPV 变体不是运行时 flag
-	 * （2026-10-02 slang fp 重排教训，同 `meshletDebug`）。默认关；enable 关时无意义。
+	 * （2026-10-02 slang fp 重排教训，同 `meshletDebug`）。默认关；assets 关时无意义。
 	 */
 	bool meshletTint = false;
 	/**
 	 * 簇路径在 opaque 段**原位取代**旧 mesh draw 档（configs/runtime.lua `meshlet.switch`
 	 * 键，★1-a1ii-β-1）。
 	 *
-	 * = true（且 `enable` = true）时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在
+	 * = true（且 `assets` = true）时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在
 	 * 主 opaque 段里由簇路径 draw **1:1 原位**顶掉旧 mesh draw：同 objectIndex、同 pushData、
 	 * 同段内位置，只换「管线条目 + task 数」（`meshletPipelineIndex` / `2 × l0Count`）。
 	 * 取代发生在**原位**而不是另开一段，理由 = opaque 段序被 GPU culling 候选序对账
@@ -476,9 +484,9 @@ export struct RuntimeConfig {
 	 * 为了绕开这条才那样设计，本键是把它请回段内）。
 	 *
 	 * 三态语义（缺键 = false = 现行 α 形态 = 逐位不变护栏）：
-	 *  · `enable = false`        → 本键无意义（簇条目根本没烘，无 draw 可取代）
-	 *  · `enable && !switch`     → α 形态：旧路径照画 + 共面影子叠加
-	 *  · `enable && switch`      → β 形态：簇路径顶掉旧 draw，**影子叠加同时清空**
+	 *  · `assets = false`        → 本键无意义（簇条目根本没烘，无 draw 可取代）
+	 *  · `assets && !switch`     → α 形态：旧路径照画 + 共面影子叠加
+	 *  · `assets && switch`      → β 形态：簇路径顶掉旧 draw，**影子叠加同时清空**
 	 *    （同一批几何不能既原位取代又再叠加画第二遍；互斥在装配层 warn 出声）
 	 *
 	 * 🔴 只在 `diagnostics.cull_replay == "cpu"`（默认档）生效：`gpu_sync` 档的 opaque 段由
@@ -496,7 +504,7 @@ export struct RuntimeConfig {
 	 * 开 = 每帧一次 compute 逐 L0 簇做保守视锥测试，mesh shader 对不可见簇
 	 * `SetMeshOutputCounts(0,0)` 早退。判据与定价 → `docs/mdi_plan.md` §17。
 	 *
-	 * 🔴 依赖 `enable && switch`：本键只作用于**已被簇路径接管**的那批 draw（旧 mesh 管线
+	 * 🔴 依赖 `assets && switch`：本键只作用于**已被簇路径接管**的那批 draw（旧 mesh 管线
 	 * 读不到标志数组）。单独开 = 无消费者，装配层 warn 出声（静默空开关是本项目反复踩的形态）。
 	 * 与 `meshletSwitch` 同款限制：只在 `diagnostics.cull_replay == "cpu"` 生效。
 	 */
@@ -516,10 +524,10 @@ export struct RuntimeConfig {
 	 *    （§18.3：每 object 的第 D 级是单一连续区间；§18.4：uniform 整级不受 §7.4 那条
 	 *    「group 粒度自适应选级」负知识影响，不读 error、不比阈值）。
 	 *
-	 * 与 `meshletEnable` 的关系：本键是**独立档**（阴影段的杠杆与主 pass 的取代档正交），但
-	 * 簇四段 buffer 的描述符槽由 `meshlet.enable` 的 wireMeshletBindings 提供 ⟹ 生效需要
-	 * `enable = true` 且本键 ≥ 0。🔴 两键**同时**给默认（`enable = true` + `shadow_lod = 5`）
-	 * 正是为了不把本键放进「开了但不生效」的形态；只给本键不给 enable 时由 gate_lint 启动期
+	 * 与 `meshletAssets` 的关系：本键是**独立档**（阴影段的杠杆与主 pass 的取代档正交），但
+	 * 簇四段 buffer 的描述符槽由 `meshlet.assets` 的 wireMeshletBindings 提供 ⟹ 生效需要
+	 * `assets = true` 且本键 ≥ 0。🔴 两键**同时**给默认（`assets = true` + `shadow_lod = 5`）
+	 * 正是为了不把本键放进「开了但不生效」的形态；只给本键不给 assets 时由 gate_lint 启动期
 	 * 申报（meshlet.shadow_lod 规则，债-106 迁自 ★18-C 的就近 WARNING `warnIfShadowLodOrphaned`）。
 	 * 画质/成本对照表（D → diff 像素）→ §18.9 末。
 	 * 🔴 类型必须是整数（走 readStrictIntKey，写成字符串/浮点 = 启动失败点名键，理由 →
@@ -543,7 +551,7 @@ export struct RuntimeConfig {
 	 * 🔴 **消费者 = ★M-1b 已落地**（★M-0 当时的「本批零消费者」已过期）：行表 GPU 载体
 	 * `MeshletShadowArgsService` + MDI 条目烘焙与回填 + 生效标记（`wireMeshletMdiShadowActivation`）
 	 * + 采集侧（`renderListSystem` 经 ctx 读 `MeshletMdiShadowActivation`）。宿主成立条件 =
-	 * `meshlet.enable` + `shadow_lod ≥ 0` + 选级表非零（`wireMeshletShadowArgs` 第①步；
+	 * `meshlet.assets` + `shadow_lod ≥ 0` + 选级表非零（`wireMeshletShadowArgs` 第①步；
 	 * §19.6：生效条件**不含**本键自身 ⟹ 出厂默认也建载体但零条目零 ctx，图像逐位不变）。
 	 * 键开而宿主不在的孤立组合由 gate_lint 启动期申报（meshlet.mdi_shadow 规则，债-106），
 	 * 装配层 `wireMeshletMdiShadowActivation` 另按「载体在不在」的事实出声（同因不同层）。

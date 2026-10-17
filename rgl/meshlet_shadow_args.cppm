@@ -53,9 +53,9 @@ import mdi_rows;      // MdiShadowRow / kMdiShadowRowStride + 尺寸/偏移算�
  * 第 0 帧起 GPU 侧引用已释放的 VA。
  *
  * ## 建不建 = 阴影簇路径的**宿主条件**（不是 `meshlet.mdi_shadow`）
- * 载体在 `meshlet.enable` 开 + `meshlet.shadow_lod ≥ 0` 且阴影簇路径**真生效**（ctx 里有
+ * 载体在 `meshlet.assets` 开 + `meshlet.shadow_lod ≥ 0` 且阴影簇路径**真生效**（ctx 里有
  * `MeshletShadowLodTable` = 有条目 474 的宿主）时才建；门关 = **连号都不领**（先例 =
- * `wireMeshletBindings` 首行 `if (!meshletEnable) return std::nullopt;`）。
+ * `wireMeshletBindings` 首行 `if (!meshletAssets) return std::nullopt;`）。
  * 为什么载体的门不是 `mdi_shadow`：载体是「行表住在 GPU 里」这件事，与「阴影 draw 改用 MDI
  * 形态」这件事（那条才是 `mdi_shadow` = 选 SPV 变体/选条目，D2）分开 ⟹ 出厂默认态（mdi_shadow
  * = false）也建载体，但没有任何一条 draw 引用它 = 图像逐位不变。

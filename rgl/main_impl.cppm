@@ -611,7 +611,7 @@ void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 	gateEnv.staticGraphicsIndirect = device.getDgcSupport().staticGraphicsIndirect;
 	// 三份配置各带一份出厂默认（第二份 = 「只报偏离出厂值的门」的比对基准）；
 	// shadow 侧与 diagnostics 侧同为「启动期单例」口径（loadAllConfigs 已回灌），
-	// runtime 侧的基准 = `RuntimeConfig{}`（meshlet 块出厂态 enable + shadow_lod = 5，债-106）。
+	// runtime 侧的基准 = `RuntimeConfig{}`（meshlet 块出厂态 assets + shadow_lod = 5，债-106）。
 	const auto findings = lintDiagnosticsGates(diagnostics(), DiagnosticsConfig{},
 		shadowConfig(), ShadowConfig{}, runtime, RuntimeConfig{},
 		graphResult.graph.passes, graphResult.variant, gateEnv);
@@ -795,7 +795,7 @@ int main() {
 		// （buffer/slot/纹理/材质）全部在 Resources 资产表（初始化层 owner——TexturePool
 		// 局部对象 UAF 教训，docs/archive/heap_texture_research.md §12.6/§12.7）
 		auto assets = uploadModelAssets(vkDevice, vkResources, samplers, assetTable, configs.scene,
-			configs.runtime.meshletEnable, meshletAssets, meshletGeometry);
+			configs.runtime.meshletAssets, meshletAssets, meshletGeometry);
 		if (configs.scene.environment.enabled)
 			uploadEnvironment(vkResources, env, vkDevice, configs.scene, registry);  // 时序契约见定义处注释
 

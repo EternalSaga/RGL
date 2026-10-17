@@ -647,7 +647,7 @@ export inline constexpr uint32_t kSceneDataWetBytes = 32u;
  *  **构造性**的。代价 = 多一张表 + 一个 offset + 每帧多拷 64KB（见下方风险注记）。
  *
  *  内容来源 = `meshlet_ranges::scanClusterRanges`（装配层启动期扫一遍产物 groups），
- *  门 `meshlet.enable` 关 = 不写 = 全 0（本区常驻零）。🔴 **本批零消费者**：读取点归
+ *  门 `meshlet.assets` 关 = 不写 = 全 0（本区常驻零）。🔴 **本批零消费者**：读取点归
  *  ★1-a1 的 mesh shader（`base + (groupID.x >> 1)` = 全局簇下标（★1-a1ii-α″ 去索引发射后每簇固定 2 槽：
  *  半区号 = `groupID.x & 1`，每槽 ≤ 85 三角，3×85 = 255 ≤ maxMeshOutputVertices）），门开时它只叠加在旧路径
  *  之后（同 objectIndex、同深度），门关逐位不变。
@@ -772,7 +772,7 @@ export inline void writeSceneSentinels(std::span<std::byte> staging) {
  * 把 per-object 簇区间表写进 staging 的 ★1-a1i 尾区（**可测接缝**：本函数不需要 VkDevice，
  * 故「门关 = 整区全 0」与「有效段之外清零」两条能在 `just test` 里逐字节验）。
  *
- * 先清尾再写有效段 = 「门 `meshlet.enable` 关（表空）⟹ 整区全 0」是**构造性**成立，不依赖
+ * 先清尾再写有效段 = 「门 `meshlet.assets` 关（表空）⟹ 整区全 0」是**构造性**成立，不依赖
  * staging 映射内存的初值（VMA 不保证新分配内存为 0，未初始化字节会静默变成一条假区间）。
  *
  * @param staging 整块 scene data staging（大小须 ≥ `kSceneDataBytes`，调用方 =
