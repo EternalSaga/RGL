@@ -1,0 +1,228 @@
+### factory/def-happy
+### factory/fwd-dark
+variant	variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）
+### factory/fwd-happy
+variant	variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）
+### factory/def-headless
+### pcss/owner-on
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+### pcss/owner-on-mft-default
+### pcss/off-csm-all
+pcss.max_penumbra	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+pcss.search_radius	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.sun_degrees	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+### pcss/off-csm-sun-only
+pcss.sun_degrees	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+### pcss/off-csm-mft-only
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+### pcss/off-none-all
+pcss.max_penumbra	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+pcss.search_radius	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.sun_degrees	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+### pcss/off-evssm-all
+pcss.max_penumbra	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+pcss.search_radius	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.sun_degrees	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+### evssm/owner-on
+### evssm/off-csm-all
+evssm.max_penumbra	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.min_footprint_texels	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.search_radius	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.sun_degrees	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+### evssm/off-csm-mft-only
+evssm.min_footprint_texels	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+### evssm/off-pcss-all
+evssm.max_penumbra	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.min_footprint_texels	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.search_radius	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.sun_degrees	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+### evssm/both-blocks-csm
+evssm.max_penumbra	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.min_footprint_texels	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.search_radius	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.sun_degrees	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+pcss.max_penumbra	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+pcss.search_radius	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.sun_degrees	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+### evssm/evssm-mode-pcss-block
+pcss.max_penumbra	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+pcss.search_radius	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.sun_degrees	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+### izb/on-def
+izb	IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷：① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；② 管辖范围内系统性欠遮挡（`just imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px，rig 占屏 44%）。关掉是测出来的：CSM 单独一档 `just imgqa swim` 影场世界不变（0/63835）。读数与复现配方 → docs/shadow_routes_plan.md §7
+### izb/on-fwd
+izb	IZB 只接 deferred 光照 pass：非 deferred 图下 izbPreFrame 零命令（此前静默，EVSSM 同条件却喊——不对称收口）
+izb	IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷：① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；② 管辖范围内系统性欠遮挡（`just imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px，rig 占屏 44%）。关掉是测出来的：CSM 单独一档 `just imgqa swim` 影场世界不变（0/63835）。读数与复现配方 → docs/shadow_routes_plan.md §7
+variant	variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）
+### izb/on-none
+izb	IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷：① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；② 管辖范围内系统性欠遮挡（`just imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px，rig 占屏 44%）。关掉是测出来的：CSM 单独一档 `just imgqa swim` 影场世界不变（0/63835）。读数与复现配方 → docs/shadow_routes_plan.md §7
+izb	IZB 的 mask 由 shadow0 段重放填充：shadow.lua 的 mode = "none" 时段必空 ⟹ mask 无内容、IZB 一帧阴影也不产（mask 每帧清零 = 全不遮挡，债-32 收口；与 mode = "evssm" 的 deferred 判据同形）
+### izb/on-none-fwd
+izb	IZB 只接 deferred 光照 pass：非 deferred 图下 izbPreFrame 零命令（此前静默，EVSSM 同条件却喊——不对称收口）
+izb	IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷：① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；② 管辖范围内系统性欠遮挡（`just imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px，rig 占屏 44%）。关掉是测出来的：CSM 单独一档 `just imgqa swim` 影场世界不变（0/63835）。读数与复现配方 → docs/shadow_routes_plan.md §7
+izb	IZB 的 mask 由 shadow0 段重放填充：shadow.lua 的 mode = "none" 时段必空 ⟹ mask 无内容、IZB 一帧阴影也不产（mask 每帧清零 = 全不遮挡，债-32 收口；与 mode = "evssm" 的 deferred 判据同形）
+variant	variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）
+### izb/dump-off
+izb.dump_frame	izb 关：izb.dump_frame 永不触发（回读的是从未创建的 IZB head）
+### izb/dump-on
+izb	IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷：① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；② 管辖范围内系统性欠遮挡（`just imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px，rig 占屏 44%）。关掉是测出来的：CSM 单独一档 `just imgqa swim` 影场世界不变（0/63835）。读数与复现配方 → docs/shadow_routes_plan.md §7
+### izb/grid-off
+izb.grid	izb 关：izb.grid 是死值（网格随 IZB 构造才存在）
+### izb/grid-on
+izb	IZB 是**近场 v1 spike**，交付默认已关（2026-10-10 换红线）。两个结构性缺陷：① 只覆盖 cascade-0 光空间盒、盒外回落 CSM ⟹ 盒边界是一条**随相机在世界表面爬行的接缝**（默认机位实测 1.76% 屏幕判反、亮度差中位 16 LSB / 最高 160 LSB）；② 管辖范围内系统性欠遮挡（`just imgqa izb` 的「CSM 遮而 IZB 放」= 405048 px，rig 占屏 44%）。关掉是测出来的：CSM 单独一档 `just imgqa swim` 影场世界不变（0/63835）。读数与复现配方 → docs/shadow_routes_plan.md §7
+### izb/evssm-fwd
+mode	mode = "evssm" 需图为 deferred（EvssmShadow 不构造 = 该档整体无效，消费点在 deferred light pass）
+variant	variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）
+### pp/frame-off-nopicking
+picking_probe.frame	picking_probe 需 picking=on（object_id pass 由 picking 装饰进图，探针无的放矢）
+### pp/frame-on-picking-on
+### pp/xy-frame-off
+picking_probe.x	picking_probe.frame=0（探针关）：坐标是死值
+picking_probe.y	picking_probe.frame=0（探针关）：坐标是死值
+### pp/x-only-frame-off
+picking_probe.x	picking_probe.frame=0（探针关）：坐标是死值
+### pp/xy-frame-on-picking-on
+### pp/xy-frame-on-nopicking
+picking_probe.frame	picking_probe 需 picking=on（object_id pass 由 picking 装饰进图，探针无的放矢）
+### pp/xy-frame-off-nopicking
+picking_probe.x	picking_probe.frame=0（探针关）：坐标是死值
+picking_probe.y	picking_probe.frame=0（探针关）：坐标是死值
+### uic/xy-frame-off
+ui_click_probe.x	ui_click_probe.frame=0（探针关）：坐标是死值
+ui_click_probe.y	ui_click_probe.frame=0（探针关）：坐标是死值
+### uic/xy-frame-on-window
+### uic/frame-headless
+ui_click_probe.frame	ui_click_probe 是窗口模式输入链探针：headless 下没有输入事件可合成
+### cam/keyhold-frame-off
+camera_probe.holdFrames	camera_probe.frame=0（探针关）：保持帧数是死值
+camera_probe.key	camera_probe.frame=0（探针关）：按键是死值
+### cam/key-only-frame-off
+camera_probe.key	camera_probe.frame=0（探针关）：按键是死值
+### cam/hold-only-frame-off
+camera_probe.holdFrames	camera_probe.frame=0（探针关）：保持帧数是死值
+### cam/keyhold-frame-on-window
+### cam/frame-headless
+camera_probe.frame	camera_probe 是窗口模式键盘探针：headless 下没有键盘事件可合成
+### rpc/port-off
+rpc_port	rpc_port 偏离默认但 rpc=off：没有监听者，端口是死值
+### rpc/port-on
+### dgc/nocap
+cull_replay	cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay="gpu_sync"，见 docs/cpu_perf_plan.md §4）
+dgc_static	设备未 advertise staticGraphicsIndirect：dgc_static 无效（走 compute culling 读回重放）
+### dgc/replay-cpu
+cull_replay	cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay="gpu_sync"，见 docs/cpu_perf_plan.md §4）
+### dgc/replay-lagged
+cull_replay	cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay="gpu_sync"，见 docs/cpu_perf_plan.md §4）
+### dgc/replay-sync
+### imgui/headless
+imgui	imgui 在 headless 下天然 no-op（无窗无输入，UI 段零调用）
+### imgui/window
+### gbuf/nollm
+dump_gbuf	dump_gbuf 需 runtime.lua llm_debug 开且图为 deferred（G-buffer 通道只在 deferred 截图路径存在）
+### gbuf/llm-fwd
+dump_gbuf	dump_gbuf 需 runtime.lua llm_debug 开且图为 deferred（G-buffer 通道只在 deferred 截图路径存在）
+variant	variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）
+### gbuf/ok
+### variant/deferred-on-fwd
+variant	variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）
+### variant/forward-on-def
+variant	图里有 deferred 光照 pass 但 variant 不是 deferred（自定义 passes 手写 light？IZB/EVSSM/dump_gbuf 按图事实生效，与 variant 意图不一致）
+### rt/factory
+### rt/off-redline
+### rt/off-lod5
+meshlet.shadow_lod	shadow_lod ≥ 0 但 enable = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = enable）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留
+### rt/overlay-on
+### rt/overlay-offenable
+meshlet.overlay	overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
+### rt/debug-only
+meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+### rt/debug-offenable
+meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+meshlet.overlay	overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
+### rt/tint-only
+meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；enable 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
+### rt/tint-debug
+meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；enable 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
+### rt/tint-debug-overlay
+meshlet.tint	tint 与 debug 同真 ⟹ tint 优先、debug 让位（不建组合 SPV 变体：判据 3 只用 tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+### rt/tint-debug-offenable
+meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+meshlet.overlay	overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
+meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；enable 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
+### rt/coplanar-eq
+meshlet.coplanar	coplanar 双臂只作用**叠加段**那批 draw：enable = false（无条目）或 overlay = false（零采集）⟹ 没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / 对账三条回落路，那是装配期事实，判不了
+### rt/coplanar-ne-offenable
+meshlet.coplanar	coplanar 双臂只作用**叠加段**那批 draw：enable = false（无条目）或 overlay = false（零采集）⟹ 没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / 对账三条回落路，那是装配期事实，判不了
+### rt/coplanar-ok
+### rt/switch-offenable
+meshlet.switch	switch 需 enable：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代
+### rt/switch-sync
+meshlet.switch	switch 只在 diagnostics.cull_replay = "cpu" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）
+### rt/switch-overlay-cpu
+meshlet.switch	switch 与 overlay 互斥：cpu 档下 switch 生效时 α 影子叠加段整段清空（同一批几何不画两遍）⟹ 同开的代价 = overlay 白采。装配层 wireMeshletSwitch 在**真的生效**时再 warn 一次（同因不同层：switch 有设备规格 / 对账回落，overlay 是否被清空是装配期事实）
+### rt/switch-overlay-sync
+meshlet.switch	switch 只在 diagnostics.cull_replay = "cpu" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）
+### rt/switch-ok
+### rt/cull-only
+meshlet.cull	cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 enable && switch，单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch 的回落路不写配置）
+### rt/cull-offenable
+meshlet.cull	cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 enable && switch，单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch 的回落路不写配置）
+### rt/cull-switch-offenable
+meshlet.cull	cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 enable && switch，单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch 的回落路不写配置）
+meshlet.switch	switch 需 enable：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代
+### rt/cull-switch-sync
+meshlet.cull	cull 与 switch 同款限制：只在 diagnostics.cull_replay = "cpu" 生效（它挂在取代档上，非默认档下 switch 本身就不生效）
+meshlet.switch	switch 只在 diagnostics.cull_replay = "cpu" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）
+### rt/cull-switch-lagged
+meshlet.cull	cull 与 switch 同款限制：只在 diagnostics.cull_replay = "cpu" 生效（它挂在取代档上，非默认档下 switch 本身就不生效）
+meshlet.switch	switch 只在 diagnostics.cull_replay = "cpu" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）
+### rt/cull-ok
+### rt/lod-neg-enable
+### rt/fallback-l0-lodneg
+meshlet.shadow_lod_fallback	shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 enable 开时才有消费者（逐模型选级住在 wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）
+### rt/fallback-l0-offenable
+meshlet.shadow_lod	shadow_lod ≥ 0 但 enable = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = enable）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留
+meshlet.shadow_lod_fallback	shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 enable 开时才有消费者（逐模型选级住在 wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）
+### rt/fallback-l0-ok
+### rt/mdi-offenable
+meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
+### rt/mdi-lodneg
+meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
+### rt/mdi-both
+meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
+### rt/mdi-ok
+### rt/kitchen-sink-off
+meshlet.coplanar	coplanar 双臂只作用**叠加段**那批 draw：enable = false（无条目）或 overlay = false（零采集）⟹ 没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / 对账三条回落路，那是装配期事实，判不了
+meshlet.cull	cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 enable && switch，单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch 的回落路不写配置）
+meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
+meshlet.overlay	overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
+meshlet.shadow_lod_fallback	shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 enable 开时才有消费者（逐模型选级住在 wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）
+meshlet.switch	switch 需 enable：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代
+meshlet.tint	tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 base；enable 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表
+### rt/kitchen-sink-on
+meshlet.cull	cull 与 switch 同款限制：只在 diagnostics.cull_replay = "cpu" 生效（它挂在取代档上，非默认档下 switch 本身就不生效）
+meshlet.switch	switch 只在 diagnostics.cull_replay = "cpu" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）
+meshlet.tint	tint 与 debug 同真 ⟹ tint 优先、debug 让位（不建组合 SPV 变体：判据 3 只用 tint、判据 4 只用 debug，从不同时用）—— 本跑走 TINT 变体（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+### combo/all-blocks-off
+camera_probe.key	camera_probe.frame=0（探针关）：按键是死值
+evssm.max_penumbra	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.min_footprint_texels	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.search_radius	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+evssm.sun_degrees	mode != "evssm"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）
+meshlet.debug	debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
+meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
+meshlet.overlay	overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = 条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）
+meshlet.shadow_lod	shadow_lod ≥ 0 但 enable = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = enable）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留
+pcss.max_penumbra	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
+pcss.search_radius	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+pcss.sun_degrees	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
+picking_probe.x	picking_probe.frame=0（探针关）：坐标是死值
+ui_click_probe.y	ui_click_probe.frame=0（探针关）：坐标是死值

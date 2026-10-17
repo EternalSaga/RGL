@@ -49,11 +49,12 @@ export struct GateFinding {
 };
 
 /**
- * 跑全量规则表（53 门 = diagnostics 侧 30 + shadow 侧 13 + runtime.lua **meshlet 块** 10
- * （债-106，整块接管不挑键），一门可多条规则——两个根因各一行消息；覆盖率钉去重门数 +
- * variant 交叉校验）。第三个来源的射程裁决：meshlet 块有「子键开而总门 `enable` 关」的
- * 孤立形态且前置全是纯配置组合；runtime.lua 其余块刻意不在射程 →
- * `runtime_config_impl.cppm` 的 readSsrBlock 头注释。
+ * 跑全量规则表（44 行独立申报 + 6 个块级宿主声明（21 枚块内键）= 去重后 53 门：
+ * diagnostics 侧 30 + shadow 侧 13 + runtime.lua **meshlet 块** 10（债-106 整块接管不挑键；
+ * 债-129 第二刀 D：「子键配了但宿主不成立」的关系每块声明一份 owner，一门可多条规则——
+ * 两个根因各一行消息；覆盖率钉去重门数 + variant 交叉校验）。第三个来源的射程裁决：
+ * meshlet 块有「子键开而总门 `enable` 关」的孤立形态且前置全是纯配置组合；runtime.lua
+ * 其余块刻意不在射程 → `runtime_config_impl.cppm` 的 readSsrBlock 头注释。
  * 判据基准：bool 门 = true 才参与判定；数值/字符串门 = **偏离 defaults** 才参与
  * （configs/diagnostics.lua 显式写着 ~30 个默认值键，按「写了」喊就是噪音）。
  * 依赖方向：lint 不读单例（`diagnostics()` / `shadowConfig()`）——三份配置与各自的
@@ -76,12 +77,28 @@ export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cf
 	RgGraphVariant variant, const GateEnv& env);
 
 /**
- * 规则表覆盖的门名（= 覆盖率护栏输入；单测断言其与 `diagnosticsEchoKeys()` +
- * `shadowConfigEchoKeys()` + `runtimeConfigKnownKeys()` 的 `meshlet.` 前缀键三方并集
- * 相等——加门不答「生效前置是什么」，`just test` 红，同 pass_vocabulary 的收口范式）。
+ * 规则表独立行覆盖的门名（= 覆盖率护栏输入之一；单测断言「独立行 ∪ 块条目」与
+ * `diagnosticsEchoKeys()` + `shadowConfigEchoKeys()` + `runtimeConfigKnownKeys()` 的
+ * `meshlet.` 前缀键三方并集相等——加门不答「生效前置是什么」，`just test` 红，
+ * 同 pass_vocabulary 的收口范式）。
  * @return 门名列表（顺序 = 表序）
  */
 export std::vector<std::string> gateLintRuleGates();
+
+/** 一个块级宿主声明的对账面（债-129 第二刀 D；键名均为回显表全拼写）。 */
+export struct GateBlockCoverage {
+	std::string prefix;             ///< 块键命名空间前缀（"meshlet." / "pcss." / …）
+	std::string owner;              ///< 宿主门名（宿主自身在独立行挂号）
+	std::vector<std::string> keys;  ///< 块条目键名全拼写
+};
+
+/**
+ * 块级宿主声明表全量（= 覆盖率护栏输入之二）。护栏判据：三方键表的每一枚键必须被
+ * 「块条目」或「独立行」至少一个覆盖；且**命中某块前缀**的源键必须是该块条目或该块宿主
+ * ——「往块里加一枚键而不声明宿主」（nullptr 挂号形态）在此绕不过去。
+ * @return 每块一条（顺序 = 块表序）
+ */
+export std::vector<GateBlockCoverage> gateLintBlockCoverage();
 
 /**
  * findings → 日志分发（error/warn/inertNote → logger 的 error/warn/debug）。

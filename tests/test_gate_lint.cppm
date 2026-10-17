@@ -12,14 +12,18 @@ module;
  * lint，还额外训练人不信任日志（防腐条款 2）。所以每条规则必有反向用例
  * （合法组合不得喊），且有一条「全合法世界零 findings」的总基线。
  *
- * ## 覆盖率护栏（同 pass_vocabulary 范式）
+ * ## 覆盖率护栏（同 pass_vocabulary 范式，债-129 第二刀 D 换块级口径）
  *
- * 规则表门名集合 == diagnostics 回显表键集合 ∪ shadow 回显表键集合 ∪
- * runtimeConfigKnownKeys() 的 meshlet. 前缀键（债-106 三方对账；双向 + 钉行数与去重门数）。
- * 加门不答「生效前置是什么」→ 红。nullptr 谓词行 = 显式「无前置」，同样占一行被钉住。
+ * 规则表「独立行 ∪ 块条目」门名集合 == diagnostics 回显表键集合 ∪ shadow 回显表键集合 ∪
+ * runtimeConfigKnownKeys() 的 meshlet. 前缀键（三方对账；双向 + 钉行数与去重门数）。
+ * 命中块前缀的来源键必须是块条目或该块宿主——加门不答「生效前置是什么」→ 红；
+ * 「往块里加键不声明宿主」用 nullptr 行也躲不过 → 红。nullptr 谓词行 = 显式「无前置」，
+ * 同样占一行被钉住（无前缀的挂号行去留 = 下一刀议题）。
  */
 #include <doctest/doctest.h>
 #include <algorithm>  // std::ranges::sort / unique / count（自由函数不经 BMI 保证传递，GMF 自带）
+#include <cstdlib>    // 金标准 harness：std::getenv（env 未设 = 用例 no-op）
+#include <fstream>    // 金标准 harness：基线落盘（仅 env 已设时）
 #include <initializer_list>  // modules 坑：range-for 的花括号列表要真 STL 头（只 include doctest 不够）
 #include <string>     // std::string 的 operator<（同上：ranges::sort 比较 std::string 时要它）
 
@@ -101,14 +105,24 @@ std::vector<GateFinding> lint(const DiagnosticsConfig& cfg, std::span<const RgPa
 
 }  // namespace
 
-TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 三方来源键集合（双向 + 钉数）") {
-	// 变异红线：kGateRules 删任一行 / 改任一门名拼写 → 本用例红（行数钉 + 双向 hasGate）；
-	// 任一配置结构体加字段不更新两侧 → 回显表/键表的键数钉先红；
-	// 把下面的 meshlet 前缀过滤改成扫不到的前缀（如 "meshlett."）→ meshletKeys.size() == 10
-	// 的钉先红（对账面缩小不会静默通过——这是本用例三方化后**新增**的哨兵）。
-	// ⚠ 钉的是**去重后的门数**：一门可有多条规则（`izb` 两条 = 非 deferred 图 /
-	//   mode="none"，两个根因各一条消息），行数只作"表没被整段删空"的下界哨兵。
+TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源键集合（双向 + 钉数 + 块前缀宿主判据）") {
+	// 变异红线（债-129 第二刀 D 换口径后）：
+	//   · kGateRules 删任一行 / 改任一门名拼写 → 行数钉 44 + 双向 hasGate 红；
+	//   · kGateBlocks 删任一枚块条目 → 键数钉 21 + 该键「块条目 ∪ 独立行」双落空红（点名）；
+	//   · 任一配置结构体加字段不更新两侧 → 回显表/键表的键数钉先红；
+	//   · 把下面的 meshlet 前缀过滤改成扫不到的前缀（如 "meshlett."）→ meshletKeys.size() == 10
+	//     的钉先红（对账面缩小不会静默通过）。
+	// 🔴 新口径的真收益：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有
+	//   = 断言失败并**点名**；且命中块前缀的键必须是块条目或该块宿主——「往块里加一枚键而
+	//   不声明宿主」（配一行 nullptr 就能躲的旧形态）绕不过去。
+	// ⚠ 钉的是**去重后的门数**：一门可有多条规则（`izb` 三条 = 非 deferred 图 / mode="none" /
+	//   交付已关 warn，各自一条消息），行数只作"表没被整段删空"的下界哨兵。
 	const auto rules = gateLintRuleGates();
+	const auto blocks = gateLintBlockCoverage();
+	std::vector<std::string> blockKeys;
+	for (const auto& b : blocks)
+		for (const auto& k : b.keys)
+			blockKeys.push_back(k);
 	const auto echo = diagnosticsEchoKeys();
 	const auto shadowEcho = shadowConfigEchoKeys();
 	// 第三个来源 = runtime.lua 的 meshlet 块。前缀过滤**写死**在这里并吃 runtimeConfigKnownKeys()
@@ -123,31 +137,64 @@ TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 三方来源键�
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
 			meshletKeys.push_back(k);
-	CHECK(rules.size() == 60u);
-	CHECK(distinctGateCount(rules) == 53u);
+	CHECK(rules.size() == 44u);       // 独立行（19 行 nullptr 挂号 + 25 行谓词）
+	CHECK(blocks.size() == 6u);       // pcss / evssm / 三探针 / meshlet
+	CHECK(blockKeys.size() == 21u);   // 3 + 4 + 2 + 2 + 2 + 8
 	CHECK(echo.size() == 30u);
 	CHECK(shadowEcho.size() == 13u);
 	CHECK(meshletKeys.size() == 10u);  // 整块 10 枚（债-106 红线：接管整块 = 一枚都不能少）
+	// 正向：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有 = 红并点名。
+	auto coveredBy = [&](std::string_view k) {
+		return hasGate(rules, k) ? "独立行" : (hasGate(blockKeys, k) ? "块条目" : "");
+	};
 	for (const auto& k : echo)
-		CHECK(hasGate(rules, k));  // 回显有而规则表没有 = 没回答「生效前置是什么」
+		CHECK_MESSAGE(*coveredBy(k), "来源键既无块条目也无独立行（没回答「生效前置是什么」）: ", k);
 	for (const auto& k : shadowEcho)
-		CHECK(hasGate(rules, k));  // 同上（shadow.lua 侧，键名是 `表.字段` 形态）
+		CHECK_MESSAGE(*coveredBy(k), "来源键既无块条目也无独立行（没回答「生效前置是什么」）: ", k);
 	for (const auto& k : meshletKeys)
-		CHECK(hasGate(rules, k));  // 同上（runtime.lua meshlet 侧，门名 = `meshlet.字段` 全名）
-	for (const auto& k : rules) {
-		const bool known
-			= hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);
-		CHECK(known);  // 规则表有而三方都没有 = 陈旧/拼错门名
-	}
+		CHECK_MESSAGE(*coveredBy(k), "来源键既无块条目也无独立行（没回答「生效前置是什么」）: ", k);
+	// 去重门数钉在「独立行 ∪ 块条目」的并集上（= 三方来源键数之和）。
+	std::vector<std::string> unionGates = rules;
+	unionGates.insert(unionGates.end(), blockKeys.begin(), blockKeys.end());
+	CHECK(distinctGateCount(unionGates) == 53u);
+	// 反向：独立行与块条目吃的都必须是已知来源键（陈旧/拼错门名）。
+	auto known = [&](std::string_view k) {
+		return hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);
+	};
+	for (const auto& k : rules)
+		CHECK_MESSAGE(known(k), "独立行门名不在三方来源键表（陈旧/拼错）: ", k);
+	for (const auto& k : blockKeys)
+		CHECK_MESSAGE(known(k), "块条目门名不在三方来源键表（陈旧/拼错）: ", k);
+	// 🔴 块前缀宿主判据：命中某块前缀的来源键必须是**该块条目**或**该块宿主**——
+	// 「往块里加一枚键而不声明宿主」用 nullptr 独立行也躲不过（旧 19 行零判据挂号的攒法
+	// 在块命名空间里从此失效；无前缀的 nullptr 挂号行是下一刀「哪些能变派生物」的议题）。
+	// 例外名单 = 全表仅有的两枚「命中前缀但形状不是 owner」的键，各有判据：
+	//   · pcss.min_footprint_texels —— 结构性错位键（任何 mode 下都不生效），全表唯一，
+	//     🔴 必须留独立行、不许被块吞掉（吞了 = 丢掉这条判据）；
+	//   · meshlet.shadow_lod_fallback —— 链式前置（shadow_lod ≥ 0 && enable）且级别
+	//     inertNote ≠ meshlet 块的 warn，塞不进块。
+	// 新增例外 = 评审裁决点，必须在此写明理由。
+	static const std::array<std::string_view, 2> kPrefixExceptions{
+		"pcss.min_footprint_texels", "meshlet.shadow_lod_fallback"};
+	for (const auto& src : {std::span<const std::string>{echo}, std::span<const std::string>{shadowEcho},
+			 std::span<const std::string>{meshletKeys}})
+		for (const auto& k : src)
+			for (const auto& b : blocks)
+				if (k.starts_with(b.prefix)) {
+					const bool ok = hasGate(blockKeys, k) || k == b.owner
+						|| std::ranges::find(kPrefixExceptions, k) != kPrefixExceptions.end();
+					CHECK_MESSAGE(ok, "命中块前缀 ", b.prefix, " 的键既非块条目也非宿主（宿主没声明）: ", k);
+				}
 }
 
 TEST_CASE("gate_lint 基线：全默认配置（任何图/任何世界）零 findings") {
 	// 反向用例总锚：configs/diagnostics.lua 与 configs/shadow.lua 写满默认值的现实 =
 	// lint 必须沉默。变异红线：任何 nullptr 谓词行被改成恒真 → 本用例红。
 	// 🔴 债-106 起本锚同时是 **meshlet 出厂态**（enable = true + shadow_lod = 5，其余 8 枚
-	// 默认）的总锚：lint() 的 runtime 默认参 = `RuntimeConfig{}` = 出厂态 ⟹ meshlet 14 行
-	// 谓词必须全部沉默（shadow_lod 那条的判据是「≥ 0 且 !enable」而不是「偏离默认」，
-	// 出厂两键同给正是为了让它不成立）。变异红线：meshlet 任一行谓词改成恒真 → 本用例红。
+	// 默认）的总锚：lint() 的 runtime 默认参 = `RuntimeConfig{}` = 出厂态 ⟹ meshlet 申报
+	// （债-129 D 后 = 独立 10 行 + meshlet 块 8 枚键）谓词必须全部沉默（shadow_lod 那条的
+	// 判据是「≥ 0 且 !enable」而不是「偏离默认」，出厂两键同给正是为了让它不成立）。
+	// 变异红线：meshlet 任一行/任一枚块条目谓词改成恒真 → 本用例红。
 	const DiagnosticsConfig d;
 	// 结构体默认 = 交付形态（csm + **izb 关**，2026-10-10 换红线）。izb 关之后交付默认在
 	// **两种图上都沉默**（此前 izb 开 ⟹ forward 必有一条 izb error，"全默认零 findings"这条
@@ -515,7 +562,7 @@ TEST_CASE("gate_lint meshlet.overlay：生效不含 enable，但 overlay && !ena
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) { r.meshletOverlay = true; }));
 		REQUIRE(find(fs, "meshlet.overlay") != nullptr);
 		CHECK(find(fs, "meshlet.overlay")->severity == GateSeverity::warn);
-		// 消息点名装配层的事实级出声（同因不同层的读者导航）
+		// 消息点名装配层的事实级出声（同因不同层的读者导航；逐键消息自带全名，断言不降格）
 		CHECK(find(fs, "meshlet.overlay")->message.find("wireMeshletOverlayActivation")
 			!= std::string::npos);
 	}
@@ -725,18 +772,23 @@ TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = enable + shadow_lod ≥ 0（�
 	// wireMeshletMdiShadowActivation（烘条目 + 回填 + emplace）→ renderListSystem 读 ctx。
 	// 宿主条件（纯配置子集）= wireMeshletShadowArgs 第①步的 enable + shadow_lod ≥ 0；
 	// 第三条（选级表非零）是装配期事实 ⟹ 装配层 warn 保留、lint 消息点名它（不判 error）。
-	{  // 正例①：mdi 开 + enable 关（红线 A 打底）= 载体必然不建
+	{  // 正例①：mdi 开 + enable 关（红线 A 打底）= 载体必然不建（meshlet 块出声，键级消息
+	   // 覆盖块级缺省——逐键归因自带 wireMeshletMdiShadowActivation 全名，断言不降格）
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) { r.meshletMdiShadow = true; }));
 		REQUIRE(find(fs, "meshlet.mdi_shadow") != nullptr);
 		CHECK(find(fs, "meshlet.mdi_shadow")->severity == GateSeverity::warn);
 		CHECK(find(fs, "meshlet.mdi_shadow")->message.find("wireMeshletMdiShadowActivation")
 			!= std::string::npos);
 	}
-	{  // 正例②：mdi 开 + enable 开 + shadow_lod = -1 = 宿主条件第二脚空了
+	{  // 正例②：mdi 开 + enable 开 + shadow_lod = -1 = 宿主条件第二脚空了（独立残留行出声，
+	   // 消息保留逐键归因：点名装配层 wireMeshletMdiShadowActivation 的事实级 warn）
 		RuntimeConfig r;
 		r.meshletShadowLod = -1;
 		r.meshletMdiShadow = true;
-		CHECK(find(lintRt(r), "meshlet.mdi_shadow") != nullptr);
+		const auto fs = lintRt(r);
+		REQUIRE(find(fs, "meshlet.mdi_shadow") != nullptr);
+		CHECK(find(fs, "meshlet.mdi_shadow")->message.find("wireMeshletMdiShadowActivation")
+			!= std::string::npos);
 	}
 	{  // 反向：mdi 开 + 出厂两键（enable + shadow_lod = 5）= 宿主条件满足，不喊
 	   // （载体建没建 = 选级表事实，归装配层 wireMeshletMdiShadowActivation 出声）
@@ -747,6 +799,259 @@ TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = enable + shadow_lod ≥ 0（�
 	{  // 反向：mdi 关（出厂默认）任何组合都不喊——门关 grep 护栏的对等物
 		CHECK(find(lintRt(redlineA()), "meshlet.mdi_shadow") == nullptr);
 	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 金标准 harness（债-129 第二刀 D 收尾修正随刀重建，**常驻树**）
+//
+// 用途：gate_lint 的任何重构（塌表 / 换装配 / 改措辞 / 换发射顺序）都要能在**不重跑 GPU、
+// 不截图**的前提下判定「触发面与归因面有没有变」。上面的行为用例逐条钉逐门语义；本 harness
+// 钉的是 90 档全组合扫描下的**输出面**，两张基线随仓库走（/tmp 下的历史副本不是基线）：
+//   · `tests/golden/gate_lint_findings.txt`     = 每档 `(门名, 级别枚举值)` 行 —— 触发面
+//   · `tests/golden/gate_lint_findings_msg.txt` = 每档 `(门名, 消息)` 行 —— 归因面
+// 行序 = 档内字典序（**集合语义**：块装配的 finding 发射顺序与独立行时代不同是允许的，
+// 内容不许变；级别枚举值 = GateSeverity 的 0/1/2 = inertNote/warn/error）。
+//
+// 怎么跑（🔴 env 未设 = 本用例 no-op：`just test` 零成本、不写文件）：
+//   RGL_GATE_LINT_GOLDEN=$PWD/tests/golden just test && git diff --exit-code tests/golden/
+// 重构后 diff 非空 = 输出面变了。评审确认是「等价改写」才准把基线更新与重构放进**同一刀**
+// （diff 本身就是评审材料）；diff 点名「消息被并成块消息 / 某档少一条」= 本 harness 要拦的
+// 正是这个形态——上一刀靠它抓出逐键归因丢失与断言降格。
+//
+// 变异红线：① kGateRules / kGateBlocks / kMeshletKeys 任一条目的触发或消息变 → 重生成基线
+// 的 git diff 点名；② 扫描表删档 → 用例数钉 90 先红（回归网不许静默缩小）；③ 把本用例改成
+// 无条件写文件 → `just test` 长出副作用（禁止）；④ 档位定义改动而输出没变 = 允许（档位是
+// 覆盖面不是判据本体），但覆盖面缩小时 ② 拦不住逐档语义——新增键时**先补档再挂号**。
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+/** harness 单档：三份配置 + 图/variant/env（缺省 = 出厂态 × deferred 图 × 全合法世界）。 */
+struct GoldenCase {
+	std::string_view name;
+	DiagnosticsConfig cfg{};
+	ShadowConfig shadow{};
+	RuntimeConfig runtime{};
+	bool fwd = false;  ///< true = forward 图（缺省 = deferred 图）
+	RgGraphVariant variant = RgGraphVariant::deferred;
+	GateEnv world = kHappyEnv;
+};
+
+/** 世界三档（kHappyEnv 之外：全黑 / 仅 headless / 缺 static 能力 / 缺 llm 消费方）。 */
+constexpr GateEnv kGoldenDark{.headless = true, .llmCapture = false, .staticGraphicsIndirect = false};
+constexpr GateEnv kGoldenHeadless{.headless = true, .llmCapture = true, .staticGraphicsIndirect = true};
+constexpr GateEnv kGoldenNoStatic{.llmCapture = true, .staticGraphicsIndirect = false};
+constexpr GateEnv kGoldenNoLlm{.staticGraphicsIndirect = true};
+
+/** pcss / evssm 调参块的「全偏离」形态（四字段都 ≠ 出厂值；8.0 = 偏离默认 16.0）。 */
+constexpr ShadowTuning kTuningAll{2.0, 40.0, 48.0, 8.0};
+
+/** 扫描表 90 档（档序 = 基线文件档序；每档的期望输出以基线文件为准，行为语义见上方用例）。 */
+const std::vector<GoldenCase>& goldenCases() {
+	static const std::vector<GoldenCase> kCases{
+		// ———— factory：出厂配置 × 图/variant/env 四世界 ————
+		{.name = "factory/def-happy"},
+		{.name = "factory/fwd-dark", .fwd = true, .world = kGoldenDark},
+		{.name = "factory/fwd-happy", .fwd = true},
+		{.name = "factory/def-headless", .world = kGoldenDark},
+		// ———— pcss 块：宿主 = mode=="pcss"（含结构性错位键 min_footprint_texels）————
+		{.name = "pcss/owner-on", .shadow = {.mode = ShadowMode::pcss, .pcss = kTuningAll}},
+		{.name = "pcss/owner-on-mft-default",
+			.shadow = {.mode = ShadowMode::pcss, .pcss{2.0, 40.0, 48.0}}},
+		{.name = "pcss/off-csm-all", .shadow = {.pcss = kTuningAll}},
+		{.name = "pcss/off-csm-sun-only", .shadow = {.pcss{2.0}}},
+		{.name = "pcss/off-csm-mft-only", .shadow = {.pcss{.minFootprintTexels = 8.0}}},
+		{.name = "pcss/off-none-all", .shadow = {.mode = ShadowMode::none, .pcss = kTuningAll}},
+		{.name = "pcss/off-evssm-all", .shadow = {.mode = ShadowMode::evssm, .pcss = kTuningAll}},
+		// ———— evssm 块：与 pcss 侧对称（宿主 = mode=="evssm"）————
+		{.name = "evssm/owner-on", .shadow = {.mode = ShadowMode::evssm, .evssm = kTuningAll}},
+		{.name = "evssm/off-csm-all", .shadow = {.evssm = kTuningAll}},
+		{.name = "evssm/off-csm-mft-only", .shadow = {.evssm{.minFootprintTexels = 8.0}}},
+		{.name = "evssm/off-pcss-all", .shadow = {.mode = ShadowMode::pcss, .evssm = kTuningAll}},
+		{.name = "evssm/both-blocks-csm", .shadow = {.pcss = kTuningAll, .evssm = kTuningAll}},
+		{.name = "evssm/evssm-mode-pcss-block",
+			.shadow = {.mode = ShadowMode::evssm, .pcss = kTuningAll}},
+		// ———— izb：error（非 deferred 图 / mode=none）× warn（交付已关）× 子键 ————
+		{.name = "izb/on-def", .shadow = {.izb = true}},
+		{.name = "izb/on-fwd", .shadow = {.izb = true}, .fwd = true},
+		{.name = "izb/on-none", .shadow = {.mode = ShadowMode::none, .izb = true}},
+		{.name = "izb/on-none-fwd", .shadow = {.mode = ShadowMode::none, .izb = true}, .fwd = true},
+		{.name = "izb/dump-off", .shadow = {.izbDumpFrame = 120}},
+		{.name = "izb/dump-on", .shadow = {.izb = true, .izbDumpFrame = 120}},
+		{.name = "izb/grid-off", .shadow = {.izbGrid = 1024}},
+		{.name = "izb/grid-on", .shadow = {.izb = true, .izbGrid = 1024}},
+		{.name = "izb/evssm-fwd", .shadow = {.mode = ShadowMode::evssm}, .fwd = true},
+		// ———— picking_probe：宿主 picking（error）× 块宿主 frame（inertNote）————
+		{.name = "pp/frame-off-nopicking", .cfg = {.pickingProbeFrame = 30}},
+		{.name = "pp/frame-on-picking-on", .cfg = {.picking = true, .pickingProbeFrame = 30}},
+		{.name = "pp/xy-frame-off", .cfg = {.pickingProbeX = 640, .pickingProbeY = 360}},
+		{.name = "pp/x-only-frame-off", .cfg = {.pickingProbeX = 640}},
+		{.name = "pp/xy-frame-on-picking-on",
+			.cfg = {.picking = true, .pickingProbeFrame = 30, .pickingProbeX = 640,
+				.pickingProbeY = 360}},
+		{.name = "pp/xy-frame-on-nopicking",
+			.cfg = {.pickingProbeFrame = 30, .pickingProbeX = 640, .pickingProbeY = 360}},
+		{.name = "pp/xy-frame-off-nopicking", .cfg = {.pickingProbeX = 640, .pickingProbeY = 360}},
+		// ———— ui_click_probe / camera_probe：headless 死路（error）× frame 块（inertNote）————
+		{.name = "uic/xy-frame-off", .cfg = {.uiClickProbeX = 100, .uiClickProbeY = 200}},
+		{.name = "uic/xy-frame-on-window",
+			.cfg = {.uiClickProbeFrame = 30, .uiClickProbeX = 100, .uiClickProbeY = 200}},
+		{.name = "uic/frame-headless", .cfg = {.uiClickProbeFrame = 30}, .world = kGoldenHeadless},
+		{.name = "cam/keyhold-frame-off", .cfg = {.cameraProbeKey = 'W', .cameraProbeHold = 20}},
+		{.name = "cam/key-only-frame-off", .cfg = {.cameraProbeKey = 'W'}},
+		{.name = "cam/hold-only-frame-off", .cfg = {.cameraProbeHold = 20}},
+		{.name = "cam/keyhold-frame-on-window",
+			.cfg = {.cameraProbeFrame = 30, .cameraProbeKey = 'W', .cameraProbeHold = 20}},
+		{.name = "cam/frame-headless", .cfg = {.cameraProbeFrame = 30}, .world = kGoldenHeadless},
+		// ———— rpc / dgc / imgui / dump_gbuf / variant 交叉 ————
+		{.name = "rpc/port-off", .cfg = {.rpcPort = 9000}},
+		{.name = "rpc/port-on", .cfg = {.rpc = true, .rpcPort = 9000}},
+		{.name = "dgc/nocap", .cfg = {.dgcStatic = true}, .world = kGoldenNoStatic},
+		{.name = "dgc/replay-cpu", .cfg = {.dgcStatic = true}},
+		{.name = "dgc/replay-lagged", .cfg = {.dgcStatic = true, .cullReplay = CullReplayMode::gpuLagged}},
+		{.name = "dgc/replay-sync", .cfg = {.dgcStatic = true, .cullReplay = CullReplayMode::gpuSync}},
+		{.name = "imgui/headless", .cfg = {.imgui = true}, .world = kGoldenHeadless},
+		{.name = "imgui/window", .cfg = {.imgui = true}},
+		{.name = "gbuf/nollm", .cfg = {.dumpGbuf = 2}, .world = kGoldenNoLlm},
+		{.name = "gbuf/llm-fwd", .cfg = {.dumpGbuf = 2}, .fwd = true},
+		{.name = "gbuf/ok", .cfg = {.dumpGbuf = 2}},
+		{.name = "variant/deferred-on-fwd", .fwd = true},
+		{.name = "variant/forward-on-def", .variant = RgGraphVariant::forward},
+		// ———— rt：runtime.lua 的 meshlet 块（红线 A 打底 = redlineA；其余指定初始化）————
+		{.name = "rt/factory"},
+		{.name = "rt/off-redline", .runtime = redlineA()},
+		{.name = "rt/off-lod5", .runtime = {.meshletEnable = false}},
+		{.name = "rt/overlay-on", .runtime = {.meshletOverlay = true}},
+		{.name = "rt/overlay-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) { r.meshletOverlay = true; })},
+		{.name = "rt/debug-only", .runtime = {.meshletDebug = true}},
+		{.name = "rt/debug-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) {
+				r.meshletOverlay = true;
+				r.meshletDebug = true;
+			})},
+		{.name = "rt/tint-only", .runtime = {.meshletTint = true}},
+		{.name = "rt/tint-debug", .runtime = {.meshletDebug = true, .meshletTint = true}},
+		{.name = "rt/tint-debug-overlay",
+			.runtime = {.meshletOverlay = true, .meshletDebug = true, .meshletTint = true}},
+		{.name = "rt/tint-debug-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) {
+				r.meshletOverlay = true;
+				r.meshletDebug = true;
+				r.meshletTint = true;
+			})},
+		{.name = "rt/coplanar-eq", .runtime = {.meshletCoplanar = MeshletCoplanarMode::equal}},
+		{.name = "rt/coplanar-ne-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) {
+				r.meshletCoplanar = MeshletCoplanarMode::ne;
+			})},
+		{.name = "rt/coplanar-ok",
+			.runtime = {.meshletOverlay = true, .meshletCoplanar = MeshletCoplanarMode::equal}},
+		{.name = "rt/switch-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) { r.meshletSwitch = true; })},
+		{.name = "rt/switch-sync",
+			.cfg = {.cullReplay = CullReplayMode::gpuSync}, .runtime = {.meshletSwitch = true}},
+		{.name = "rt/switch-overlay-cpu",
+			.runtime = {.meshletOverlay = true, .meshletSwitch = true}},
+		{.name = "rt/switch-overlay-sync",
+			.cfg = {.cullReplay = CullReplayMode::gpuSync},
+			.runtime = {.meshletOverlay = true, .meshletSwitch = true}},
+		{.name = "rt/switch-ok", .runtime = {.meshletSwitch = true}},
+		{.name = "rt/cull-only", .runtime = {.meshletCull = true}},
+		{.name = "rt/cull-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) { r.meshletCull = true; })},
+		{.name = "rt/cull-switch-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) {
+				r.meshletSwitch = true;
+				r.meshletCull = true;
+			})},
+		{.name = "rt/cull-switch-sync",
+			.cfg = {.cullReplay = CullReplayMode::gpuSync},
+			.runtime = {.meshletSwitch = true, .meshletCull = true}},
+		{.name = "rt/cull-switch-lagged",
+			.cfg = {.cullReplay = CullReplayMode::gpuLagged},
+			.runtime = {.meshletSwitch = true, .meshletCull = true}},
+		{.name = "rt/cull-ok", .runtime = {.meshletSwitch = true, .meshletCull = true}},
+		{.name = "rt/lod-neg-enable", .runtime = {.meshletShadowLod = -1}},
+		{.name = "rt/fallback-l0-lodneg",
+			.runtime = {.meshletShadowLod = -1, .meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
+		{.name = "rt/fallback-l0-offenable",
+			.runtime = {.meshletEnable = false, .meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
+		{.name = "rt/fallback-l0-ok",
+			.runtime = {.meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
+		{.name = "rt/mdi-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) { r.meshletMdiShadow = true; })},
+		{.name = "rt/mdi-lodneg",
+			.runtime = {.meshletShadowLod = -1, .meshletMdiShadow = true}},
+		{.name = "rt/mdi-both",
+			.runtime = redlineA([](RuntimeConfig& r) { r.meshletMdiShadow = true; })},
+		{.name = "rt/mdi-ok", .runtime = {.meshletMdiShadow = true}},
+		{.name = "rt/kitchen-sink-off",
+			.runtime = redlineA([](RuntimeConfig& r) {
+				r.meshletOverlay = true;
+				r.meshletDebug = true;
+				r.meshletCoplanar = MeshletCoplanarMode::ne;
+				r.meshletTint = true;
+				r.meshletSwitch = true;
+				r.meshletCull = true;
+				r.meshletShadowLodFallback = MeshletLodFallbackMode::l0;
+				r.meshletMdiShadow = true;
+			})},
+		{.name = "rt/kitchen-sink-on",
+			.cfg = {.cullReplay = CullReplayMode::gpuSync},
+			.runtime = {.meshletOverlay = true,
+				.meshletDebug = true,
+				.meshletCoplanar = MeshletCoplanarMode::ne,
+				.meshletTint = true,
+				.meshletSwitch = true,
+				.meshletCull = true,
+				.meshletShadowLodFallback = MeshletLodFallbackMode::l0,
+				.meshletMdiShadow = true}},
+		// ———— combo：五块宿主同时不成立的「全灭」世界（块装配的聚合形态就藏在这类档里）————
+		{.name = "combo/all-blocks-off",
+			.cfg = {.pickingProbeX = 640, .uiClickProbeY = 200, .cameraProbeKey = 'W'},
+			.shadow = {.pcss = kTuningAll, .evssm = kTuningAll},
+			.runtime = {.meshletEnable = false, .meshletOverlay = true, .meshletDebug = true,
+				.meshletMdiShadow = true}},
+	};
+	return kCases;
+}
+
+}  // namespace
+
+TEST_CASE("gate_lint 金标准 harness：90 档全组合扫描落盘（RGL_GATE_LINT_GOLDEN 未设 = no-op）") {
+	const char* outDir = std::getenv("RGL_GATE_LINT_GOLDEN");
+	if (outDir == nullptr || *outDir == '\0')
+		return;  // 🔴 env 未设 = no-op：`just test` 不写文件、零运行期成本（口径见段头注释）
+	CHECK(goldenCases().size() == 90u);  // 扫描面哨兵：删档 = 回归网静默缩小（变异红线 ②）
+	static const std::vector<RgPassPlan> kFwd = passesOf(defaultRenderGraphDesc());
+	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
+	std::string keep, msg;
+	for (const auto& c : goldenCases()) {
+		const std::span<const RgPassPlan> passes = c.fwd ? std::span{kFwd} : std::span{kDef};
+		const auto fs = lintDiagnosticsGates(c.cfg, DiagnosticsConfig{}, c.shadow, ShadowConfig{},
+			c.runtime, RuntimeConfig{}, passes, c.variant, c.world);
+		std::vector<std::string> keepLines, msgLines;
+		for (const auto& f : fs) {
+			keepLines.push_back(std::string{f.gate} + '\t' + std::to_string(static_cast<int>(f.severity)));
+			msgLines.push_back(std::string{f.gate} + '\t' + f.message);
+		}
+		std::ranges::sort(keepLines);  // 集合语义：发射顺序不进基线（段头注释）
+		std::ranges::sort(msgLines);
+		keep += "### " + std::string{c.name} + "\n";
+		msg += "### " + std::string{c.name} + "\n";
+		for (const auto& l : keepLines)
+			keep += l + '\n';
+		for (const auto& l : msgLines)
+			msg += l + '\n';
+	}
+	const std::string dir{outDir};
+	std::ofstream keepFile{dir + "/gate_lint_findings.txt"};
+	std::ofstream msgFile{dir + "/gate_lint_findings_msg.txt"};
+	REQUIRE(keepFile.is_open());  // env 指了个写不进/不存在的目录 = 红，不静默吞
+	REQUIRE(msgFile.is_open());
+	keepFile << keep;
+	msgFile << msg;
 }
 
 }  // namespace RGL

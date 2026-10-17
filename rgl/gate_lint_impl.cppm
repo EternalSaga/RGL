@@ -38,6 +38,29 @@ struct GateRule {
 	bool (*violated)(const Ctx&);
 };
 
+/** 块内单枚键：只回答「本键配了吗」，宿主条件由块给。 */
+struct BlockKey {
+	std::string_view gate;            ///< 回显表拼写，如 "meshlet.overlay"
+	bool (*present)(const Ctx&);      ///< 本键偏离默认 / 为真
+	std::string_view message{};       ///< 空 = 用块级消息；非空 = 本键自己的归因
+};
+
+/**
+ * 块级宿主声明：块内所有键共享同一条「宿主不成立 ⟹ 本键无效」。
+ * 「子键配了但宿主不成立」这条关系本就住在配置结构体里（`ShadowTuning pcss{}` 的成员身份、
+ * `meshlet.*` 前缀 + `meshletEnable`），旧表把它逐键手抄（债-129 第二刀 D 的塌缩对象）。
+ * 🔴 块只管 owner：额外根因（跨档前置 / 兄弟键 / 结构性错位）留独立 `GateRule` 行，
+ * 且那些行里必须**删掉 owner 项**——同一个根因只准有一处出声（不双报）。
+ */
+struct GateBlock {
+	std::string_view prefix;              ///< "meshlet." / "pcss." / …
+	std::string_view owner;               ///< 宿主门名（进消息、进覆盖率对账）
+	bool (*ownerActive)(const Ctx&);      ///< 宿主成立？
+	GateSeverity severity;                ///< 块内默认级别
+	std::string_view message;             ///< 块级**缺省**原因；有逐键增量的键在 BlockKey::message 覆盖
+	std::span<const BlockKey> keys;
+};
+
 /** 偏离默认值判定缩写（60 行表里少写 80 处三元噪声）。 */
 template <typename T>
 constexpr bool deviated(const Ctx& c, const T DiagnosticsConfig::* field) {
@@ -70,11 +93,51 @@ constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
 	return c.shadow.*block.*field != c.shadowDefaults.*block.*field;
 }
 
+// ———— meshlet 逐键消息常量（债-129 第二刀 D 收尾修正）————
+// 「残留独立行 ∪ 块条目」共享的五份归因文本。块级消息只是**缺省**，逐键语义不是重复项：
+// 残留行报「owner 成立、本键另有根因」，块条目报「owner 不成立」——两个发射面同一条
+// 债-106 判据，措辞必须逐字一致，所以住同一个常量（各抄一份必漂；消息级金标准
+// tests/golden/gate_lint_findings_msg.txt 逐字钉死，改措辞 = 金标准红）。
+
+/** debug 的落空机制是两条独立路（overlay 关 / enable 关），消息按并集写 = 债-106 原文。 */
+constexpr std::string_view kMsgMeshletDebug{
+	"debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）："
+	"① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；"
+	"② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，"
+	"变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）"
+	"⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零"
+	"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）"};
+
+/** tint 的落空机制不重述，指回 debug 两条 = 债-106 原文。 */
+constexpr std::string_view kMsgMeshletTint{
+	"tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 "
+	"base；enable 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表"};
+
+/** coplanar 的两个失效面（enable 关 / overlay 关）写在一条消息里 = 债-106 原文。 */
+constexpr std::string_view kMsgMeshletCoplanar{
+	"coplanar 双臂只作用**叠加段**那批 draw：enable = false（无条目）或 overlay = false（零采集）⟹ "
+	"没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」"
+	"的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / "
+	"对账三条回落路，那是装配期事实，判不了"};
+
+/** cull 的真实宿主 = enable && switch（比 meshlet 块的 owner 更强），块消息表达不出来 = 债-106 原文。 */
+constexpr std::string_view kMsgMeshletCull{
+	"cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 enable && switch，"
+	"单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch "
+	"的回落路不写配置）"};
+
+/** mdi_shadow 的宿主 = enable + shadow_lod ≥ 0（两脚），消息写全等式 = 债-106 原文。 */
+constexpr std::string_view kMsgMeshletMdiShadow{
+	"mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0"
+	"（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation "
+	"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）"};
+
 /**
- * 60 行申报表 = diagnostics 侧 30 行 + shadow 侧 16 行 + runtime.lua **meshlet 块** 14 行
- * （债-106，整块 10 枚键逐枚挂号，不挑键；一门可多行：tint/switch 各两条根因）。与三份配置
- * 结构体 / 两份回显表 + 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死
- * （去重后 53 门）。
+ * 44 行独立申报 = diagnostics 侧 24 行 + shadow 侧 9 行 + runtime.lua **meshlet 块** 11 行
+ * （债-106 整块挂号；债-129 第二刀 D 后其中 8 枚「宿主 = enable」的键塌进 kGateBlocks，
+ * 本表只留跨档前置 / 链式前置 / 结构性错位的行）。与三份配置结构体 / 两份回显表 +
+ * 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死（去重后 53 门，
+ * 覆盖 = 本表行 ∪ 块条目）。
  * 级别判据 = 计划 §4：error 只留给「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
  * **行数 ≠ 门数**：一门可以有多条规则（`izb` 两条 = 非 deferred 图 / mode="none"，
  * 两个根因各自一条消息，合并会丢归因）；覆盖率护栏钉的是**去重后的门数** == 两份回显表键数之和。
@@ -162,34 +225,11 @@ const GateRule kGateRules[]{
 	{"izb.grid", GateSeverity::inertNote,
 		"izb 关：izb.grid 是死值（网格随 IZB 构造才存在）",
 		[](const Ctx& c) { return deviated(c, &ShadowConfig::izbGrid) && !c.shadow.izb; }},
-	{"pcss.sun_degrees", GateSeverity::inertNote,
-		"mode != \"pcss\"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）",
-		[](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::sunDegrees)
-			&& c.shadow.mode != ShadowMode::pcss; }},
-	{"pcss.search_radius", GateSeverity::inertNote,
-		"mode != \"pcss\"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）",
-		[](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::searchRadius)
-			&& c.shadow.mode != ShadowMode::pcss; }},
-	{"pcss.max_penumbra", GateSeverity::inertNote,
-		"mode != \"pcss\"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）",
-		[](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::maxPenumbra)
-			&& c.shadow.mode != ShadowMode::pcss; }},
-	{"evssm.sun_degrees", GateSeverity::inertNote,
-		"mode != \"evssm\"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）",
-		[](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::sunDegrees)
-			&& c.shadow.mode != ShadowMode::evssm; }},
-	{"evssm.search_radius", GateSeverity::inertNote,
-		"mode != \"evssm\"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）",
-		[](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::searchRadius)
-			&& c.shadow.mode != ShadowMode::evssm; }},
-	{"evssm.max_penumbra", GateSeverity::inertNote,
-		"mode != \"evssm\"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）",
-		[](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::maxPenumbra)
-			&& c.shadow.mode != ShadowMode::evssm; }},
-	{"evssm.min_footprint_texels", GateSeverity::inertNote,
-		"mode != \"evssm\"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）",
-		[](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::minFootprintTexels)
-			&& c.shadow.mode != ShadowMode::evssm; }},
+	// pcss.* 三键与 evssm.* 四键的「mode != 本档 ⟹ 调参块没人读」塌进 kGateBlocks 的
+	// pcss / evssm 两块（宿主 = 选张器 mode）。
+	// 🔴 pcss.min_footprint_texels 是**全表唯一一条结构性错位键**判据：它**不含任何 owner 条件**
+	// ——判的是「这枚键写在错的块里、任何 mode 下都不生效」，与「宿主不成立」无关，
+	// 不许被块吞掉（吞了 = 丢掉这条判据）。
 	{"pcss.min_footprint_texels", GateSeverity::warn,
 		"滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，"
 		"没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里"
@@ -197,68 +237,34 @@ const GateRule kGateRules[]{
 		[](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::minFootprintTexels); }},
 	{"csm", GateSeverity::inertNote, "", nullptr},  // 预留空块（CSM 档暂无调参键）
 	{"mode", GateSeverity::inertNote, "", nullptr},  // 本身是软影滤波轴总开关
-	{"picking_probe.x", GateSeverity::inertNote,
-		"picking_probe.frame=0（探针关）：坐标是死值",
-		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::pickingProbeX)
-			&& c.cfg.pickingProbeFrame == 0; }},
-	{"picking_probe.y", GateSeverity::inertNote,
-		"picking_probe.frame=0（探针关）：坐标是死值",
-		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::pickingProbeY)
-			&& c.cfg.pickingProbeFrame == 0; }},
-	{"ui_click_probe.x", GateSeverity::inertNote,
-		"ui_click_probe.frame=0（探针关）：坐标是死值",
-		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::uiClickProbeX)
-			&& c.cfg.uiClickProbeFrame == 0; }},
-	{"ui_click_probe.y", GateSeverity::inertNote,
-		"ui_click_probe.frame=0（探针关）：坐标是死值",
-		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::uiClickProbeY)
-			&& c.cfg.uiClickProbeFrame == 0; }},
-	{"camera_probe.key", GateSeverity::inertNote,
-		"camera_probe.frame=0（探针关）：按键是死值",
-		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::cameraProbeKey)
-			&& c.cfg.cameraProbeFrame == 0; }},
-	{"camera_probe.holdFrames", GateSeverity::inertNote,
-		"camera_probe.frame=0（探针关）：保持帧数是死值",
-		[](const Ctx& c) { return deviated(c, &DiagnosticsConfig::cameraProbeHold)
-			&& c.cfg.cameraProbeFrame == 0; }},
+	// 探针子键（picking_probe.x/y、ui_click_probe.x/y、camera_probe.key/holdFrames）的
+	// 「frame=0（宿主）⟹ 子键是死值」塌进 kGateBlocks 的三个探针块（宿主 = 各自 frame 键）。
 
-	// ———— runtime.lua 的 meshlet 块（债-106：整块 10 枚键，「子键开了但总门关」从装配层
-	//      就近告警升级成启动期申报式护栏；判据出处 = 字段注释 + wireMeshlet* 消费者）————
-	{"meshlet.enable", GateSeverity::inertNote, "", nullptr},  // 总门本身：无生效前置（其余 9 枚键的宿主挂在它或它的派生档上）
-	{"meshlet.overlay", GateSeverity::warn,
-		"overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = "
-		"条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」"
-		"的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）",
-		[](const Ctx& c) { return c.runtime.meshletOverlay && !c.runtime.meshletEnable; }},
-	{"meshlet.debug", GateSeverity::warn,
-		"debug 是叠加段的**条目级** SPV 变体位，两条独立机制都会让它落空（判据按消费者写，不按本表口径写）："
-		"① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 enable）；"
-		"② enable = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，"
-		"变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）"
-		"⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归零"
-		"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）",
+	// ———— runtime.lua 的 meshlet 块（债-106：整块 10 枚键挂号，「子键开了但总门关」从装配层
+	//      就近告警升级成启动期申报式护栏；债-129 第二刀 D：宿主 = enable 的 8 枚键塌进
+	//      kGateBlocks 的 meshlet 块，本表只留**非 owner 根因**的残留行——owner 项已按
+	//      「同一根因只准一处出声」从残留行里删掉；判据出处 = 字段注释 + wireMeshlet*）————
+	{"meshlet.enable", GateSeverity::inertNote, "", nullptr},  // 总门本身：无生效前置（= meshlet 块的宿主，进覆盖率对账）
+	{"meshlet.debug", GateSeverity::warn, kMsgMeshletDebug,
+		// 残留行只报 ①（overlay 关）；②（enable 关）由 meshlet 块出声——本行**谓词**已删掉该
+		// owner 项（不双报），但**消息**保持债-106 并集原文（金标准钉文本，逐键归因不并入块消息）
 		[](const Ctx& c) { return c.runtime.meshletDebug
-			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
-	{"meshlet.tint", GateSeverity::warn,
-		"tint 是叠加段的**条目级** SPV 变体位，落空机制同 meshlet.debug 两条（overlay 关 = 变体选择器返回 "
-		"base；enable 关 = 条目整段不建），判据同 meshlet.debug；原就近 warn 同迁本表",
+			&& c.runtime.meshletEnable && !c.runtime.meshletOverlay; }},
+	{"meshlet.tint", GateSeverity::warn, kMsgMeshletTint,
+		// 残留行只报 overlay 关那条；enable 关由 meshlet 块出声（谓词删 owner、消息留原文，
+		// 同 meshlet.debug）
 		[](const Ctx& c) { return c.runtime.meshletTint
-			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
+			&& c.runtime.meshletEnable && !c.runtime.meshletOverlay; }},
 	{"meshlet.tint", GateSeverity::warn,
 		"tint 与 debug 同真 ⟹ tint 优先、debug 让位（不建组合 SPV 变体：判据 3 只用 tint、判据 4 只用 "
 		"debug，从不同时用）—— 本跑走 TINT 变体（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）",
 		[](const Ctx& c) { return c.runtime.meshletEnable && c.runtime.meshletOverlay
 			&& c.runtime.meshletTint && c.runtime.meshletDebug; }},
-	{"meshlet.coplanar", GateSeverity::warn,
-		"coplanar 双臂只作用**叠加段**那批 draw：enable = false（无条目）或 overlay = false（零采集）⟹ "
-		"没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」"
-		"的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / "
-		"对账三条回落路，那是装配期事实，判不了",
+	{"meshlet.coplanar", GateSeverity::warn, kMsgMeshletCoplanar,
+		// 残留行只报 overlay 关那条；enable 关（无条目）由 meshlet 块出声（谓词删 owner、
+		// 消息留债-106 并集原文，同 meshlet.debug）
 		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletCoplanar)
-			&& (!c.runtime.meshletEnable || !c.runtime.meshletOverlay); }},
-	{"meshlet.switch", GateSeverity::warn,
-		"switch 需 enable：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代",
-		[](const Ctx& c) { return c.runtime.meshletSwitch && !c.runtime.meshletEnable; }},
+			&& c.runtime.meshletEnable && !c.runtime.meshletOverlay; }},
 	{"meshlet.switch", GateSeverity::warn,
 		"switch 只在 diagnostics.cull_replay = \"cpu\" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放"
 		"（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到"
@@ -271,34 +277,145 @@ const GateRule kGateRules[]{
 		"设备规格 / 对账回落，overlay 是否被清空是装配期事实）",
 		[](const Ctx& c) { return c.runtime.meshletSwitch && c.runtime.meshletEnable
 			&& c.runtime.meshletOverlay && c.cfg.cullReplay == CullReplayMode::cpu; }},
-	{"meshlet.cull", GateSeverity::warn,
-		"cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 enable && switch，"
-		"单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch "
-		"的回落路不写配置）",
+	{"meshlet.cull", GateSeverity::warn, kMsgMeshletCull,
+		// 残留行只报 switch 关那条；enable 关由 meshlet 块出声（原判据 enable && switch 的
+		// 谓词已删 owner 项；消息留原文「需 enable && switch」——cull 的真实宿主比块 owner 强，
+		// 块消息表达不出这条逐键语义，金标准钉文本）
 		[](const Ctx& c) { return c.runtime.meshletCull
-			&& !(c.runtime.meshletEnable && c.runtime.meshletSwitch); }},
+			&& c.runtime.meshletEnable && !c.runtime.meshletSwitch; }},
 	{"meshlet.cull", GateSeverity::warn,
 		"cull 与 switch 同款限制：只在 diagnostics.cull_replay = \"cpu\" 生效（它挂在取代档上，"
 		"非默认档下 switch 本身就不生效）",
 		[](const Ctx& c) { return c.runtime.meshletCull && c.runtime.meshletEnable
 			&& c.runtime.meshletSwitch && c.cfg.cullReplay != CullReplayMode::cpu; }},
-	{"meshlet.shadow_lod", GateSeverity::warn,
-		"shadow_lod ≥ 0 但 enable = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = "
-		"enable）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。"
-		"门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留",
-		[](const Ctx& c) { return c.runtime.meshletShadowLod >= 0 && !c.runtime.meshletEnable; }},
 	{"meshlet.shadow_lod_fallback", GateSeverity::inertNote,
 		"shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 enable 开时才有消费者（逐模型选级住在 "
 		"wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）",
+		// 链式前置（lod < 0 || !enable）整体留本行：级别 = inertNote ≠ meshlet 块的 warn，塞不进块
 		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletShadowLodFallback)
 			&& (c.runtime.meshletShadowLod < 0 || !c.runtime.meshletEnable); }},
-	{"meshlet.mdi_shadow", GateSeverity::warn,
-		"mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.enable + shadow_lod ≥ 0"
-		"（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation "
-		"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）",
+	{"meshlet.mdi_shadow", GateSeverity::warn, kMsgMeshletMdiShadow,
+		// 残留行只报 shadow_lod < 0 那条；enable 关由 meshlet 块出声（谓词已删 owner 项；
+		// 消息留原文等式「= meshlet.enable + shadow_lod ≥ 0」——宿主两脚写全才不误导读者）
 		[](const Ctx& c) { return c.runtime.meshletMdiShadow
-			&& (!c.runtime.meshletEnable || c.runtime.meshletShadowLod < 0); }},
+			&& c.runtime.meshletEnable && c.runtime.meshletShadowLod < 0; }},
 };
+
+// ———— 块内键表（kGateBlocks 的 keys 指这里；独立出来是 std::span 不吃花括号列表的寿命要求）————
+
+const BlockKey kPcssKeys[]{
+	{"pcss.sun_degrees", [](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::sunDegrees); }},
+	{"pcss.search_radius", [](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::searchRadius); }},
+	{"pcss.max_penumbra", [](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::maxPenumbra); }},
+};
+
+const BlockKey kEvssmKeys[]{
+	{"evssm.sun_degrees", [](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::sunDegrees); }},
+	{"evssm.search_radius", [](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::searchRadius); }},
+	{"evssm.max_penumbra", [](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::maxPenumbra); }},
+	{"evssm.min_footprint_texels", [](const Ctx& c) { return deviated(c, &ShadowConfig::evssm, &ShadowTuning::minFootprintTexels); }},
+};
+
+const BlockKey kPickingProbeKeys[]{
+	{"picking_probe.x", [](const Ctx& c) { return deviated(c, &DiagnosticsConfig::pickingProbeX); }},
+	{"picking_probe.y", [](const Ctx& c) { return deviated(c, &DiagnosticsConfig::pickingProbeY); }},
+};
+
+const BlockKey kUiClickProbeKeys[]{
+	{"ui_click_probe.x", [](const Ctx& c) { return deviated(c, &DiagnosticsConfig::uiClickProbeX); }},
+	{"ui_click_probe.y", [](const Ctx& c) { return deviated(c, &DiagnosticsConfig::uiClickProbeY); }},
+};
+
+// 两枚键各带逐键消息（消息级金标准钉死）：块消息「子键是死值」是并写，旧归因分别点名
+// 「按键」/「保持帧数」——读者按哪个键喊就该看见哪个键名。
+const BlockKey kCameraProbeKeys[]{
+	{"camera_probe.key", [](const Ctx& c) { return deviated(c, &DiagnosticsConfig::cameraProbeKey); },
+		"camera_probe.frame=0（探针关）：按键是死值"},
+	{"camera_probe.holdFrames", [](const Ctx& c) { return deviated(c, &DiagnosticsConfig::cameraProbeHold); },
+		"camera_probe.frame=0（探针关）：保持帧数是死值"},
+};
+
+/**
+ * meshlet 块 8 枚键（宿主 = meshlet.enable）。present 口径 = 「本键配了」：
+ * 布尔键 = 为真；coplanar = 偏离 off；shadow_lod = **≥ 0**（🔴 不是「偏离默认」——
+ * 门关档 -1 也偏离默认 5，写成 deviated 会打破「门关 grep meshlet = 0」护栏，
+ * tests 红线 A 用例钉住这条）。
+ * 🔴 8 枚键**全部**自带消息（块消息只是新键缺省）：逐键归因不是重复项——overlay 的
+ * 「生效条件**不含** enable」、cull 的「真实宿主 = enable && switch（比块 owner 强）」
+ * 这类微妙区别块消息表达不出来，塌成一条 = 抹掉下一刀（拍板 A）要消费的语义。
+ * 与残留行共享的文本走 kMsgMeshlet* 常量（单一来源）。
+ */
+const BlockKey kMeshletKeys[]{
+	{"meshlet.overlay", [](const Ctx& c) { return c.runtime.meshletOverlay; },
+		"overlay 的生效条件**不含** enable（它的宿主是叠加段自己），但 enable = false ⟹ slots = nullopt = "
+		"条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」"
+		"的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）"},
+	{"meshlet.debug", [](const Ctx& c) { return c.runtime.meshletDebug; }, kMsgMeshletDebug},
+	{"meshlet.tint", [](const Ctx& c) { return c.runtime.meshletTint; }, kMsgMeshletTint},
+	{"meshlet.coplanar", [](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletCoplanar); },
+		kMsgMeshletCoplanar},
+	{"meshlet.switch", [](const Ctx& c) { return c.runtime.meshletSwitch; },
+		"switch 需 enable：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代"},
+	{"meshlet.cull", [](const Ctx& c) { return c.runtime.meshletCull; }, kMsgMeshletCull},
+	{"meshlet.shadow_lod", [](const Ctx& c) { return c.runtime.meshletShadowLod >= 0; },
+		"shadow_lod ≥ 0 但 enable = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = "
+		"enable）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。"
+		"门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留"},
+	{"meshlet.mdi_shadow", [](const Ctx& c) { return c.runtime.meshletMdiShadow; }, kMsgMeshletMdiShadow},
+};
+
+// ⚠ 同 kGateRules：原生数组——显式 N 写错会零填充出**空 keys**（块静默少键）。
+/**
+ * 块级宿主声明表（债-129 第二刀 D）。发射 = 对 `present && !ownerActive` 的每枚键出一条
+ * finding（门名 = 键名、级别 = 块级、消息 = 键级覆盖优先缺省落块级）。与独立行的分工见 GateBlock 注释：
+ * 块只报「宿主不成立」，额外根因在 kGateRules 的残留行里（owner 项已删，不双报）。
+ * 宿主不只有布尔：pcss / evssm 的宿主是**选张器** `mode == X`（ownerActive 是 lambda，
+ * 这正是它不收 bool 成员指针的原因）。
+ */
+const GateBlock kGateBlocks[]{
+	{"pcss.", "mode", [](const Ctx& c) { return c.shadow.mode == ShadowMode::pcss; },
+		GateSeverity::inertNote,
+		"mode != \"pcss\"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）",
+		std::span{kPcssKeys}},
+	{"evssm.", "mode", [](const Ctx& c) { return c.shadow.mode == ShadowMode::evssm; },
+		GateSeverity::inertNote,
+		"mode != \"evssm\"：evssm.* 调参块没人读（按档分立，pcss 档读的是 pcss.*）",
+		std::span{kEvssmKeys}},
+	{"picking_probe.", "picking_probe.frame",
+		[](const Ctx& c) { return c.cfg.pickingProbeFrame != 0; },
+		GateSeverity::inertNote, "picking_probe.frame=0（探针关）：坐标是死值",
+		std::span{kPickingProbeKeys}},
+	{"ui_click_probe.", "ui_click_probe.frame",
+		[](const Ctx& c) { return c.cfg.uiClickProbeFrame != 0; },
+		GateSeverity::inertNote, "ui_click_probe.frame=0（探针关）：坐标是死值",
+		std::span{kUiClickProbeKeys}},
+	{"camera_probe.", "camera_probe.frame",
+		[](const Ctx& c) { return c.cfg.cameraProbeFrame != 0; },
+		GateSeverity::inertNote, "camera_probe.frame=0（探针关）：子键是死值",
+		std::span{kCameraProbeKeys}},
+	{"meshlet.", "meshlet.enable", [](const Ctx& c) { return c.runtime.meshletEnable; },
+		GateSeverity::warn,
+		"meshlet.enable = false ⟹ 簇条目不烘（bakeMeshletEntries 吃 slots = nullopt 整段早退），"
+		"本键没有作用对象。装配层 wireMeshlet* 还按「有没有条目可采 / 载体在不在」的**事实**出声"
+		"（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）",
+		std::span{kMeshletKeys}},
+};
+
+/**
+ * 块级发射（债-129 第二刀 D）：宿主不成立 ⟹ 块内每枚「配了」的键各出一条 finding
+ * （门名 = 键名、级别 = 块级；消息 = 键级覆盖优先、缺省落块级——逐键归因不是重复项，
+ * 见 kMeshletKeys 头注释）。与独立行的分工见 GateBlock 注释（不双报）。
+ * 抽成函数而非内联：lintDiagnosticsGates 的认知复杂度阈值 = 15，双层嵌套循环 + 双守卫
+ * 内联会把它推过线。
+ */
+void appendBlockFindings(std::vector<GateFinding>& findings, const Ctx& ctx) {
+	for (const auto& b : kGateBlocks)
+		if (!b.ownerActive(ctx))
+			for (const auto& k : b.keys)
+				if (k.present(ctx))
+					findings.push_back({k.gate, b.severity,
+						std::string{k.message.empty() ? b.message : k.message}});
+}
 
 }  // namespace
 
@@ -309,6 +426,20 @@ std::vector<std::string> gateLintRuleGates() {
 	for (const auto& r : kGateRules)
 		gates.emplace_back(r.gate);
 	return gates;
+}
+
+/** gateLintBlockCoverage 定义（接口注释见 gate_lint.cppm）。 */
+std::vector<GateBlockCoverage> gateLintBlockCoverage() {
+	std::vector<GateBlockCoverage> blocks;
+	blocks.reserve(std::size(kGateBlocks));
+	for (const auto& b : kGateBlocks) {
+		GateBlockCoverage out{std::string{b.prefix}, std::string{b.owner}, {}};
+		out.keys.reserve(b.keys.size());
+		for (const auto& k : b.keys)
+			out.keys.emplace_back(k.gate);
+		blocks.push_back(std::move(out));
+	}
+	return blocks;
 }
 
 /** lintDiagnosticsGates 定义（接口注释见 gate_lint.cppm）。 */
@@ -323,6 +454,7 @@ std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cfg,
 	for (const auto& r : kGateRules)
 		if (r.violated && r.violated(ctx))
 			findings.push_back({r.gate, r.severity, std::string{r.message}});
+	appendBlockFindings(findings, ctx);  // 块级宿主声明（判据见 appendBlockFindings 注释）
 
 	// variant 交叉校验（计划 §3-A：配置意图与图事实两个真相源的**分歧在此喊**，
 	// 不靠谁吞掉谁——自定义 Lua 图在 forward 变体下手写 light pass 是合法定制，
