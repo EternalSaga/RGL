@@ -23,24 +23,18 @@
 --   "deferred"  = 内建 3-pass 延迟图（geometry→G-buffer + light 全屏逐灯→scene_hdr
 --                 + tonemap 上屏，exclusive，下方 passes 被忽略；opaque 段管线换
 --                 deferred_geometry，main 契约联动）
---   "offscreen" = 内建 offscreen 图变体（三段渲 scene_rt + composite blit 上屏，SDR）
 --
 -- Phase 8 批次 ①：HDR 累加链——opaque/skybox/transparent 渲入 scene_hdr
 --（rgba16_sfloat offscreen RT），tonemap pass（drawLight）ACES 上屏 swapchain。
 return {
-    -- ⚠ 本 rig 刻意用 **forward**（仓库默认是 deferred）。三条理由，缺一条都该退回 deferred：
-    --   ① **skybox=false 只在 forward 生效**。deferred 的天穹合成在 light.frag.slang:186-204
-    --     内联，只门控 env.mipRange>0，**不读 skybox 标志**（该标志只门控 forward 的 skybox
-    --     draw，render_list_impl.cppm:434）。本 rig 的 env 是一条 4000 亮度的窄带，天穹直接
-    --     饱和成一条 35 行的白带；而 light.frag.slang:193 明写天穹**不乘 env.intensity**
-    --     （"intensity 是 IBL 光照标定系数不是显示增益"）⟹ 在 deferred 上"env 关掉归零"那一行
-    --     实验**永远不归零**，测的是天穹不是地面。
-    --   ② forward 无 G-buffer，法线不经 8bit 量化 —— deferred 的 G-buffer 法线量化本身就是一
-    --     个逐像素高频源，会把"平坦面上有没有亚像素高频"这个唯一要问的问题污染掉。
-    --   ③ forward 是 qa/configs/analytic/ 与 imgqa probe 的路线，闭式解加分项接得上。
-    -- 代价如实记：bistro 报障跑的是仓库默认 deferred ⟹ 本 rig 与 bistro 不同路线。已补
-    -- 一行 deferred 交叉对照（见最终报告），结论是"路线不改变本现象"。
-    variant = "forward",   -- "forward" | "deferred" | "offscreen"
+    -- 本 rig 走 **deferred**（2026-10-18 图变体收敛 §6.1-3 切路线；原锁 forward 的三条理由
+    -- 逐条作废）：① 原「skybox=false 只在 forward 生效」——本 rig 的 camera.lua 早把地平线
+    --   移出画幅（俯角 25° 全画幅皆地面，其"三条硬收益"第①条就是「deferred 路线可用」），
+    --   deferred 天穹（light.frag.slang 内联合成、只门控 env.mipRange>0）根本不入画，
+    --   不再需要 skybox 标志；② 原「法线不经 8bit 量化」——数错，gbuffer_normal 是
+    --   rg16_snorm（oct 编码，gbuffer_contract.cppm），量化噪声 ~2^-16 远低于本 rig 的
+    --   测量底；③ 原「probe 路线是 forward」——探针已重立到 deferred（双锚，同上文档 §6.1-1）。
+    variant = "deferred",   -- "forward" | "deferred"
     attachments = {
         { name = "swapchain", kind = "swapchain" },
         { name = "depth", kind = "depth" },

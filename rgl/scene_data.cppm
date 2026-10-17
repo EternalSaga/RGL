@@ -398,7 +398,7 @@ static_assert(kSceneDataTaaOffset == 723456,
  * `z = 1` ⟹ AO 已由 taa pass 施加，tonemap **必须**跳过自己的 AO 乘法（否则双施）；
  * `z = 0` ⟹ taa pass 不在图里，tonemap 照旧施加（TAA 关时的唯一施加点）。
  * 写入方 = `fillTaaData`，取值 = **实际图形态**（`decorateTaaPass` 的返回值，经
- * `SceneEnv::aoAppliedPreTemporal`），**不是配置键 `taa.enabled`**——offscreen 变体配置开了 TAA
+ * `SceneEnv::aoAppliedPreTemporal`），**不是配置键 `taa.enabled`**——自定义 blit 上屏图配置开了 TAA
  * 也会装饰失败（`decorateTaaOrThrow` 返回 false），拿配置派生就会「taa pass 不存在 + tonemap
  * 又跳过」= AO 一次都不施加。两个分支位精确（`lerp(x,1,1) ≡ 1.0`、`lerp(x,1,0) ≡ x`）
  * ⟹ TAA 关时 tonemap 逐位不变（门红线）。

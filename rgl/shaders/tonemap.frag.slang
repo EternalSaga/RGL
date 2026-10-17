@@ -106,7 +106,7 @@ float4 main(TonemapInput input) : SV_Target
     const float ao = aoTex.Sample(hdrSampler, uv).r;
     // 批 13.6：AO 施加点已搬进 taa pass（= 时域滤波**之前**）。本 pass 只在 **taa pass 不在
     // 图里**时施加（flag = 0），否则双施。flag 由 CPU 写**实际图形态**（不是配置键 taa.enabled
-    // ——offscreen 变体装饰失败时它仍为 true，拿配置派生会双跳成零施）。
+    // ——自定义 blit 上屏图装饰失败时它仍为 true，拿配置派生会双跳成零施）。
     // 两个分支都位精确：lerp(x, 1, 1) ≡ 1.0、lerp(x, 1, 0) ≡ x ⟹ TAA 关时本行逐位 = 改前
     // （门红线：TAA 关截图 sha256 必须不变）。
     hdr *= lerp(lerp(1.0, ao, readAoStrength()), 1.0, readAoAppliedPreTemporal());

@@ -859,18 +859,19 @@ TEST_CASE("segmentSpan 覆盖 kAllDrawSources 每个段名（表 ↔ if 链的�
     CHECK(unknown.data() == list.calls.data() + 3);
 }
 
-TEST_CASE("graphHasDeferredLight：deferred 的「图事实」判据（三张内建图 + 两个反例）") {
+TEST_CASE("graphHasDeferredLight：deferred 的「图事实」判据（两张内建图 + 两个反例）") {
     // 收口原 IZB / EVSSM 各写一份逐字相同的 any_of（vkrenderer_passrec 两处）。
     // 语义 = 图事实（有没有人在跑 deferred 光照），**不是**配置层的 variant——
     // 两者不等价正是本判据存在的理由（自定义 Lua 图可在 forward 变体下手写 light pass）。
     // 变异红线：判据的 kind 侧或 state 侧任一半被删 → 下面两条反例立刻变 true 而红。
+    // （原第三条内建 offscreen 图的 CHECK 随该变体删除〔2026-10-18 刀①〕；blit 上屏形态
+    //  的存活表示 = tests/test_offgraph_contract.cppm 的 offscreenLikePasses。）
     const auto passesOf = [](const RgGraphDesc& d) {
         auto g = compileRenderGraph(d);
         REQUIRE(g.has_value());
         return g->passes;
     };
     CHECK(graphHasDeferredLight(passesOf(defaultRenderGraphDesc())) == false);   // forward HDR
-    CHECK(graphHasDeferredLight(passesOf(offscreenRenderGraphDesc())) == false); // blit 变体
     CHECK(graphHasDeferredLight(passesOf(deferredRenderGraphDesc())) == true);   // 内建 deferred
 
     // 反例 1：drawMesh 写 state="light" —— kind 不对，不算（且执行器 state 词表也不认它）

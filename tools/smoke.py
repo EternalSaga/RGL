@@ -33,7 +33,7 @@ errors 计数抓 `[error]` 级日志行：引擎自身 error 与 VVL 的 VUID �
      还原 → 重新 `just build` → 必须回 PASS。闸门不红 = 开关漂了或本档没生效。
 
 用法:
-    python tools/smoke.py smoke [--variant forward|deferred|offscreen]
+    python tools/smoke.py smoke [--variant forward|deferred]
                                [--from-build] [--frames N] [--timeout S] [--sync]
     python tools/smoke.py shot  [--name NAME] [--size WxH]
                                [--variant ...] [--from-build] [--frames N]
@@ -80,7 +80,7 @@ LOG_PATH = BUILD_RGL / "smoke_run.log"
 EXE_NAME = "rgl.exe" if os.name == "nt" else "rgl"
 # configDir() 里必须齐的配置（少一个引擎就启动失败，见 main_impl.cppm loadAllConfigs）
 CONFIG_FILES = ("camera.lua", "scene.lua", "runtime.lua", "diagnostics.lua", "render_graph.lua", "shadow.lua")
-VALID_VARIANTS = ("forward", "deferred", "offscreen")
+VALID_VARIANTS = ("forward", "deferred")
 # `--set [FILE:]KEY=VALUE` 的目标文件白名单（批 15.2 子步 D1）。为什么要有这张表而不是
 # "前缀是什么就打开同名文件"：拼错的目标（`--set camrea:mode=...`）会去 staging 里新建一个
 # 没人加载的 camrea.lua ⟹ **静默不生效**，而 patch_lua 的"键命中 ≠ 1 即 FAIL"护栏在错误
@@ -886,8 +886,8 @@ def parse_args() -> argparse.Namespace:
                     help="runtime.lua ssr 块 enabled = true（屏幕空间反射，批 15.3B 起 = "
                          "trace + apply 两 pass）。双向核对：开了没建齐 ssr_trace/ssr 两行 RT "
                          "= FAIL；没开却建了 = FAIL（门关不拢 = 「门开=门关逐位相同」红线失效）。"
-                         "🔴 债-129 S3-C 起没有「图形态不支持」这一档：forward / offscreen 图配 "
-                         "ssr.enabled=true 是**引擎拒启动**（smoke 报「引擎非零退出」）")
+                         "🔴 债-129 S3-C 起没有「图形态不支持」这一档：forward 图（或缺 G-buffer "
+                         "通道齐备的自定义图）配 ssr.enabled=true 是**引擎拒启动**（smoke 报「引擎非零退出」）")
     ap.add_argument("--aa", choices=("off", "fsr", "taa"), default=None,
                     help="runtime.lua aa（批 14.6 抗锯齿三态开关）：off = 出厂默认（无 TAA "
                          "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开"

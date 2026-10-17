@@ -635,7 +635,7 @@ std::vector<RgOffGraphWorkDecl> Renderer::offGraphWorkDecls() {
 	// 锚点用 pass_vocabulary 的状态名常量，不用字面量：状态名一旦改名，这里跟着走，
 	// 而原先写在 C++ 里的字符串比较会静默失配（判据 = 启动期 throw，不是画面悄悄不对）。
 	// 🔴 三条 beforePass 全部标了 mayBeAbsent（债-128：申报集不随变体缩小——forward 图没有
-	// drawLight "light"，offscreen 图没有 tonemap），meshlet_cull 挂帧首段恒可解析（且
+	// drawLight "light"，blit 上屏的自定义图没有 tonemap），meshlet_cull 挂帧首段恒可解析（且
 	// framePrologue + mayBeAbsent 被 build 拒）。容忍仍是**逐条显式**：每条自带理由与兜底
 	// （见各条注释），新申报默认必须命中 ⟹「state 改名 = 装配错」的启动期护栏对所有未标
 	// 项活着（单元红点 = tests 债-128 段 ④；扩到第四条的读数 → §7.21 M-d/M-e）。
@@ -670,9 +670,9 @@ std::vector<RgOffGraphWorkDecl> Renderer::offGraphWorkDecls() {
 		},
 		RgOffGraphWorkDecl{
 			.name = std::string{kWorkFsrUpscale},
-			// 债-128 第二刀：offscreen 内建图没有 tonemap pass（三段渲 scene_rt + composite
-			// blit，SDR）⟹ FSR 在该图本无落点。**拿什么换了什么**：换掉的 = 本条申报
-			// 「锚点命中 0 = 启动期 throw」；换回的 = offscreen 变体能起跑（forward 图有
+			// 债-128 第二刀：无 tonemap pass 的图（原 offscreen 内建图，2026-10-18 刀①已删，
+			// 该形态现仅自定义 blit 上屏图可写）⟹ FSR 在该图本无落点。**拿什么换了什么**：
+			// 换掉的 = 本条申报「锚点命中 0 = 启动期 throw」；换回的 = 该形态能起跑（forward 图有
 			// tonemap，该形态下本条**仍可调度**，单测钉住）。残余风险（输入齐备却没有
 			// tonemap pass）不静默，三条兜底：
 			// ① kTonemapState 是编译期常量——状态名改名走编译，不是运行期静默改名；

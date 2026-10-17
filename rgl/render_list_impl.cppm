@@ -447,7 +447,7 @@ void fillTaaData(FrameDrawList& out, const ViewProjection& viewProj, const Scene
 	const glm::vec2 histShift = env.taaBaseSpace ? taa.payloadPrevContentShift : glm::vec2{0.0f};
 	// z = **AO 已由 taa pass 施加**（批 13.6）：tonemap 见 1 就跳过自己的 AO 乘法，见 0 照旧施加。
 	// 取 `env.aoAppliedPreTemporal`（= decorateTaaPass **实际**结果），**不是** `env.taaEnabled`（配置键）
-	// ——offscreen 变体配置开了 TAA 也装饰失败，用配置派生就会「taa pass 不存在 + tonemap 又
+	// ——自定义 blit 上屏图配置开了 TAA 也装饰失败，用配置派生就会「taa pass 不存在 + tonemap 又
 	// 跳过」= AO 一次都不施加。两个分支位精确（lerp(x,1,1)≡1.0 / lerp(x,1,0)≡x）
 	// ⟹ TAA 关时 tonemap 逐位不变（门红线）。本函数**无条件调用**，故门关态也保证写对 0。
 	// w = **历史拒收诊断门标志**（`taa.diag_reject`，默认 0 = 今天）：1 ⟹ taa.frag 把逐像素

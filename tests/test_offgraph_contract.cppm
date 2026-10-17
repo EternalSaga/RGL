@@ -60,8 +60,9 @@ module;
  *  19. 把 `mayBeAbsent` 扩成三条申报以外的一切形态（第二刀：fsr_upscale 也标可缺席后）：
  *      标到帧首段项（meshlet_cull）= build 拒「无意义组合」并点名，单元层等价形态由
  *      「锚点可缺席（逐条显式）」的帧首段段钉住，真程序读数 = 启动 throw（M-d → §7.21）；
- *      反向把三条的标记回退成必须命中 = offscreen/forward 变体重新起不来，判据在**真程序层**
- *      （生产表不是单测输入，M-e = `just smoke --variant offscreen` 必须红 → §7.21）。
+ *      反向把三条的标记回退成必须命中 = 无 tonemap 形态的图重新起不来，判据在**真程序层**
+ *      （生产表不是单测输入；offscreen 内建变体已删〔刀①〕，该形态现仅自定义 blit 图可写，
+ *      M-e = 起跑即启动 throw → §7.21）。
  *      未标项命中 0 仍 Error 的半边由 ④ 段常驻守着——「扩」与「缩」各有一把刀，缺一把
  *      「三条」这个口径就只是注释。
  *
@@ -163,8 +164,9 @@ std::vector<RgPassPlan> forwardLikePasses() {
 }
 
 /**
- * offscreen 形态的 pass 序列（照 `offscreenRenderGraphDesc`：三段渲 scene_rt + composite
- * blit，SDR）：**没有 tonemap**（也没有 drawLight "light"）——债-128 第二刀里
+ * offscreen 形态的 pass 序列（原内建 offscreen 图的形状：三段渲 scene_rt + composite
+ * blit，SDR；该变体已删〔2026-10-18 刀①〕，本函数是该形态在测试里的唯一存活表示）：
+ * **没有 tonemap**（也没有 drawLight "light"）——债-128 第二刀里
  * fsr_upscale 的锚点在该图缺席的直接来源。
  */
 std::vector<RgPassPlan> offscreenLikePasses() {

@@ -1026,7 +1026,7 @@ def cfg_from(args: argparse.Namespace) -> Cfg:
 
 
 def add_cfg_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--variant", choices=["forward", "deferred", "offscreen"])
+    p.add_argument("--variant", choices=["forward", "deferred"])
     p.add_argument("--aa", choices=["off", "taa", "fsr"])
     p.add_argument("--size")
     p.add_argument("--frames", type=int, default=8, help="第 N 帧截图（默认 8，同 just smoke）")

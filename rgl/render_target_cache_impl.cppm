@@ -75,7 +75,7 @@ std::expected<void, Error> checkSpec(const std::string& name, const RtAttachment
  *
  * 🔴 跨重建复用：`descriptors` 只在首建 resize，此后**永不 resize**（vector 缓冲地址
  * = 描述符指针链的稳定前提，见 RtDescriptor 头注释），且**只有首建领号**——重建换图
- * 不换槽，烘进管线条目的槽号因此永久有效。forward/offscreen 图不 bind 这些槽 =
+ * 不换槽，烘进管线条目的槽号因此永久有效。不声明这些附件的图（如 forward）不 bind 这些槽 =
  * 无副作用（行为中性）。
  * @param slot 附件（map 节点，地址稳定）
  * @param name 附件名（领号时写进槽台账的 owner 名）

@@ -429,7 +429,7 @@ bool decorateVelocityOrThrow(RgGraphDesc& desc, bool velocityEnabled) {
 	if (decorateVelocityPass(desc))
 		return true;
 	throw decorationRefused("velocity（aa=\"fsr\" 隐含打开）", graphDecoratedTooLate(desc) ? "次序判据 graphDecoratedTooLate 命中 = 图里已有 taa / ao_apply pass（**不是**锚点未命中）⟹ main_impl 的「velocity 先于 taa / ao_apply 装饰」调用序被挪错：本 pass 会夹在它们与 tonemap 之间、吃不到时域滤波，而 compile 照样过、画面静默错"
-		: "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」且「sampleRead 场景色附件」（速度场 pass 的落点）；offscreen 变体用 composite blit 上屏（transferRead ≠ sampleRead）必无落点",
+		: "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」且「sampleRead 场景色附件」（速度场 pass 的落点）；自定义 blit 上屏图用 composite blit（transferRead ≠ sampleRead）必无落点",
 		graphDecoratedTooLate(desc) ? "把 decorateVelocityOrThrow 的调用挪回 decorateTaaOrThrow / decorateAoApplyOrThrow 之前（本文件 compileGraphOrThrow 尾段；次序契约与判据本体 → render_graph.cppm 的 graphDecoratedTooLate）" : "variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"taa\"（runtime.lua，速度场由 aa 派生）");
 }
 
@@ -456,7 +456,7 @@ bool decorateAoApplyOrThrow(RgGraphDesc& desc, bool fsrEnabled) {
 		return true;
 	throw decorationRefused("aa = \"fsr\"", "decorateAoApplyPass 两条判据之一未过：① taa pass 已在图里 = 施加点已被它占（aa 三态互斥 ⟹ "
 		"正常配置走不到 ①，走到就是 main_impl 的装饰顺序被挪错）② swapchainColorConsumerIndex 未命中 = 无 pass 同时「写 swapchain」且"
-		"「sampleRead 场景色」（本 pass 要插在它前并把色输入换成 ao_applied）；offscreen 变体 blit 上屏故必然无落点",
+		"「sampleRead 场景色」（本 pass 要插在它前并把色输入换成 ao_applied）；自定义 blit 上屏图 blit 上屏故必然无落点",
 		"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"taa\"");
 }
 
@@ -474,7 +474,7 @@ bool decorateTaaOrThrow(RgGraphDesc& desc, bool taaEnabled) {
 	if (decorateTaaPass(desc))
 		return true;
 	throw decorationRefused("aa = \"taa\"", "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」且「sampleRead "
-		"场景色附件」（= tonemap，taa pass 要插在它前并把它的色输入换成 taa_out）；offscreen 变体用 composite blit 上屏 = 必无落点",
+		"场景色附件」（= tonemap，taa pass 要插在它前并把它的色输入换成 taa_out）；自定义 blit 上屏图用 composite blit = 必无落点",
 		"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"fsr\"");
 }
 
@@ -495,13 +495,13 @@ bool decorateSsrOrThrow(RgGraphDesc& desc, bool ssrEnabled) {
 		return true;
 	throw decorationRefused("ssr.enabled = true", "decorateSsrPass 三条判据之一未过：① taa / ao_apply 已在图里 = main_impl 的"
 		"「SSR 先于它们装饰」调用序被挪错 ② swapchainColorConsumerIndex 未命中 = 无 pass 同时「写 swapchain」且「sampleRead 场景色」"
-		"（offscreen 变体 blit 上屏）③ G-buffer 契约表 kGBufferAttachments 通道不齐 = 这张图不是 deferred 图（forward 不跟 = D1 对等豁免，"
+		"（自定义 blit 上屏图）③ G-buffer 契约表 kGBufferAttachments 通道不齐 = 这张图不是 deferred 图（forward 不跟 = D1 对等豁免，"
 		"docs/phase15_plan.md §0.1；含不被引用的 emissive ⟹ compile 不替你拒这条）", "variant 改 \"deferred\"，或 ssr.enabled = false");
 }
 
 /**
  * 加载 configs/render_graph.lua + `compileRenderGraph`（校验 + barrier 布局链推导）+ variant
- * 求值 `deferredMode`（forward(默认) / deferred / offscreen 三张内建 exclusive 图变体）。
+ * 求值 `deferredMode`（forward(默认) / deferred 两张内建 exclusive 图变体；offscreen 档已删，刀①）。
  *
  * 四个图形态开关全部由 `RuntimeConfig` 派生（`aaWantsTaa()` / `velocityField` / `aaWantsFsr()` /
  * `ssr.enabled`）——**单一真相源在 runtime_config**，调用点不逐项推导，省行也防漏传。
@@ -531,7 +531,7 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 	// false 的图 compile **照样编得过**（能力没落图不是布局错误），warn + 继续跑 = 配了能力却静默
 	// 拿到出厂图 = 本债的病本体。消息必须点名「哪个配置键 / 哪条锚点判据没命中 / 怎么修」，
 	// 让「为什么没插进去」不用读代码（旧 warn 已做到的那半保留）。两处同门 = diagnostics.picking：
-	// object_id 的锚点内建三图都有（缺它 = 自定义 passes 的事），高亮的锚点 offscreen 变体必不命中
+	// object_id 的锚点内建两图都有（缺它 = 自定义 passes 的事），高亮的锚点在 blit 上屏图必不命中
 	// （blit 上屏 = 无 sampleRead 色消费者）——这两条事实从旧消息里挪到这里，消息本体保持短。
 	if (diagnostics().picking && !decoratePickingPass(graphConfig->desc)) {
 		throw decorationRefused("diagnostics.picking = true", "decoratePickingPass 锚点未命中 = 图里没有「kind = drawMesh 且 "
@@ -550,7 +550,7 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 		// 🔴 债-129 S3-C：这里原来还有一句 `result.highlightPlan = {};`（"没落图 = 没有可登记的
 		// 东西"）—— 随 warn→throw 一起删：抛出去之后 result 整个作废，那句成了不可达的死码。
 		throw decorationRefused("diagnostics.picking = true", "planHighlightDecoration 判不适用 = 图里没有「首个 sampleRead 场景色"
-			"附件」的 pass（高亮要插在它之前、写同一张色附件叠加），或其前无 depth 写者可借；offscreen 变体 blit 上屏 = 无色消费者",
+			"附件」的 pass（高亮要插在它之前、写同一张色附件叠加），或其前无 depth 写者可借；自定义 blit 上屏图 = 无色消费者",
 			"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 diagnostics.lua 的 picking = false");
 	}
 	// Phase 11 批 11.2：阴影 pass 装饰**无条件**（不再由 diagnostics 门控）。原因（实测驱动）：

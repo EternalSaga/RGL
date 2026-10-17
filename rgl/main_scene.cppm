@@ -483,8 +483,8 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
  *      ao 不能用共享 sampler：共享那份是 LINEAR + mipmap LINEAR，而 D32Sfloat 深度图
  *      不可过滤（invalid usage），且深度插值无物理意义——见 SamplerLibrary::ensurePointSampler。
  *
- * 为何无条件建（不分 forward/deferred）：forward/deferred 两图都含 ao + tonemap pass；
- * offscreen DIAG 变体图两者都不含，条目闲置无害（管线表条目不绑定即零成本）。
+ * 为何无条件建（不分 forward/deferred）：内建两图都含 ao + tonemap pass；
+ * 自定义图可能两者都不含，条目闲置无害（管线表条目不绑定即零成本）。
  *
  * 槽号契约：RT 槽与深度槽都在两个 add*Entry **之前**领——槽号一经 bake 进管线 binding
  * 即终身有效；后续 resize 换图只重写描述符内容（RenderTargetCache::ensure / 
@@ -713,7 +713,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	const bool ssrDecorated = graphResult.ssrDecorated;
 	// 批 13.6：AO 施加点标志 = **实际图形态**（`decorateTaaPass` 结果），**不是**配置推导值
 	// （`aaWantsTaa()`）。true ⟹ AO 已在 tonemap **之前**施加过，tonemap 跳过；false ⟹ 没有更早的
-	// 施加点（含 offscreen 变体：aa 要了 TAA 但装饰失败），AO 留在 tonemap 施加。
+	// 施加点（S3-C 起装饰失败即拒启动，false 只剩「aa 不要 taa」一种来源），AO 留在 tonemap 施加。
 	// 取错源 = AO 双施或零施。消费者 = scene data @723600.z → fillTaaData / tonemap.frag。
 	// 批 14.5 第三批：来源从「只有 taa」变成**两个**——`taaDecorated`（AO 乘在 taa.frag 里，
 	// 批 13.6）或 `aoApplyDecorated`（AO 乘在专用 ao_apply pass 里，与"谁做时域"解耦）。

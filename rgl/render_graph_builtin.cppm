@@ -11,8 +11,8 @@ import vkerror;
 namespace RGL {
 
 // 内建图描述 + 编译期自检（2026-09-11 Phase 8 批次 ①自 render_graph_impl 拆出：
-// impl 文件超 500 行阈值，内置三图描述属"数据"、compileRenderGraph 属"算法"，
-// 分单元各管一头）。本单元 = default/deferred/offscreen 三图声明 + defaultRenderGraph
+// impl 文件超 500 行阈值，内置两图描述属"数据"、compileRenderGraph 属"算法"，
+// 分单元各管一头）。本单元 = default/deferred 两图声明 + defaultRenderGraph
 // 单例 + renderGraphSelfCheck；算法与 usage 推导留 render_graph_impl。
 
 namespace {
@@ -25,7 +25,7 @@ RgPassAttachment writeAtt(std::string name, RgUsage usage, RgLoadOp load, RgStor
 }
 
 /** tonemap pass 速构（Phase 8 ①：forward/deferred 共用拓扑尾段——采 scene_hdr + ao 写
- * swapchain）。ao 输入对无 ao pass 的图（offscreen 变体不装配）无害：本速构只被
+ * swapchain）。ao 输入对无 ao pass 的图（自定义图可不装配）无害：本速构只被
  * forward/deferred 使用，二者都有 ao pass。 */
 RgPassDesc tonemapPass() {
 	return RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
@@ -104,41 +104,9 @@ const CompiledRenderGraph& defaultRenderGraph() {
 	return graph;
 }
 
-/** offscreenRenderGraphDesc 定义（接口注释见 render_graph.cppm）。Phase 8 决策：DIAG 变体保持 SDR 不接 tonemap。 */
-const RgGraphDesc& offscreenRenderGraphDesc() {
-	// offscreen 图变体（批次 4，旧 DIAG 转正）：三段渲 scene_rt + composite blit。
-	// scene_rt format 留 "inherit"——执行器解析为 swapchain 格式（blit LINEAR 兼容前提）；
-	// 清除值与默认图一致（0.1 灰背景 / depth 1.0）
-	static const RgGraphDesc desc = [] {
-		auto scenePass = [](std::string name, const char* source, RgLoadOp colorLoad,
-		                    RgLoadOp depthLoad, RgStoreOp depthStore) {
-			return RgPassDesc{.name = std::move(name), .state = source, .drawSource = source,
-				.outputs = {writeAtt("scene_rt", RgUsage::colorWrite, colorLoad, RgStoreOp::store),
-					writeAtt("depth", RgUsage::depthWrite, depthLoad, depthStore)}};
-		};
-		return RgGraphDesc{
-			.attachments =
-				{
-					RgAttachmentDesc{.name = "swapchain", .kind = RgAttachmentKind::swapchain},
-					RgAttachmentDesc{.name = "depth", .kind = RgAttachmentKind::depth},
-					RgAttachmentDesc{.name = "scene_rt", .kind = RgAttachmentKind::offscreen},
-				},
-			.passes =
-				{
-					scenePass("opaque", "opaque", RgLoadOp::clear, RgLoadOp::clear, RgStoreOp::store),
-					scenePass("skybox", "skybox", RgLoadOp::load, RgLoadOp::load, RgStoreOp::store),
-					scenePass("transparent", "transparent", RgLoadOp::load, RgLoadOp::load,
-						RgStoreOp::dontCare),
-					RgPassDesc{.name = "composite", .kind = RgPassKind::blit,
-						.outputs = {writeAtt("swapchain", RgUsage::transferWrite, RgLoadOp::load,
-							RgStoreOp::store)},
-						.inputs = {writeAtt("scene_rt", RgUsage::transferRead, RgLoadOp::load,
-							RgStoreOp::store)}},
-				},
-		};
-	}();
-	return desc;
-}
+/** offscreen 图变体已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §2：零使用者）。
+ *  blit pass 机制与 `RgAttachmentKind::offscreen` 固有能力**都不在本刀射程**——前者仍被
+ *  本文件 selfCheck 的合成图与自定义 Lua 图消费，后者 pervasive（scene_hdr / ao / gbuffer_*）。 */
 
 /** deferredRenderGraphDesc 定义（接口注释见 render_graph.cppm）。Phase 8 ①：light 输出改 scene_hdr + tonemap 上屏。 */
 const RgGraphDesc& deferredRenderGraphDesc() {

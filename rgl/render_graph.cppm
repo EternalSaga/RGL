@@ -355,7 +355,7 @@ export inline constexpr std::string_view kDepthName = "depth";
 /**
  * Phase 8 批次 ①：HDR 累加链附件契约（单一真相源）——forward/deferred 图的颜色目标
  * scene_hdr（rgba16_sfloat offscreen RT），tonemap pass 采样后写 swapchain。
- * 消费方 = render_graph_builtin 三图描述 + Resources::ensureSceneHdrSlot（启动期建
+ * 消费方 = render_graph_builtin 两图描述 + Resources::ensureSceneHdrSlot（启动期建
  * RT + 采样堆槽）+ addTonemapEntry（烘焙 binding 4）。
  */
 export inline constexpr std::string_view kSceneHdrName = "scene_hdr";
@@ -630,7 +630,7 @@ export struct RgPassPlan {
  *   nullopt，执行器跳过；present 语义本身仍归执行器）；
  * - swapchainWaitStage：submit 的 imageAvailable wait stage = swapchain 附件在
  *   命令流中首次实际使用的 dstStage（编译期派生；现单段直渲 =
- *   ColorAttachmentOutput、offscreen 变体 blit 图 = Transfer，与旧手工分支逐位一致）；
+ *   ColorAttachmentOutput、自定义 blit 上屏图 = Transfer，与旧手工分支逐位一致）；
  * - warnings：非致命提示（如 attachment 从未被任何 pass 引用）。
  */
 export struct CompiledRenderGraph {
@@ -640,8 +640,8 @@ export struct CompiledRenderGraph {
 	// 执行器跳过 ⑫；present 语义本身仍归执行器）
 	std::optional<RgBarrierPlan> presentTransition;
 	// submit 的 imageAvailable wait stage = swapchain 附件在命令流中首次实际使用
-	// 的 dstStage（编译期派生；现单段直渲 = ColorAttachmentOutput、offscreen 变体
-	// blit 图 = Transfer，与旧手工分支逐位一致）
+	// 的 dstStage（编译期派生；现单段直渲 = ColorAttachmentOutput、自定义 blit
+	// 上屏图 = Transfer，与旧手工分支逐位一致）
 	vk::PipelineStageFlags2 swapchainWaitStage = vk::PipelineStageFlagBits2::eTopOfPipe;
 	std::vector<std::string> warnings;
 };
@@ -818,14 +818,10 @@ export const CompiledRenderGraph& defaultRenderGraph();
 export const RgGraphDesc& defaultRenderGraphDesc();
 
 /**
- * offscreen 图变体（Phase 6 批次 4，旧 DIAG（RGL_OFFSCREEN env，已转 variant 配置）转正）：
- * 三段渲入 offscreen 附件 scene_rt（format=inherit → 执行器解析为 swapchain 格式，
- * blit LINEAR 的 VVL 格式兼容前提）+ composite blit pass 上屏。present 转换 src 自动
- * 变 Transfer（blit 是 swapchain 最后写），submit waitStage 派生 = Transfer——
- * 与旧手工分支语义等价。静态单例。
- * @return offscreen 变体图声明（引用）
+ * offscreen 图变体已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §0/§2：三段渲
+ * scene_rt + composite blit 的呈现图全仓零使用者；blit **机制**保留——Lua 词表仍可
+ * 声明 blit pass，自定义图是它的生产者。原图声明见 `git show HEAD~:本文件`）。
  */
-export const RgGraphDesc& offscreenRenderGraphDesc();
 
 /**
  * Phase 7 D1（render_graph.lua variant="deferred"）：3-pass deferred 图——geometry pass
@@ -848,9 +844,9 @@ export const RgGraphDesc& deferredRenderGraphDesc();
  * 调用点 = main 装配层且 `diagnostics.picking` 门控（默认关 = 不调用 = 图逐位同，D10）。
  * 🔴 债-129 S3-C：调用点拿到 false = **抛 std::runtime_error 拒启动**（旧行为是 warn 后继续跑 =
  * 点选静默不可用）。本装饰的返回契约不变（false = 「落没落」的单一来源，单测直接吃它）。
- * ⚠ 内建三图（forward / deferred / offscreen）**都有**这种 pass ⟹ 三条路线都支持本装饰
- * （实测 2026-10-17：`--variant offscreen --set diagnostics:picking=true` 走到的是 highlight 那条
- * 锚点、不是这条；旧注释写「offscreen 变体不支持」是错的，已改准）。缺它的只有自定义 passes。
+ * ⚠ 内建两图（forward / deferred，2026-10-18 刀①后 offscreen 已删）**都有**这种 pass
+ * ⟹ 两条路线都支持本装饰。缺它的只有自定义 passes（blit 上屏图 = transferRead ≠
+ * sampleRead 必无落点）。
  * @param desc 图声明（原地修改：追加 attachment + pass）
  * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
  */
@@ -866,7 +862,7 @@ export bool decoratePickingPass(RgGraphDesc& desc);
  *     （loadOp=load，depthWrite=false 见 state_kit highlightState），高亮以 alpha
  *     混合叠加在成片上。故格式/尺寸天然与被高亮内容一致，无 RT 分配开销。
  *  2. **插在「首个采样场景色附件的 pass」之前**（forward/deferred = tonemap 前，
- *     offscreen = composite blit 前），而非图末——图末会落在 tonemap 之后，此时色附件
+ *     自定义 blit 上屏图 = composite blit 前），而非图末——图末会落在 tonemap 之后，此时色附件
  *     已无人采样，高亮画了也不可见。附件名由消费 pass 的 sampleRead 输入反查，不硬编码。
  *  3. 借 depth 前把上一个写 depth 的 pass 的 storeOp 从 dontCare 改成 store（forward 图
  *     transparent 段按「depth 后续无人用」声明 dontCare）——否则高亮读到未定义内容。
@@ -1016,7 +1012,7 @@ export bool graphDecoratedTooLate(const RgGraphDesc& desc);
  * 与 picking / highlight 装饰的次序契约：本装饰**必须最后调**（在 highlight 之后），
  * 否则 highlight 插进 taa 与 tonemap 之间会让高亮吃不到时域滤波。
  * @param desc 图声明（原地修改）
- * @return true = 已装饰；false = 图里没有"写 swapchain 且采色"的 pass（DIAG offscreen 变体）
+ * @return true = 已装饰；false = 图里没有"写 swapchain 且采色"的 pass（自定义 blit 上屏图）
  */
 export bool decorateTaaPass(RgGraphDesc& desc);
 
@@ -1031,7 +1027,7 @@ export bool decorateTaaPass(RgGraphDesc& desc);
  *  1. 图里已有 `taa` pass —— AO 施加点就在它里面（批 13.6），再插本 pass = **双施**。
  *     Phase 13 已冻结，taa.frag 一字不动，所以解耦靠"谁在图里谁负责"而不是改 taa。
  * （另有一条与 taa / velocity / ssr **共用**的锚点判据：找不到「写 swapchain 且 sampleRead
- *  色附件」的 pass 也不插 —— DIAG offscreen 变体用 blit 上屏，`transferRead ≠ sampleRead`。）
+ *  色附件」的 pass 也不插 —— 自定义 blit 上屏图 `transferRead ≠ sampleRead`。）
  *
  * 🔴 **债-129 S3-A 换契约**：原第 2 条「图里没有 `ao` 附件 ⟹ 没有可见度可乘 ⟹ 跳过」**已删**。
  *  缺输入附件**不再**返回 false（旧行为 = 包装层打一条 debug 然后降级继续跑 = AO 施加点静默
@@ -1071,7 +1067,7 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  *     「taa 在图里就跳过」**语义不同**：那条是互斥（施加点唯一），本条是时序（串联）。
  *     🔴 判据本体自债-129 S3 起住在 `graphDecoratedTooLate`（导出谓词，**与 velocity 装饰器
  *     共用这一份**；本装饰原跳过条件 1 的那个循环就是它的出处，抽出去是纯抽取）。
- *  2. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（offscreen DIAG 变体用 blit
+ *  2. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（自定义 blit 上屏图用 blit
  *     上屏，transferRead ≠ sampleRead）——与 taa / velocity / ao_apply 同一锚点判据。
  *  3. 图里没有 **kGBufferAttachments 契约表的全部通道**（缺一即跳过）。**这就是 SSR 的
  *     deferred-only 边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1）。
@@ -1125,7 +1121,7 @@ export bool decorateSsrPass(RgGraphDesc& desc);
  *     ⚠ **两半可达性不同**：`aa` 三态互斥且 `velocityField` 只在 `aa="fsr"` 时置真 ⟹
  *     velocity 与 taa **不可能同时在图里**（那一半是防御性的，`velocity_field` 键撤并前可达）；
  *     今天真正可达的是 **ao_apply 那一半**（`aa="fsr"` 同时开两者）。
- *  2. 找不到「写 swapchain 且 sampleRead 色附件」的 pass（DIAG offscreen 变体用 blit 上屏，
+ *  2. 找不到「写 swapchain 且 sampleRead 色附件」的 pass（自定义 blit 上屏图用 blit 上屏，
  *     `transferRead ≠ sampleRead`）——与 taa / ssr / ao_apply 同一锚点判据。
  *
  * @param desc 图声明（原地修改）

@@ -295,12 +295,13 @@ std::expected<std::vector<RgPassDesc>, Error> readPasses(sol::table root,
 }
 
 /**
- * 顶层 variant 字段选路（替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）：deferred/offscreen
+ * 顶层 variant 字段选路（替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）：deferred
  * 直返内建图配置（exclusive，文件 passes 忽略）；"forward"/缺失 = nullopt
  * （解析文件 passes）；未知串 = ConfigLoadFailed（消息逐字保持拆分前内联文案）。
+ * ⚠ offscreen 档已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §2：零使用者）。
  * @param root 配置根表
  * @param path 配置路径（错误信息用）
- * @return 内建图配置 = deferred/offscreen 命中；nullopt = forward 或缺失；非法 variant = Error
+ * @return 内建图配置 = deferred 命中；nullopt = forward 或缺失；非法 variant = Error
  */
 std::expected<std::optional<RenderGraphConfig>, Error> resolveVariantConfig(sol::table root,
 	std::string_view path) {
@@ -309,12 +310,10 @@ std::expected<std::optional<RenderGraphConfig>, Error> resolveVariantConfig(sol:
 		return std::nullopt;
 	if (*variant == "deferred")
 		return RenderGraphConfig{RgGraphVariant::deferred, deferredRenderGraphDesc()};
-	if (*variant == "offscreen")
-		return RenderGraphConfig{RgGraphVariant::offscreen, offscreenRenderGraphDesc()};
 	if (*variant != "forward")
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 			fmt::format("render graph config ({}): unknown variant '{}' "
-				"(want forward/deferred/offscreen)", path, *variant)});
+				"(want forward/deferred)", path, *variant)});
 	return std::nullopt;
 }
 
@@ -323,7 +322,7 @@ std::expected<std::optional<RenderGraphConfig>, Error> resolveVariantConfig(sol:
 /**
  * loadRenderGraphConfig 定义（接口注释见 render_graph_config.cppm）：sol2 沙箱
  *（仅 base+table，dofile/loadfile/package/require 置 nil）执行脚本取根表；顶层
- * variant 定路线（deferred/offscreen 直返内建图，exclusive）；forward 逐条解析
+ * variant 定路线（deferred 直返内建图，exclusive）；forward 逐条解析
  * attachments/passes（format 经 isKnownRgFormat 词表前置校验，结构规则仍归
  * compileRenderGraph）；sol2 抛异常统一捕获转 ConfigLoadFailed。
  */
@@ -358,7 +357,7 @@ std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view p
 		// 同 scene_config：此版本 sol2 的 stack_proxy→sol::table 隐式转换有坑，用 .as<>
 		sol::table root = result[0].as<sol::table>();
 
-		// variant 顶层字段（替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）：deferred/offscreen
+		// variant 顶层字段（替代旧 RGL_DEFERRED/RGL_OFFSCREEN env）：deferred
 		// 直返内建图（exclusive，文件 passes 忽略）；"forward"/缺省 = 解析文件 passes。
 		// 选路判定见 resolveVariantConfig（上方匿名 namespace）。
 		auto preset = resolveVariantConfig(root, path);

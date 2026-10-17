@@ -1,8 +1,7 @@
 # 图变体收敛（forward / deferred / offscreen）
 
-> **状态：调研**（2026-10-17，同日二改：用户回答否掉了初稿的主结论，见 §3）。
-> 本文只出**事实与模型**，不含已拍板的施工承诺。
-> 上游：`docs/配置正交性_plan.md`（债-129）；MDI 侧定案：`docs/mdi_plan.md` §19.20。
+> **状态：现行·施工中**（2026-10-17 调研；2026-10-18 三枚裁决全部关闭，见 §6.1，开始施工）。
+> 上游：`docs/配置正交性_plan.md`（债-129，**已结案**）；MDI 侧定案：`docs/mdi_plan.md` §19.20。
 
 ## 0. 结论
 
@@ -73,31 +72,74 @@
 
 **保留**：B 类次序守卫（「TAA 必须最后」那类）——它与变体无关，是 S3 的真·剩余。
 **保留**：动态渲染图（`declarePass` / `withdrawPass`）——运行期图派生不受影响，死的只是**文件**写图。
+⚠ 2026-10-18 裁决后本表 ③④ **不执行**（文件写图保留 ⟹ 触发面仍在），且 ② 另欠一条 skybox 死路 → §6.2。
 
-## 6. forward 的成本表（拆轴后它只剩成本，没有模式包袱）
+## 6. forward 依赖盘点（2026-10-18 全量实测，替换初稿成本表）
 
-| 项 | 读数 |
-|---|---|
-| 🔴 **闭式解探针绑 forward** | `qa/configs/analytic/render_graph.lua:31 = "forward"` + `scene.lua:21` 的 forward 规格。它是五层判据里**唯一不吃基线图像**的那层 |
-| forward 的逐位锚点 | **0 条** ⟹ 今天只被"必须能起跑"覆盖，像素正确性全靠上面那层钉 |
-| 二相性漏进错误处理 | 同一种"规格缺失"：deferred **静默回落** `deferred_geometry`，forward **throw**（`main_scene.cppm:293-300`） |
-| 三套 qa 冻结靶 | `analytic` / `nm_rig` / `env_band` 用 `variant = "forward"`；实测它们的附件/pass 名集合与出厂 forward 图**逐字相同**（只是"选 forward"，不是自定义图） |
+初稿"很多 imgqa 只存在于 forward"**基本不成立**。25 条 imgqa 子命令逐个对账：
 
-🔴 **唯一硬前置：闭式解探针重立到 deferred。** 它要额外建模 G-buffer 编码（量化），是真活。
-**探针没重立之前不许删 forward**——那是拆掉自己唯一的无基线判据去换维护面。
+| 类别 | 条数 | 事实 |
+|---|---|---|
+| 🔴 真·只能 forward | **1**：`probe`（闭式解探针） | 依赖不是"最终像素必须 forward"，而是"着色输入不过 G-buffer 量化"（下详） |
+| 硬编码 deferred（izb / swim / shadow-kernel-scale 等） | 4 | 方向与本题相反，删 forward 零影响 |
+| 走交付 configs（已是 deferred） | 5 | 零影响 |
+| "默认 forward" | 12 | **全部只因合成 profile 的模板 = `qa/configs/analytic`**（`engine_profile.cpp:29`）+ 模板 `render_graph.lua:31` 一行。无任何命令硬编码 forward；模板改一行全体迁移。判据对象是上屏像素**统计量**（覆盖率/逐帧差），换路线换的是激励不是判据成立性 |
+| 不跑引擎（selftest / diffstruct 等） | 7 | 零影响 |
 
-## 7. 排序
+**探针的 forward 依赖精确到式**（三条实测，比初稿估的轻）：
 
-1. **债-129 剩余项先做完**（嵌套键护栏 → 拍板 A）。它们只碰配置面与 lint 表，不依赖变体存废；
-   且 D 刀已把 A 要动的行塌成块条目（`142f7c2`），现在改只碰块声明。
-2. **然后单独立项做闭式解探针重立**（§6 硬前置，要单独估一次成本）。
-3. **最后走 §5 的级联**，按 ①→⑤ 逐刀，每刀独立可验收（逐位锚 + `just gates`）。
-   ⚠ ① 可以**立刻单独做**（零前置、零使用者），且它一动，S3-C 的 4 条 C 类硬失败就只剩
-   "自定义 Lua 图"一个触发面——这本身就是"① 值不值得先做"的读数。
+1. 光照式两路**逐字相同**：`light.frag.slang:101-122` `shadeLight` ≡ `model_pbr_ibl.frag.slang:16-36`
+   `shadeDirect`（连 epsilon `1e-7·a2` 都一致）⟹ 探针闭式模型 `analytic.cpp:shadeDirect` 一行不改。
+2. tonemap 尾段（ACES + sRGB）两路**共用同一个 `tonemapPass()`** ⟹ 探针那半条链也不改。
+3. 唯一硬墙 = G-buffer 编码往返：`gbuffer_albedo` 8bit sRGB、`gbuffer_metalrough` 8bit unorm
+   （`gbuffer_contract.cppm:48-54`）。⚠ 初稿写"法线不经 **8bit** 量化"**数错**——normal 是
+   `rg16_snorm`，且探针场景法线轴对齐，oct 往返精确无损。要补的只是两个 8bit 通道的量化往返（~15 行）。
+
+**七道探针门在 deferred 下的对称性**（`qa/configs/analytic/scene.lua:11-16` + `runtime.lua:9-14`）：
+env.intensity / ambient / ao / exposure / shadow / wet 六道门 deferred 下同样成立；
+`skybox=false` 失效但对探针像素不承重（墙挡满画面，配置注释自称"双保险"）。
+
+**三套 forward 冻结靶的核验**：`analytic` 头注**没写任何必须 forward 的理由**（`:31` 是裸选择）；
+`nm_rig` 的 forward 锁**已被它自己的 `camera.lua:6-11` 判为不需要**（俯角 25° 地平线出画，注释明写
+"deferred 路线可用"）；`env_band` 的锁仍成立（3° 掠射上半屏是天穹，`skybox=false` 只在 forward 生效
+——该标志真实读取点 `render_list_impl.cppm:756`，靶注释里的行号已漂）。nm_rig / env_band
+**没有任何自动化消费者**（全仓 grep 只有 analytic 与 ssr_rig 被引用）。
+
+### 6.1 三枚裁决（2026-10-18 用户拍板）
+
+1. **探针重立 = 分段双锚**：最终像素锚保留（闭式补 G-buffer 量化往返，tonemap 尾段的唯一无基线判据）
+   \+ **新增 `gbuffer_*` 附件锚**（期望字节 = 纯编码闭式，零光照建模）。附件回读走现成通道：
+   RPC `/shot {gbuf:N}`（`debug_rpc_exec_impl.cppm:311-313`，imgqa 客户端补 `gbuf` 参数即可）。
+   红灯分段归因：gbuffer 锚红 = 编码契约坏；最终锚红而 gbuffer 锚绿 = 光照或 tonemap 坏。
+   **G-buffer 锚是 forward 下不可能存在的判据** ⟹ 删 forward 不是失去无基线判据，是把它变深、变多。
+2. **文件写图保留，换触发**：`variant` 键**整个消失**（§4 裁决：没有消费者的真相源）；
+   新触发 = 文件里有 `attachments`/`passes` 键 → 解析自定义图，否则 → 内建 deferred。
+   ⚠ 连带：出厂 `configs/render_graph.lua` 与 qa 靶的 attachments/passes 块（forward 图的逐字副本）
+   **必须随刀删除**，否则新触发下它们会变成"自定义 forward 图"静默生效。
+   ⚠ 对级联的修正：**③④ 不执行**——自定义图仍可达 ⟹ C 类锚点 nullopt 分支保留、
+   `deferredLight` 图事实**不恒真**（自定义图可以没有 light pass）；消失的只有 variant 枚举本体
+   与 `gate_lint_impl.cppm:464-474` 的交叉校验。
+3. **env_band 归档冻结**（实验已结案、零消费者，随 forward 删，git 沉淀现场）；
+   **nm_rig 切 deferred 保留**（按其自身 camera.lua 的判定）。
+
+### 6.2 级联新增一条（§5 表漏账）
+
+**`skybox` 标志整条死路**：`SceneEnv.skybox` 只门控 skybox DrawCall（`render_list_impl.cppm:755-760`），
+而执行该 DrawCall 的 `drawSource="skybox"` pass 只存在于 forward 与 offscreen 图。①+② 之后
+`skybox` 配置键、`addSkyEntry`、`skyboxPipeline`、`skyboxStart` 段装配、skybox.frag/mesh 全部失去
+消费者——比 §5 ② 写的"6 frag + 12 CMake 目标"更深一层（装配层代码与配置键也在账上）。
+
+## 7. 施工序（2026-10-18 定稿）
+
+1. ~~债-129 剩余项~~ **已结案**（N9，2026-10-17）。
+2. **刀①**：删 offscreen（零前置、零使用者）。blit **机制**保留——Lua 词表能声明 blit pass
+   （`render_graph_config_impl.cppm:250`），自定义图仍是它的生产者。
+3. **探针重立**（§6.1-1，刀② 的硬前置）：`Engine::shot` 补 `gbuf` 参数 → probe 切 RPC 模式
+   单启动三拍（后缓冲 + 通道 0/3）→ 闭式补量化往返 → 模板切 deferred。
+   验收 = `just analytic` 双锚绿 + 变异对照（临时改 `deferred_geometry` 写入，确认 gbuffer 锚红）。
+4. **刀②**：删 forward + variant 枚举 + 换触发（§6.1-2）+ skybox 死路（§6.2）+ qa 靶处置（§6.1-3）。
+   逐刀独立验收：逐位锚 + `just gates`。
 
 ## 8. 待决
 
-1. §5 的 ② 之后，**还要不要保留"用文件写图"这个能力**？保留 = 那 108 行解析路与 46 行配置块留着，
-   且 C 类锚点仍可达（自定义图能造出无采样上屏消费者）；不保留 = 级联继续走到 ⑤。
-   本项目是学习项目，"图是数据"这件事有教学价值——**这条我不替你拍**。
-2. 闭式解探针重立的代价（§6）——要不要做、什么时候做。
+（两枚原待决已于 2026-10-18 拍板关闭：文件写图 → 保留换触发；探针代价 → 做，形态 = 分段双锚。读数见 §6.1。）

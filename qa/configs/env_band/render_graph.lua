@@ -23,7 +23,6 @@
 --   "deferred"  = 内建 3-pass 延迟图（geometry→G-buffer + light 全屏逐灯→scene_hdr
 --                 + tonemap 上屏，exclusive，下方 passes 被忽略；opaque 段管线换
 --                 deferred_geometry，main 契约联动）
---   "offscreen" = 内建 offscreen 图变体（三段渲 scene_rt + composite blit 上屏，SDR）
 --
 -- Phase 8 批次 ①：HDR 累加链——opaque/skybox/transparent 渲入 scene_hdr
 --（rgba16_sfloat offscreen RT），tonemap pass（drawLight）ACES 上屏 swapchain。
@@ -40,7 +39,7 @@ return {
     --   ③ forward 是 qa/configs/analytic/ 与 imgqa probe 的路线，闭式解加分项接得上。
     -- 代价如实记：bistro 报障跑的是仓库默认 deferred ⟹ 本 rig 与 bistro 不同路线。已补
     -- 一行 deferred 交叉对照（见最终报告），结论是"路线不改变本现象"。
-    variant = "forward",   -- "forward" | "deferred" | "offscreen"
+    variant = "forward",   -- "forward" | "deferred"
     attachments = {
         { name = "swapchain", kind = "swapchain" },
         { name = "depth", kind = "depth" },

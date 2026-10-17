@@ -621,7 +621,7 @@ float4 readTaaPrevContentShift()
 // **ao_apply pass**（与"谁做时域"解耦，FSR 当时域滤波器时用它）。两者互斥。
 // 名字从 `readTaaAoApplied` 改成本名正因此——旧名在只有 taa 一个来源时对，现在会误导。
 // ⚠ 该标志由 CPU 侧写**实际图形态**（decorateTaaPass 的返回值），**不是**配置键 taa.enabled
-//   ——offscreen 变体配置开了 TAA 也装饰失败，若拿配置派生就会「taa pass 不存在 + tonemap
+//   ——自定义 blit 上屏图配置开了 TAA 也装饰失败，若拿配置派生就会「taa pass 不存在 + tonemap
 //   又跳过」= AO 一次都不施加。零布局变更（复用 .z 保留位，static_assert 不变）。
 float readAoAppliedPreTemporal()
 {

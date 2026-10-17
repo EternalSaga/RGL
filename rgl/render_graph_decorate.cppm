@@ -11,8 +11,8 @@ import rlstd;
 // 契约（为何插在图中间、为何要改前一个 pass 的 storeOp）见 render_graph.cppm 接口注释。
 //
 // 纪律：装饰只认"角色"不认名字——depth 附件名从写它的 pass 反查、场景色附件名从采样它
-// 的 pass 反查，因此 forward / deferred / offscreen 三个变体（附件名 scene_hdr /
-// scene_rt 各不相同）都自动适用，无需为变体写分支。
+// 的 pass 反查，因此 forward / deferred 两个内建变体与自定义图（附件名 scene_hdr /
+// scene_rt 各不相同）都自动适用，无需为图形态写分支。
 
 namespace RGL {
 
@@ -82,7 +82,7 @@ std::optional<size_t> firstColorConsumerIndex(const RgGraphDesc& desc) {
  * 「**写 swapchain 且** sampleRead 色附件」的 pass 下标（两条路线都是 tonemap）。
  *
  * 批 14.4 自 `decorateTaaPass` 抽出为**共享锚点判据**（taa 与 velocity 两个装饰器认同一个
- * 消费者；各写一份必然漂移）。刻意要求"写 swapchain"：offscreen DIAG 变体用 blit 上屏
+ * 消费者；各写一份必然漂移）。刻意要求"写 swapchain"：自定义 blit 上屏图用 blit 上屏
  * （transferRead 不是 sampleRead）⟹ 返回 nullopt，两个装饰器都自动不参与该图形态。
  */
 std::optional<size_t> swapchainColorConsumerIndex(const RgGraphDesc& desc) {
@@ -267,7 +267,7 @@ bool applyHighlightPlan(RgGraphDesc& desc, const RgHighlightPlan& plan) {
 
 /**
  * decoratePickingPass 定义（契约见 render_graph.cppm 接口注释）。depth 附件名从锚点
- * pass 的 depthWrite 输出取（不硬编码 "depth"，deferred/offscreen 变体名同约定但零
+ * pass 的 depthWrite 输出取（不硬编码 "depth"，deferred/自定义图名同约定但零
  * 假设）；object_id clear 全零（VkClearValue union：float 0.0 与 uint32 0 同表示，
  * r32ui 下 float 默认值 {0.1,…} 会 reinterpret 成垃圾 id，必须显式零）。
  */
@@ -306,7 +306,7 @@ bool decoratePickingPass(RgGraphDesc& desc) {
  * decorateShadowPass 定义（契约见 render_graph.cppm 接口注释，含"当前段内零 draw、
  * 画面逐位不变"的诚实声明）。与 picking / highlight 两个装饰的关键差别：**不需要**
  * 按角色反查——阴影 pass 自为一体（自带专属深度附件），既不读既有拓扑也不借既有附件，
- * 故任何图形态（forward / deferred / offscreen）都直接适用，前插即可；也正因它没有任何
+ * 故任何图形态（forward / deferred / 自定义图）都直接适用，前插即可；也正因它没有任何
  * 「图形态不支持」的失败分支，返回类型是 void（债-129 S1c：原 `bool` 恒真、唯一生产
  * 调用点把返回值丢掉，留着会让 selfCheck 误以为自己在断一条真判据）。
  */
@@ -449,7 +449,7 @@ bool decorateAoApplyPass(RgGraphDesc& desc) {
 	//    点静默退回 tonemap 内 = 本债的病；而「怕装饰出引用不存在附件的 pass 所以先 skip」
 	//    恰恰把我们要的编译期错误给藏掉了（§项目哲学 4：让错的东西编不过 > 让错的东西被看见）。
 	//    内建 forward / deferred 两图都**无条件**声明 ao（render_graph_builtin.cppm），
-	//    offscreen 变体走不到这里（上面锚点判据先 false）⟹ 出厂形态逐位不变。
+	//    自定义 blit 上屏图走不到这里（上面锚点判据先 false）⟹ 出厂形态逐位不变。
 
 	desc.attachments.push_back(RgAttachmentDesc{
 		.name = std::string{kAoAppliedName}, .kind = RgAttachmentKind::offscreen,
@@ -509,9 +509,9 @@ bool decorateVelocityPass(RgGraphDesc& desc) {
 	// 跳过条件 2 = 找不到锚点（与 taa / ssr / ao_apply 同一个共享判据）。
 	const auto consumerIdx = swapchainColorConsumerIndex(desc);
 	if (!consumerIdx)
-		return false;  // offscreen DIAG 变体：无"写 swapchain 且采色"的 pass
-	// depth 附件名从"插入点之前最后一个写 depth 的 pass"反查（不硬编码 "depth"，三个图
-	// 变体自动适用），并顺手把它的 storeOp 修成 store——否则 forward 图的 depth 按"后续
+		return false;  // 自定义 blit 上屏图：无"写 swapchain 且采色"的 pass
+	// depth 附件名从"插入点之前最后一个写 depth 的 pass"反查（不硬编码 "depth"，内建两图与
+	// 自定义图自动适用），并顺手把它的 storeOp 修成 store——否则 forward 图的 depth 按"后续
 	// 无人用"声明 dontCare，本 pass 读到未定义内容，且编译期"后续使用的写必须 store"校验
 	// 会直接失败（同 ao 批 11.4 那条教训，见 configs/render_graph.lua:57 的硬警告）。
 	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
@@ -569,7 +569,7 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 	if (graphDecoratedTooLate(desc))
 		return false;
 	// 跳过条件 2 = 找不到「写 swapchain 且 sampleRead 色附件」的锚点（与 taa / velocity /
-	// ao_apply 同一个共享判据）；offscreen DIAG 变体用 blit 上屏（transferRead ≠ sampleRead）。
+	// ao_apply 同一个共享判据）；自定义 blit 上屏图用 blit 上屏（transferRead ≠ sampleRead）。
 	const auto consumerIdx = swapchainColorConsumerIndex(desc);
 	if (!consumerIdx)
 		return false;

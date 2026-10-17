@@ -83,7 +83,7 @@ export struct CompiledGraphResult {
 	bool deferredMode = false;
 	RgGraphVariant variant = RgGraphVariant::forward;
 	/// 批 12.6：TAA 装饰是否落图（门开且图形态支持）。装配层据此决定 TAA RT/条目
-	/// 是否领建——装饰失败（offscreen 变体）时条目建了也无人执行，不如整套不建。
+	/// 是否领建——装饰失败时条目建了也无人执行，不如整套不建。
 	bool taaDecorated = false;
 	/// 批 14.4：逐像素速度场装饰是否落图（门开且图形态支持）。装配层据此决定 velocity
 	/// RT / velocity 条目是否领建。与 taaDecorated 同构，但**互相独立**：速度场是 FSR

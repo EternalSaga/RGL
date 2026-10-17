@@ -32,15 +32,17 @@ namespace RGL {
 
 /**
  * 渲染路线变体（render_graph.lua 顶层 variant 字段；2026-09-08 替代 RGL_DEFERRED/
- * RGL_OFFSCREEN 环境变量）。deferred/offscreen = 内建图（exclusive，忽略文件 passes）；
+ * RGL_OFFSCREEN 环境变量）。deferred = 内建图（exclusive，忽略文件 passes）；
  * forward（缺省）= 文件 passes/attachments（文件在但缺段 = 空表透传，由
  * compileRenderGraph 报结构错误，不静默回落）。
+ * ⚠ offscreen 档已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §2：全仓零使用者；
+ * 工具要的离屏能力 = `RgAttachmentKind::offscreen`，与 variant 无关，每个图都具备）。
  */
-export enum class RgGraphVariant : uint8_t { forward, deferred, offscreen };
+export enum class RgGraphVariant : uint8_t { forward, deferred };
 
 /**
  * loadRenderGraphConfig 的输出：variant（路线选择，main 按此决定装配路径）+
- * desc（渲染意图声明；deferred/offscreen = 内建图，forward = 文件解析结果）。
+ * desc（渲染意图声明；deferred = 内建图，forward = 文件解析结果）。
  */
 export struct RenderGraphConfig {
 	RgGraphVariant variant = RgGraphVariant::forward;

@@ -23,12 +23,11 @@
 --   "deferred"  = 内建 3-pass 延迟图（geometry→G-buffer + light 全屏逐灯→scene_hdr
 --                 + tonemap 上屏，exclusive，下方 passes 被忽略；opaque 段管线换
 --                 deferred_geometry，main 契约联动）
---   "offscreen" = 内建 offscreen 图变体（三段渲 scene_rt + composite blit 上屏，SDR）
 --
 -- Phase 8 批次 ①：HDR 累加链——opaque/skybox/transparent 渲入 scene_hdr
 --（rgba16_sfloat offscreen RT），tonemap pass（drawLight）ACES 上屏 swapchain。
 return {
-    variant = "forward",   -- "forward" | "deferred" | "offscreen"
+    variant = "forward",   -- "forward" | "deferred"
     attachments = {
         { name = "swapchain", kind = "swapchain" },
         { name = "depth", kind = "depth" },

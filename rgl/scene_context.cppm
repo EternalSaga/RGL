@@ -506,7 +506,7 @@ export struct SceneEnv {
 	// 批 13.6 AO 施加点标志（scene data @723600.z）：true ⟹ AO 已由 **taa pass** 施加，
 	// tonemap 跳过（否则双施）；false ⟹ taa pass 不在图里，tonemap 是唯一施加点。
 	// ⚠ 取值 = **实际图形态**（`decorateTaaPass` 返回值，main 启动期回填），**不是**上面的
-	//   `taaEnabled` 配置键：offscreen 变体配置开了 TAA 也会装饰失败，拿配置派生 = AO
+	//   `taaEnabled` 配置键：自定义 blit 上屏图配置开了 TAA 也会装饰失败，拿配置派生 = AO
 	//   一次都不施加。也**不得**做成 imgui 滑杆（图形态启动期定死，运行期改会让标志与
 	//   图脱钩 = 双施或零施）。
 	bool aoAppliedPreTemporal = false;
