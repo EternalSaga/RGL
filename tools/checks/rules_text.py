@@ -15,6 +15,9 @@ from typing import NamedTuple
 
 from config import (ALLOWED_CPP, AGENTS_DOC_INDEX_SECTION, AGENTS_FILE,
                     AGENTS_INDEX_STATUS_WORDS,
+                    DECORATION_ORDER_ANCHOR, DECORATION_ORDER_DECORATOR_RE,
+                    DECORATION_ORDER_LATE_NAME_RE, DECORATION_ORDER_PREDICATE,
+                    DECORATION_ORDER_SOURCE_FILE,
                     DOC_POINTER_BARE_EXTS, DOC_POINTER_BASELINE_COMMENT,
                     DOC_POINTER_BASELINE_FILE, DOC_POINTER_EXAMPLE_FILES,
                     DOC_POINTER_IMGQA_CLI_TABLE, DOC_POINTER_JUSTFILE,
@@ -1890,3 +1893,117 @@ def graph_fact_predicate_checks() -> list[Warning]:
         "处置二选一：接上问者，或删掉它（→ docs/配置正交性_plan.md §5.2「无消费者的机制"
         "删除或降级，不挂号」）。🔴 本规则没有基线可登记——「先建后找」就是本条要防的形态。",
         "error") for n in SCAN_GRAPH_FACT_DEAD]
+
+
+# ─── 链装饰器「次序判据不许裸奔」（债-129 S3，§15）──────────────────────────────────
+
+SCAN_DECORATION_ORDER: dict[str, int] = {}
+
+
+def decoration_order_readout() -> str:
+    """装饰器 / 锚点消费者 / 豁免 / 裸奔 四档读数；没跑过 = 空串（main.py 据此打「未执行」）。"""
+    if not SCAN_DECORATION_ORDER:
+        return ""
+    return (f"装饰器 {SCAN_DECORATION_ORDER['decorators']} 条 / 锚点消费者 "
+            f"{SCAN_DECORATION_ORDER['anchored']} 条 / 次序豁免 {SCAN_DECORATION_ORDER['exempt']} 条"
+            f" / 裸奔 {SCAN_DECORATION_ORDER['missing']} 条")
+
+
+def decoration_order_predicate_checks() -> list[Warning]:
+    """锚 `swapchainColorConsumerIndex` 的装饰器必须问共用次序判据（债-129 S3）。
+
+    ## 病根
+    链上装饰器都锚同一个「写 swapchain 且 sampleRead 色附件」的 pass（= tonemap），且都用
+    `desc.passes.insert(begin() + consumerIdx, …)` 插入 ⟹ **锚点是对"当前 desc"求值的**：先装饰
+    的那个把 tonemap 顶后一格，后装饰的就落在更靠后的一格。于是 main_impl 的调用序
+    （`ssr → velocity → taa → ao_apply`）**直接决定图形态**，而挪错的图 compile 照样过、无
+    hazard、无 warning、**画面静默错**。实测**可达**的那一形态 = `aa="fsr"`（它同时开 velocity
+    与 ao_apply）下把 velocity 挪到 ao_apply 之后 ⟹ velocity 夹在 ao_apply 与 tonemap 之间、
+    吃不到时域滤波；变异红线 A 实测它被拒启动。⚠ 反过来「velocity 排到 taa 之后」今天**配不出
+    来**：`aa` 三态互斥、`velocityField` 只在 `aa="fsr"` 时置真 ⟹ 两者不可能同时在图里（那一半
+    是防御性的，`velocity_field` 键撤并前可达）。本债 S3 给 velocity 补上次序判据只守住
+    **今天**：判据的覆盖面本身没有护栏，下一个链装饰器照样裸奔。本规则钉的正是覆盖面——
+    与 D 刀「加键不申报宿主绕不过去」同一手法（文档只记录不阻止）。
+
+    ## 判据
+    - 扫描面 = `render_graph_decorate.cppm` 里**剥注释后**按命名约定（行首
+      `返回类型 decorate<大写>…Pass(`）认出的函数定义，取其**配对花括号函数体**
+      （复用 §14 的 `_balanced_bodies`，同一条"体边界不按文件粗算"的理由）。
+    - 受约束者 = 函数体里调用了锚点判据 `swapchainColorConsumerIndex` 的那些装饰器。
+    - 要求 = 函数体里同时调用共用次序判据 `graphDecoratedTooLate`。
+    - 🔴 **豁免名单不抄**：由**次序谓词自己的函数体**里出现的 `kXxxPassName` 反推
+      （`kTaaPassName` → `decorateTaaPass`、`kAoApplyPassName` → `decorateAoApplyPass`）。
+      理由是硬逻辑：谓词拒绝的那些 pass **本身就是"必须最后装饰"的那两个**，问它们
+      "我是不是太晚了"没有意义（"taa 必须最后"是**涌现**性质——只要链上每个成员在"taa /
+      ao_apply 已在图里"时都拒绝，它就成立）。豁免面与判据面因此是**同一个真相源**；
+      抄一份"谁是晚装饰器"正是本规则要防的那类副本。命名约定漂了会让反推落空 → 下面
+      「失效必须出声」把它变红，而不是静默放行。
+    - 违反 = ERROR，处置二选一：调用共用判据（新装饰器排在链上，**默认就该是这条**），或
+      把它拒绝的 pass 名加进 `graphDecoratedTooLate` 的函数体（新装饰器确实"必须最后"）。
+      🔴 **本规则没有基线文件**——给它开额度 = 把护栏改成登记处（同 §14 的裁决）。
+
+    ## 失效必须出声
+    四种"没数"各一条 ERROR，都不许被读成"零警告 = 覆盖面干净"：源文件读不到 / 装饰器名单
+    解析出 0 条 / **锚点消费者 0 条**（锚点改名或装饰器搬走 ⟹ 判据空跑）/ 次序谓词的函数体
+    取不到或反推出 0 个 pass 名（谓词搬走、改名、或体内不再引用 `kXxxPassName`）。
+
+    ## 盲区（写下来不装没看见）
+    - **只认这一个锚点**：新装饰器若自己手写一份"找消费者"的逻辑（不调 `swapchainColorConsumerIndex`）
+      就扫不到。刻意如此——那种形态本应先被 §14 的「别手写扫描、吃谓词」收掉，给它加第二条
+      判据只会把两条判据的漂移空间也造出来。
+    - **豁免面 = 谓词体内写了哪些 `kXxxPassName`**：有人往谓词里加一个 pass 名就同时扩大豁免面。
+      但那是**改判据语义**的显式动作（且会让该装饰器拒绝"自己已在图里"，正常装配下无意义），
+      不是静默漂移；review 看得见，本规则看不见。
+    - 装饰器搬出 `render_graph_decorate.cppm` 会让它脱离扫描面（同时锚点消费者掉到 0 而红）——
+      搬走时同步改 `DECORATION_ORDER_SOURCE_FILE`，与 §14 对提供方文件改名的处置同口径。
+    """
+    src = read_text(Path(ROOT) / DECORATION_ORDER_SOURCE_FILE)
+    if src is None:
+        return [Warning("tools/checks/config.py", 0,
+            f"链装饰器次序判据对账**本次未做任何对账**：{DECORATION_ORDER_SOURCE_FILE} 读不到"
+            "（改名 / 搬走了？同步改 tools/checks/config.py 的 DECORATION_ORDER_SOURCE_FILE）"
+            "——「零警告」不是「每个链装饰器都申报了次序」", "error")]
+    code = strip_comments(src)
+    names = sorted(set(re.findall(DECORATION_ORDER_DECORATOR_RE, code, re.M)))
+    if not names:
+        return [Warning(DECORATION_ORDER_SOURCE_FILE, 0,
+            "链装饰器次序判据对账**本次未做任何对账**：按命名约定（行首 `返回类型 decorate<大写>"
+            "…Pass(`）解析出 0 个装饰器定义（约定改了？同步改 tools/checks/config.py 的 "
+            "DECORATION_ORDER_DECORATOR_RE，别让这条规则静默空跑）", "error")]
+    bodies = _balanced_bodies(code, names)
+    anchored = [n for n in names
+                if re.search(rf"\b{DECORATION_ORDER_ANCHOR}\s*\(", bodies.get(n, ""))]
+    if not anchored:
+        return [Warning(DECORATION_ORDER_SOURCE_FILE, 0,
+            f"链装饰器次序判据对账**本次未做任何对账**：{len(names)} 个装饰器里 0 个调用锚点判据 "
+            f"`{DECORATION_ORDER_ANCHOR}`（锚点改名 / 装饰器搬走了？同步改 tools/checks/config.py）"
+            "——「零警告」是判据空跑的结果，不是覆盖面干净", "error")]
+    predBody = _balanced_bodies(code, [DECORATION_ORDER_PREDICATE]).get(DECORATION_ORDER_PREDICATE)
+    if predBody is None:
+        return [Warning(DECORATION_ORDER_SOURCE_FILE, 0,
+            f"链装饰器次序判据对账**本次未做任何对账**：取不到共用次序判据 `{DECORATION_ORDER_PREDICATE}`"
+            f" 的函数体（搬出 {DECORATION_ORDER_SOURCE_FILE} 了？改名了？）——豁免名单由它的函数体反推，"
+            "取不到就没有豁免，也没有判据", "error")]
+    late = sorted(set(re.findall(DECORATION_ORDER_LATE_NAME_RE, predBody)))
+    if not late:
+        return [Warning(DECORATION_ORDER_SOURCE_FILE, 0,
+            f"链装饰器次序判据对账**本次未做任何对账**：`{DECORATION_ORDER_PREDICATE}` 的函数体里反推"
+            "出 0 个 `kXxxPassName`（判据不再按 pass 名拒绝？同步改 tools/checks/config.py 的 "
+            "DECORATION_ORDER_LATE_NAME_RE）——豁免名单空 = 晚装饰器会被判裸奔，而这不是本规则想说的话",
+            "error")]
+    exempt = {f"decorate{n}Pass" for n in late}
+    missing = [n for n in anchored if n not in exempt
+               and not re.search(rf"\b{DECORATION_ORDER_PREDICATE}\s*\(", bodies[n])]
+    SCAN_DECORATION_ORDER.clear()
+    SCAN_DECORATION_ORDER.update({
+        "decorators": len(names), "anchored": len(anchored),
+        "exempt": len([n for n in anchored if n in exempt]), "missing": len(missing)})
+    return [Warning(DECORATION_ORDER_SOURCE_FILE, 0,
+        f"链装饰器 `{n}` 的函数体调用了锚点判据 `{DECORATION_ORDER_ANCHOR}`（= 它排在链上、插在"
+        f"同一个消费者之前），却**没有**申报次序：调用序决定它的最终落点，挪错以后图 compile "
+        f"照样过、无 hazard、无 warning、画面静默错（velocity 排到 ao_apply 之后 = 夹在 ao_apply "
+        f"与 tonemap 之间、吃不到时域滤波，正是本条要拦的形态，实测可达）。处置二选一：① 在函数体开头调用共用判据 "
+        f"`{DECORATION_ORDER_PREDICATE}` 并在命中时 return false（新装饰器**默认走这条**）；"
+        f"② 本装饰器就是「必须最后装饰」的那一个 ⟹ 把它插入的 pass 的 `kXxxPassName` 加进 "
+        f"`{DECORATION_ORDER_PREDICATE}` 的函数体（豁免名单由那里唯一决定）。🔴 本规则没有基线"
+        "可登记。", "error") for n in missing]

@@ -966,6 +966,36 @@ export std::array<uint32_t, 4> shadowTile(uint32_t c, uint32_t tileSize, uint32_
 export void decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize);
 
 /**
+ * **装饰次序判据（债-129 S3）**：图里已有 `taa` 或 `ao_apply` pass ⟹ 现在装饰**太晚了**。
+ *
+ * 它是 main_impl 那条调用序不变量（`ssr → velocity → taa → ao_apply`）的**结构性**护栏。
+ * 为什么调用序会决定图形态：链上装饰器都锚同一个 `swapchainColorConsumerIndex`（= tonemap）
+ * 并用 `desc.passes.insert(begin() + consumerIdx, …)` 插入 ⟹ **锚点是对"当前 desc"求值的**，
+ * 先装饰的那个把 tonemap 顶后一格，后装饰的就落在更靠后的一格。把 velocity 挪到 ao_apply
+ * 之后（`aa="fsr"` 同时开这两者）：ao_apply 先插到 tonemap 前，velocity 再插到（已后移的）
+ * tonemap 前 ⟹ velocity 夹在 ao_apply 与 tonemap 之间、**吃不到时域滤波**——而图 compile
+ * 照样过、无 hazard、无 warning、**画面静默错**（§项目哲学 4：这正是"让错的东西编不过"要管的
+ * 那一类）。变异红线 A 实测：挪错 ⟹ 启动被拒且消息点名本判据。
+ *
+ * 🔴 **只要链上每个成员在"那两个已在图里"时都拒绝，"taa / ao_apply 最后"就是涌现性质**——
+ * 不需要给它们自己加判据（它们本来就该在最后，问它们"是不是太晚"没有意义）。
+ *
+ * 🔴 **单一来源**：`decorateSsrPass`（原跳过条件 1 = 判据本体的出处）与 `decorateVelocityPass`
+ * 同吃本函数。两份同构循环 = 两个真相源，是本债反复登记的反模式，**不许复制**。
+ * 护栏 = source_checks 的 `decoration_order_predicate_checks`：凡定义体调用
+ * `swapchainColorConsumerIndex` 的装饰器必须调用本判据，**豁免名单由本函数体里的
+ * `kXxxPassName` 推出**（不在任何地方抄那份名单）。
+ *
+ * ⚠ 与 `decorateAoApplyPass` 的「taa 在图里就跳过」**语义不同**：那条是**互斥**（AO 施加点
+ * 只能有一个），本判据是**时序**（SSR / velocity 与 TAA 串联而非互斥）。
+ *
+ * @param desc 图声明（**只读**；判据在装饰之前求值，吃的是 desc 而不是编译图——与上面
+ *        「图事实查询面」那族吃 `RgCompiledAttachment` / `RgPassPlan` 的谓词不同轴）
+ * @return true = 图里已有 `taa` / `ao_apply` pass = 装饰太晚，调用方不得插本 pass
+ */
+export bool graphDecoratedTooLate(const RgGraphDesc& desc);
+
+/**
  * **TAA 图装饰（批 12.6）**：往图里插入时域历史链的三件套，返回 false = 图形态不支持。
  *
  * 产物形状（角色反查，forward / deferred 两变体通用，纪律同本模块 picking / highlight）：
@@ -1039,6 +1069,8 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  *  1. 图里已有 `taa` 或 `ao_apply` pass —— **装饰太晚**（调用序不变量的结构性护栏：症状
  *     从不可观测的「SSR 建在时域滤波之后」变成可观测的「SSR 消失」）。与 ao_apply 的
  *     「taa 在图里就跳过」**语义不同**：那条是互斥（施加点唯一），本条是时序（串联）。
+ *     🔴 判据本体自债-129 S3 起住在 `graphDecoratedTooLate`（导出谓词，**与 velocity 装饰器
+ *     共用这一份**；本装饰原跳过条件 1 的那个循环就是它的出处，抽出去是纯抽取）。
  *  2. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（offscreen DIAG 变体用 blit
  *     上屏，transferRead ≠ sampleRead）——与 taa / velocity / ao_apply 同一锚点判据。
  *  3. 图里没有 **kGBufferAttachments 契约表的全部通道**（缺一即跳过）。**这就是 SSR 的
@@ -1083,9 +1115,21 @@ export bool decorateSsrPass(RgGraphDesc& desc);
  * 与 `decorateTaaPass` 的次序契约：本装饰**先于** TAA 调（TAA 保持「必须最后」的既有
  * 纪律）。落点顺序 = `[velocity, taa, tonemap]`——两者都只 sampleRead depth，彼此无依赖，
  * 而 TAA 的锚点搜索是**现搜**的（不缓存下标），故 velocity 先插不会让 TAA 认错消费者。
+ *
+ * **跳过条件（两条，任一命中即不插、返回 false，图不变）**：
+ *  1. 🔴 **装饰太晚**（债-129 S3 新增）= 图里已有 `taa` / `ao_apply` pass ⟹ 上面那条次序契约
+ *     被 main_impl 的调用序挪错。判据与 `decorateSsrPass` 跳过条件 1 **同一份实现**
+ *     （`graphDecoratedTooLate`，单一来源）。没有它时挪错的症状是「velocity 夹在 taa /
+ *     ao_apply 与 tonemap 之间、吃不到时域滤波」= 图自洽、compile 过、无 hazard、无 warning、
+ *     **画面静默错**；有了它症状变成「拒启动」。正确调用序下**永不触发** ⟹ 出厂形态逐位不变。
+ *     ⚠ **两半可达性不同**：`aa` 三态互斥且 `velocityField` 只在 `aa="fsr"` 时置真 ⟹
+ *     velocity 与 taa **不可能同时在图里**（那一半是防御性的，`velocity_field` 键撤并前可达）；
+ *     今天真正可达的是 **ao_apply 那一半**（`aa="fsr"` 同时开两者）。
+ *  2. 找不到「写 swapchain 且 sampleRead 色附件」的 pass（DIAG offscreen 变体用 blit 上屏，
+ *     `transferRead ≠ sampleRead`）——与 taa / ssr / ao_apply 同一锚点判据。
+ *
  * @param desc 图声明（原地修改）
- * @return true = 已装饰；false = 找不到「写 swapchain 且 sampleRead 色附件」的 pass
- *         （DIAG offscreen 变体用 blit 上屏，`transferRead ≠ sampleRead`）。
+ * @return true = 已装饰；false = 按上面两条跳过（图不变）。
  *         🔴 债-129 S3-A：原第二条「借不到可 store 的 depth ⟹ 返回 false」**已删** —— 借不到时
  *         引用规范名 `kDepthName` 照插，交 `compileRenderGraph` 硬拒（`references unknown
  *         attachment 'depth'` / `reads 'depth' before any write in the frame`）。理由同

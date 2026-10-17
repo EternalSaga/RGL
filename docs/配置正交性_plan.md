@@ -274,9 +274,24 @@ velocity buffer 是因为不需要」），引擎内真消费者只有 FSR（+ R
 
 ### 3.4 O3：O2 + 能力开关的前置申报进图
 
-装饰请求携带「我要什么图形态」（RgDecorationRequirement：锚点角色 / 必需附件 / 「不得在图里」
-名单 / 借用 depth 需求），图 compile 期校验，非法形态 **compile 期拒**（error，不是 warn）。
+装饰请求携带「我要什么图形态」，图 compile 期校验，非法形态 **compile 期拒**（error，不是 warn）。
 图级需求（「本图必须有 deferredLight」）与 pass 级需求（装饰）两档。
+
+🔴 **载体形态定案（2026-10-17，S3 落地时收账）**：初稿在这里给本方案写的载体是一个装饰请求类型
+`RgDecorationRequirement`（字段清单 = 锚点角色 / 必需附件 / 「不得在图里」名单 / 借用 depth 需求）。
+**该类型已随 S3-C 取消，代码里从来没有过它**——不是做不动，而是四栏里三栏在 S3-A 之后根本
+不需要存在：「必需附件」与「借用 depth」两条 skip 已删（缺附件照插、由 `compileRenderGraph`
+硬拒 ⟹ 申报已经是 compile 的既有判据，装饰器再申报一遍就是第二份真相源），而「锚点角色」本来
+就是装饰器调用的那个共享判据函数（`swapchainColorConsumerIndex`），抄进结构体 = 给单一来源开副本。
+真正落地的只剩第四栏，形态是三条：
+
+| 那一栏 | 实际落地的东西 |
+|---|---|
+| 「不得在图里」名单 | `render_graph` 导出谓词 `graphDecoratedTooLate(desc)`——**名单就住在它的函数体里**（那两枚 `kXxxPassName`），不在任何地方抄 |
+| 失败怎么办 | 装饰器 `return false` → 包装层 `decorationRefused` 抛 `std::runtime_error` **拒启动**（S3-C，不是 skip + warn） |
+| 谁能绕过它 | source_checks §15 `decoration_order_predicate_checks`：凡锚 `swapchainColorConsumerIndex` 的装饰器必须调用该判据，**豁免名单由判据函数体反推** ⟹ 下一个链装饰器不申报次序绕不过去 |
+
+初稿那句「申报进图」真正想要的就是第三行——**申报面要有机器判据**，而不是一个结构体类型。
 
 🔴 **定案（2026-10-16 用户裁：「失败不降级不是好事吗？少一堆动态检查呢」）**：**「失败不降级」是
 本方案的收益本体，不是风险**。初稿把「warn 降级」当成要保护的既有行为，方向错——那套降级
@@ -969,12 +984,24 @@ constexpr，**谓词面自己不能成为新的抄写点**（哲学 1：访问�
 > ③ 原第三项（悬空声明）实测**先于本刀已消失**。
 
 **顺序契约 → 归 S3，不归本刀**。原案「把顺序契约从注释挪进落图结果里的声明序」有个更好的归宿：
-`RgDecorationRequirement` 的「**不得在图里**名单」正是这条契约的类型（§3.4 原文就列了它）。
-而且裁 (b) 之后它的语义也跟着变准了：**装饰次序是 C++ 写死的，不是用户配置** ⟹ 错序 = 装配错 =
-**该 fail-fast，不该 skip + warn**。今天 ssr 的跳过条件 1（taa/ao_apply 已在图里）把「装饰太晚」
-当合法降级处理，正是这条要改的对象；而 taa / velocity 今天**一条结构判据都没有**（只有
-`main_impl.cppm:526-531` 的注释），失败模式按注释原话是「落在 taa 与 tonemap 之间而吃不到滤波」
-= 静默错画面。
+装饰请求携带「**不得在图里**」名单，错序即拒。而且裁 (b) 之后它的语义也跟着变准了：**装饰次序是
+C++ 写死的，不是用户配置** ⟹ 错序 = 装配错 = **该 fail-fast，不该 skip + warn**。
+
+> ✅ **S3 已落地（2026-10-17）**，但**不是**初稿设想的类型——那个
+> `RgDecorationRequirement`「需求类型」已随 S3-C **取消，代码里从来没有过它**（§3.4 已就地改成
+> 实际形态）。落地的三件事：① 判据 = `render_graph` 导出谓词 `graphDecoratedTooLate(desc)`，
+> 名单就是它函数体里的 `kTaaPassName` / `kAoApplyPassName`；`decorateSsrPass`（判据本体的原出处，
+> 抽出去是**纯抽取**）与 `decorateVelocityPass` **同吃这一份**，不复制；② 失败 = 装饰器
+> `return false` → 包装层抛 `std::runtime_error` **拒启动**（S3-C 已把 ssr 那条"合法降级"也改掉）；
+> ③ 覆盖面 = source_checks §15（凡锚 `swapchainColorConsumerIndex` 的装饰器必须调用该判据，
+> 豁免名单由判据函数体反推）。"taa / ao_apply 必须最后"因此是**涌现**性质——不给它们自己加判据。
+> 🔴 **失败模式按实测改写**：本段原话「taa / velocity 今天一条结构判据都没有……失败模式是落在
+> taa 与 tonemap 之间」里，**velocity 那一格已补上**，而举的例子（velocity 与 taa 错序）今天
+> **配不出来**：`aa` 三态互斥、`velocityField` 只在 `aa="fsr"` 置真 ⟹ 两者不可能同时在图里
+> （把 main_impl 那两个调用对调 = 启动照过、图逐位不变，实测）。可达形态 = **velocity 挪到
+> ao_apply 之后**（`aa="fsr"` 同时开这两者）⟹ velocity 夹在 ao_apply 与 tonemap 之间、吃不到
+> 时域滤波，compile 过、无 hazard、无 warning = 静默错画面。变异红线 A 按这一形态执行，
+> 实测现在**拒启动**且消息点名"次序判据"（不是"锚点未命中"）。
 
 **明确不做**：色输入链两处合一（装配层那条要按档**条件领建 RT 堆槽**，门关 = 堆槽零变化是逐位性质，
 改「先问链头再领槽」会动领建序）——已由 16 组合表钉住同解（`965f146`），那是当前形态下的最强判据。

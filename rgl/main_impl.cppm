@@ -417,6 +417,10 @@ std::runtime_error decorationRefused(std::string_view capability, std::string_vi
  * 不是"有但旁路"）。🔴 债-129 S3-C：开而装饰器返回 false = 拒启动（理由见
  * `decorationRefused`）；装饰器本体保留 `bool` 契约（它是「落没落」的单一来源，S1b 已论证，
  * 且单测直接吃它），本包装层只把 false 换成失败。
+ * 🔴 **债-129 S3：装饰器现在有两条判据**（① 次序 = `graphDecoratedTooLate` 命中，即 taa /
+ * ao_apply 已在图里；② 锚点 = `swapchainColorConsumerIndex` 未命中），所以消息**必须按命中的
+ * 那条选**——两条都报"锚点未命中"就是假消息，而 S3-C 的纪律是"消息点名哪条判据没命中"。
+ * 选消息用的还是**同一个纯谓词**（对 `desc` 再求值一次，不是第二份判据），故本行净增 0 代码行。
  * @return 是否真正装饰落图（false 只可能是「没请求」）
  */
 bool decorateVelocityOrThrow(RgGraphDesc& desc, bool velocityEnabled) {
@@ -424,9 +428,9 @@ bool decorateVelocityOrThrow(RgGraphDesc& desc, bool velocityEnabled) {
 		return false;
 	if (decorateVelocityPass(desc))
 		return true;
-	throw decorationRefused("velocity（aa=\"fsr\" 隐含打开）", "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」"
-		"且「sampleRead 场景色附件」（速度场 pass 的落点）；offscreen 变体用 composite blit 上屏（transferRead ≠ sampleRead）必无落点",
-		"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"taa\"（runtime.lua，速度场由 aa 派生）");
+	throw decorationRefused("velocity（aa=\"fsr\" 隐含打开）", graphDecoratedTooLate(desc) ? "次序判据 graphDecoratedTooLate 命中 = 图里已有 taa / ao_apply pass（**不是**锚点未命中）⟹ main_impl 的「velocity 先于 taa / ao_apply 装饰」调用序被挪错：本 pass 会夹在它们与 tonemap 之间、吃不到时域滤波，而 compile 照样过、画面静默错"
+		: "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」且「sampleRead 场景色附件」（速度场 pass 的落点）；offscreen 变体用 composite blit 上屏（transferRead ≠ sampleRead）必无落点",
+		graphDecoratedTooLate(desc) ? "把 decorateVelocityOrThrow 的调用挪回 decorateTaaOrThrow / decorateAoApplyOrThrow 之前（本文件 compileGraphOrThrow 尾段；次序契约与判据本体 → render_graph.cppm 的 graphDecoratedTooLate）" : "variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"taa\"（runtime.lua，速度场由 aa 派生）");
 }
 
 /**

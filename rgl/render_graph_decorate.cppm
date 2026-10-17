@@ -160,6 +160,21 @@ std::optional<std::string> borrowDepthFromPriorWriter(RgGraphDesc& desc, size_t 
 }  // namespace
 
 /**
+ * graphDecoratedTooLate 定义（契约见 render_graph.cppm 接口注释：**装饰次序判据的单一来源**）。
+ *
+ * 判据本体 = 「图里有没有那两枚**必须最后装饰**的 pass」，一条 `any_of`，不掺别的条件——
+ * 所以链上任何装饰器都能无条件复用它：纯只读、零副作用、不吃锚点也不吃 depth，先问后插
+ * 都不动图。🔴 新增"必须排在 taa / ao_apply 之前"的装饰器时，**只改这一处**（加它要拒绝的
+ * pass 名），豁免面由 source_checks 的 `decoration_order_predicate_checks` 从本函数体反推，
+ * 不需要也不许在别处登记"谁是晚装饰器"。
+ */
+bool graphDecoratedTooLate(const RgGraphDesc& desc) {
+	return std::ranges::any_of(desc.passes, [](const RgPassDesc& p) {
+		return p.name == std::string{kTaaPassName} || p.name == std::string{kAoApplyPassName};
+	});
+}
+
+/**
  * planHighlightDecoration 定义（契约见 render_graph.cppm 的 `RgHighlightPlan`）。
  *
  * 插入点与 depth 来源均按角色反查（见本文件头部纪律）；颜色写既有场景色附件（load 保留成片，
@@ -476,6 +491,22 @@ bool decorateAoApplyPass(RgGraphDesc& desc) {
  *  - **无 history 附件**：速度场每帧全量重算，不跨帧携带状态。
  */
 bool decorateVelocityPass(RgGraphDesc& desc) {
+	// 跳过条件 1 = **装饰太晚**（债-129 S3）：taa / ao_apply 已在图里 ⟹ main_impl 的「velocity
+	// 先于它们装饰」调用序被人挪错。判据与 decorateSsrPass **同一份实现**（graphDecoratedTooLate，
+	// 单一来源），这里只问它。挪错的症状 = 本 pass 夹在它们与 tonemap 之间、**吃不到时域滤波**，
+	// 而图 compile 照样过、无 hazard、无 warning、画面静默错——本条把它变成可观测失败。
+	// 🔴 正确调用序下**永不触发**（实测 velocity 在 taa / ao_apply 之前）⟹ 出厂形态逐位不变。
+	// ⚠ **两半的可达性不同**（2026-10-17 实测，别照抄旧论证）：`aa` 是三态互斥键，而
+	//   velocityField 只在 aa="fsr" 时置真（runtime_config_impl.cppm 全项目唯一置重点）⟹
+	//   **velocity 与 taa 根本不可能同时在图里**，"velocity 挪到 taa 之后"今天配不出来（把
+	//   main_impl 那两个调用对调 = 启动照过、图逐位不变，实测）。真正可达的挪错是
+	//   **velocity 挪到 ao_apply 之后**（aa="fsr" 同时开 velocity 与 ao_apply）——变异红线 A
+	//   实测它拒启动。taa 那一半因此是**防御性**的：velocity_field 键撤并（S2.5-C）之前它可达，
+	//   将来谁把它重新独立出来就重新可达；而共用判据本来就要同时拒两枚（ssr 需要），
+	//   velocity 吃共用判据顺手拿到，不需要也不应该为它单开一条只查 ao_apply 的判据。
+	if (graphDecoratedTooLate(desc))
+		return false;
+	// 跳过条件 2 = 找不到锚点（与 taa / ssr / ao_apply 同一个共享判据）。
 	const auto consumerIdx = swapchainColorConsumerIndex(desc);
 	if (!consumerIdx)
 		return false;  // offscreen DIAG 变体：无"写 swapchain 且采色"的 pass
@@ -532,9 +563,11 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 	//    施加点只能有一个），本条是**时序**（SSR 与 TAA 串联而非互斥——正确调用序下
 	//    taa/ao_apply 必然还没进图，本条不改变任何正确顺序的行为，只把「顺序错」变成
 	//    可观测失败）。别把两条读成同一种东西。
-	for (const auto& p : desc.passes)
-		if (p.name == std::string{kTaaPassName} || p.name == std::string{kAoApplyPassName})
-			return false;
+	//  ④ 判据本体自**债-129 S3** 起抽成 render_graph 的导出谓词 `graphDecoratedTooLate`，与
+	//    `decorateVelocityPass` **同吃这一份**（两份同构循环 = 两个真相源 = 本债反复登记的
+	//    反模式）；抽取是**纯的**——拒绝条件仍是「图里已有 taa 或 ao_apply」，一字未动。
+	if (graphDecoratedTooLate(desc))
+		return false;
 	// 跳过条件 2 = 找不到「写 swapchain 且 sampleRead 色附件」的锚点（与 taa / velocity /
 	// ao_apply 同一个共享判据）；offscreen DIAG 变体用 blit 上屏（transferRead ≠ sampleRead）。
 	const auto consumerIdx = swapchainColorConsumerIndex(desc);

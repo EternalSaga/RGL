@@ -2081,6 +2081,206 @@ TEST_CASE("债-129 S3-A 新契约（ao_apply）：缺 ao 照插，compile 硬失
 	expectCompileOk(d3);
 }
 
+// ============================================================================
+// 债-129 S3：装饰次序契约从**注释**变成**结构判据**（graphDecoratedTooLate）
+// ============================================================================
+//
+// 【本刀改的契约】main_impl 的调用序 `ssr → velocity → taa → ao_apply` 里，velocity 那一格
+// 原来**一条次序判据都没有**（只有 ssr 的跳过条件 1 有）。链上装饰器都锚同一个
+// `swapchainColorConsumerIndex` 并用 `passes.insert(begin() + consumerIdx, …)` 插入 ⟹
+// **锚点是对"当前 desc"求值的** ⟹ 调用序直接决定最终落点。
+//
+// 【为什么注释不算护栏】把 velocity 挪到 ao_apply 之后：ao_apply 先插到 tonemap 前，velocity
+// 再插到（已后移的）tonemap 前 ⟹ velocity 夹在 ao_apply 与 tonemap 之间、**吃不到时域滤波**。
+// 那张图 compile 照样过、无 hazard、无 warning、画面静默错——图 / 布局 / 像素三层全无异常，
+// 单测与冒烟全绿抓不到（就是 phase15_plan §3.2 缺口 2 给 ssr 记过的那个形态）。
+//
+// 🔴 【可达性实测（2026-10-17，修正本刀任务书里的原始论证）】"velocity 挪到 **taa** 之后"
+// 今天**配不出来**：`aa` 是三态互斥键，而 `velocityField` 只在 `aa="fsr"` 时置真
+// （runtime_config_impl.cppm 全项目唯一置重点）⟹ velocity 与 taa 不可能同时在图里。把
+// main_impl 那两个调用对调实测 = 启动照过、图逐位不变（**不是**判据失灵，是那个形态根本
+// 不存在）。真正可达的挪错是 **velocity 挪到 ao_apply 之后**（`aa="fsr"` 同时开这两者），
+// 变异红线 A 按这一形态执行并实测拒启动。taa 那一半是**防御性**覆盖：`velocity_field` 独立
+// 键撤并（S2.5-C）之前它可达，将来谁把速度场重新独立出来就重新可达——而共用判据本来就要
+// 同时拒两枚（ssr 需要 taa 那一半），velocity 吃共用判据顺手拿到，不为它单开一条只查
+// ao_apply 的判据（那才是第二份真相源）。下面 ① 用 decorateTaaPass 造图因此是
+// **API 层**用例（装饰器契约本身要覆盖两枚 pass 名），② 的 ao_apply 那一半才是配置可达形态。
+//
+// 【为什么不给 taa 加判据】"taa / ao_apply 必须最后"是**涌现**性质：只要链上每个成员在
+// "那两个已在图里"时都拒绝，它就成立——不需要问它们"我是不是太晚了"。覆盖面本身由
+// source_checks §15 钉住（凡锚 `swapchainColorConsumerIndex` 的装饰器必须调用本判据，
+// 豁免名单由判据自己的函数体反推，不在任何地方抄）。
+//
+// 🔴 【消息内容为什么不在这里断言】`decorateVelocityOrThrow` 住在 `module main:impl`
+// （main_impl.cppm），而 `rgl_tests` 只链**引擎四库**（tests/CMakeLists.txt）——main 模块带
+// `main()`，链进来与 doctest 的 main 冲突 ⟹ **包装层在单元层结构性不可达**，它的
+// `std::runtime_error` 消息在这里抓不到。消息内容因此改由**端到端**验：把 main_impl 的
+// velocity 调用挪到 ao_apply **之后** ⟹ 启动必须响亮失败且消息点名"次序"（实测读数与裁决
+// 记在 docs/配置正交性_plan.md §8.2 的 S3 收账段）。本层做得到的最强等价断言 = 下面第 ④ 组：
+// 包装层选消息用的**同一个谓词**必须恰好把「次序造成的 false」与「锚点造成的 false」分开
+// ——分不开就意味着包装层会报假消息（S3-C 的纪律是"消息点名哪条判据没命中"）。
+//
+// 【变异红线】
+//  - 注释掉 `decorateVelocityPass` 里那条 `if (graphDecoratedTooLate(desc))` → 本组第 ② 组
+//    两条反向用例当场红（🔴 这就是"判据真的在做事"的证明，正确序下它永不触发）。
+//  - 判据退回只认 `kTaaPassName`（丢掉 ao_apply）→ 第 ① 组「ao_apply → true」与第 ② 组 ②
+//    那条红。
+//  - 判据改成按**前缀**认名（`name.starts_with("taa")`）→ 第 ① 组「taa_commit → false」红。
+//  - 把共用判据复制一份进 velocity（两份真相源）→ 本组仍绿，红的是 source_checks §15
+//    （它要求装饰器调用**那个名字**）——覆盖面与实现唯一性分别由两处守，缺一漏一种漂移。
+
+TEST_CASE("graphDecoratedTooLate：只认 taa / ao_apply 两枚 pass 名，其余一律 false（含 taa_commit）") {
+	// 判据吃的是**精确 pass 名**。taa_commit 那一档是必要的反向：它是 taa 装饰器自己追加的
+	// 帧末 blit，若被误认成"taa 已在图里"，**装配序**下的 velocity 会被判太晚 ⟹ 出厂形态
+	// 直接变红（逐位不变当场破），所以这条不是凑数的反向。
+	auto withPass = [](std::string_view name) {
+		RgGraphDesc d;
+		d.attachments = {swapchainAtt()};
+		d.passes = {RgPassDesc{.name = std::string{name}, .kind = RgPassKind::drawLight,
+			.outputs = {colorOut("swapchain")}}};
+		return d;
+	};
+	CHECK_FALSE(graphDecoratedTooLate(RgGraphDesc{}));          // 空图 = 谁都没装饰
+	CHECK_FALSE(graphDecoratedTooLate(withPass("opaque")));     // 图本体不算
+	CHECK_FALSE(graphDecoratedTooLate(withPass("velocity")));   // 链上更早的装饰产物不算
+	CHECK_FALSE(graphDecoratedTooLate(withPass("ssr")));
+	CHECK_FALSE(graphDecoratedTooLate(withPass("taa_commit"))); // 🔴 同前缀 ≠ 同判据
+	CHECK(graphDecoratedTooLate(withPass("taa")));
+	CHECK(graphDecoratedTooLate(withPass("ao_apply")));
+	// 名字出现在**附件**表里不算（判据扫 passes，不是 attachments）——反向防"按名全局搜"。
+	RgGraphDesc attOnly;
+	attOnly.attachments = {swapchainAtt(), offscreenAtt("taa", "rgba16_sfloat")};
+	CHECK_FALSE(graphDecoratedTooLate(attOnly));
+}
+
+TEST_CASE("decorateVelocityPass 次序判据：taa / ao_apply 已在图里 → false 且不动图；装配序阳性配对") {
+	// ① taa 在图里 = 把 main_impl 的调用序挪错。用**真实装饰器**造图（先 decorateTaaPass
+	//    再本装饰），比手搓一个"看起来像"的图更硬。⚠ 这张图**没有本判据也能装饰成功**：
+	//    锚点 = 读 taa_out 的 tonemap（仍是 sampleRead 色附件）、depth 也在 opaque 之前写好
+	//    ⟹ velocity 会插进 taa 与 tonemap 之间 = 正是"吃不到时域滤波"的坏形态。所以本条
+	//    失败侧观察的是"坏形态没有发生"。
+	{
+		auto d = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/false);
+		REQUIRE(decorateTaaPass(d));
+		REQUIRE(graphDecoratedTooLate(d));  // 判据本身也要为真（否则 ② 是空转）
+		const size_t attsBefore = d.attachments.size();
+		const size_t passesBefore = d.passes.size();
+		CHECK_FALSE(decorateVelocityPass(d));
+		CHECK(d.attachments.size() == attsBefore);  // 失败路径不得留下半成品附件
+		CHECK(d.passes.size() == passesBefore);     // 也不得留下半个 pass
+	}
+	// ② ao_apply 在图里（aa=fsr 形态挪错）：同理，没有本判据时 velocity 会插进 ao_apply 与
+	//    tonemap 之间（色输入 = ao_applied 那条链上）。
+	{
+		auto d = aoPresenceGraph(MissingAtt::present);
+		REQUIRE(decorateAoApplyPass(d));
+		REQUIRE(graphDecoratedTooLate(d));
+		const size_t attsBefore = d.attachments.size();
+		const size_t passesBefore = d.passes.size();
+		CHECK_FALSE(decorateVelocityPass(d));
+		CHECK(d.attachments.size() == attsBefore);
+		CHECK(d.passes.size() == passesBefore);
+	}
+	// ③ 阳性锚点（**正确调用序**）：同一骨架不先跑 taa / ao_apply 就必须成功装饰，且落点在
+	//    tonemap 之前。这条证明 ①② 确由"图里已有那两个 pass"触发，不是本判据写死恒 false；
+	//    它同时就是"本刀逐位不变"的单元层形态。
+	{
+		auto d = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/false);
+		CHECK_FALSE(graphDecoratedTooLate(d));
+		REQUIRE(decorateVelocityPass(d));
+		CHECK(passIndexOf(d, kVelocityPassName) + 1 == passIndexOf(d, "tonemap"));
+	}
+	// ④ 🔴 涌现性质的正面钉：装配序（velocity **先于** taa）下两者都成功，落点 =
+	//    [velocity, taa, tonemap]，整图可编译。与 ① 合起来说明判据"只在挪错时响"——
+	//    正确序下零改变（逐位不变的结构性原因，不是"我测了一下没变"）。
+	{
+		auto d = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/false);
+		REQUIRE(decorateVelocityPass(d));
+		REQUIRE(decorateTaaPass(d));
+		const size_t velIdx = passIndexOf(d, kVelocityPassName);
+		const size_t taaIdx = passIndexOf(d, kTaaPassName);
+		const size_t toneIdx = passIndexOf(d, "tonemap");
+		CHECK(velIdx + 1 == taaIdx);
+		CHECK(taaIdx + 1 == toneIdx);
+		const auto g = compileRenderGraph(d);
+		INFO(errOf(g));
+		CHECK(g.has_value());
+	}
+}
+
+TEST_CASE("次序判据是**单一来源**：ssr 与 velocity 在同一张图上同判（拒绝面逐档相同）") {
+	// 本刀第 1 步是**纯抽取**（判据本体从 decorateSsrPass 的循环搬进 graphDecoratedTooLate，
+	// velocity 与 ssr 同吃那一份）。这条按档位对账两者的成功/失败与谓词**逐档一致**：
+	// 谁偷偷多长出一条自己的次序判据（= 第二份真相源），这一格就红。
+	// ⚠ 骨架取 ssr 的 full 档（velocity 不需要 G-buffer，但两张图必须**同一张**才叫对账）。
+	auto probe = [](SsrGBufferMode mode, bool withTaa, bool withAoApply) {
+		auto base = ssrSkeletonGraph(mode);
+		if (withTaa)
+			REQUIRE(decorateTaaPass(base));
+		if (withAoApply) {
+			base.attachments.push_back(offscreenAtt("ao"));  // r8_unorm = kAoFormat
+			base.passes.insert(base.passes.begin() + 1, RgPassDesc{.name = "ao",
+				.kind = RgPassKind::drawLight, .state = "ao", .outputs = {colorOut("ao")},
+				.inputs = {sampleIn("depth")}});
+			REQUIRE(decorateAoApplyPass(base));
+		}
+		const bool late = graphDecoratedTooLate(base);
+		auto dSsr = base;
+		auto dVel = base;
+		const bool ssrOk = decorateSsrPass(dSsr);
+		const bool velOk = decorateVelocityPass(dVel);
+		// full 档下 ssr 的另两条判据（锚点 / 契约表）都过 ⟹ 它的失败**只可能**来自次序判据；
+		// velocity 同理（锚点与 depth 都在）。两边成功 ⟺ 谓词为假。
+		CHECK(ssrOk == !late);
+		CHECK(velOk == !late);
+	};
+	for (const auto mode : {SsrGBufferMode::full}) {
+		probe(mode, /*withTaa=*/false, /*withAoApply=*/false);  // 装配序：两边都必须成功
+		probe(mode, /*withTaa=*/true, /*withAoApply=*/false);
+		probe(mode, /*withTaa=*/false, /*withAoApply=*/true);
+	}
+}
+
+TEST_CASE("包装层选消息的谓词恰好分开两种拒绝原因（次序 vs 锚点未命中）——防假消息") {
+	// 🔴 decorateVelocityOrThrow 在 module main:impl，单元层不可达（理由见本节段头），所以这里
+	// 钉的是它**选消息所依据的那个谓词**：装饰器返回 false 的两种原因必须被
+	// graphDecoratedTooLate 切成真/假两半——切不开就意味着包装层的三目会挑错那条消息，
+	// 而"消息点名哪条判据没命中"是 S3-C 立下的纪律（假消息比没消息更坏：它把人支去查
+	// variant，而真正错的是调用序）。
+	// ① 次序那一半：taa 在图里 → 装饰失败 **且** 谓词为真（包装层据此报"次序"消息）。
+	{
+		auto d = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/false);
+		REQUIRE(decorateTaaPass(d));
+		CHECK_FALSE(decorateVelocityPass(d));
+		CHECK(graphDecoratedTooLate(d));  // ⟹ 走"次序"分支，不会报成"锚点未命中"
+	}
+	// ② 锚点那一半：blit 上屏变体（offscreen DIAG 路线，transferRead ≠ sampleRead）→ 装饰失败
+	//    **但** 谓词为假（图里既没有 taa 也没有 ao_apply）⟹ 包装层据此仍报"锚点未命中"，
+	//    那条消息在这个形态下**是真话**。
+	{
+		RgGraphDesc d;
+		d.attachments = {swapchainAtt(), depthAtt(), offscreenAtt("scene_rt", "rgba16_sfloat")};
+		d.passes = {
+			RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+				.drawSource = "opaque", .outputs = {colorOut("scene_rt"), depthOut("depth")}},
+			RgPassDesc{.name = "composite", .kind = RgPassKind::blit,
+				.outputs = {RgPassAttachment{.attachment = "swapchain",
+					.usage = RgUsage::transferWrite}},
+				.inputs = {RgPassAttachment{.attachment = "scene_rt",
+					.usage = RgUsage::transferRead}}},
+		};
+		CHECK_FALSE(decorateVelocityPass(d));
+		CHECK_FALSE(graphDecoratedTooLate(d));  // ⟹ 走"锚点未命中"分支（真话）
+	}
+	// ③ 两半都不命中 = 装配序下的正常路径：装饰成功 **且** 谓词为假（防"谓词恒真"把 ①
+	//    变成一条永真判据——那样 ①② 都绿但消息选择器其实是个常量）。
+	{
+		auto d = depthPresenceGraph(MissingAtt::present, /*withGBuffer=*/false);
+		CHECK_FALSE(graphDecoratedTooLate(d));
+		CHECK(decorateVelocityPass(d));
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 组 10：图事实查询面（债-129 S1a）——「图里有没有 X / X 的槽位是几」的唯一提供者
 // ═══════════════════════════════════════════════════════════════════════════

@@ -73,6 +73,7 @@ from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
 from rules_reflection import reflection_contract_checks, scan_readout
 from rules_text import (agents_doc_index_checks, agents_index_status_checks,
+                        decoration_order_predicate_checks, decoration_order_readout,
                         doc_pointer_checks,
                         doc_pointer_counts, doc_pointer_readout,
                         generated_init_checks, generated_init_counts,
@@ -358,6 +359,9 @@ def main() -> None:
         warnings.extend(rg_enum_vocab_checks())
         # 图事实谓词「无问者即红」（债-129 S1a）：查询面建了没人用 = isSchedulable 第二。
         warnings.extend(graph_fact_predicate_checks())
+        # 链装饰器「次序判据不许裸奔」（债-129 S3）：锚在链上却没申报次序的装饰器 = 挪错调用序
+        # 以后图 compile 照样过、画面静默错。补一个 velocity 只守住今天，本条钉的是覆盖面。
+        warnings.extend(decoration_order_predicate_checks())
         # 生成物聚合初始化棘轮收账（债-118）：先扫一遍拿计数 → 重写基线 → 下面正式跑时与
         # **新**基线比对（形态同 R-EC4：重写必然持平，不会自己喊自己上升）。
         if args.update_generated_init_baseline:
@@ -488,6 +492,11 @@ def main() -> None:
         gfp_readout = graph_fact_predicate_readout()
         print("[style-check] 图事实谓词对账: "
               + (gfp_readout if gfp_readout else "**本次未执行**（规则没跑到）"))
+        # 链装饰器次序判据的读数（债-129 S3）：「锚点消费者 N 条 / 豁免 M 条」是判据的**分母**——
+        # 只报「裸奔 0 条」而分母掉到 0 会被读成干净，所以四个数一起印（同 §14 的读数纪律）。
+        order_readout = decoration_order_readout()
+        print("[style-check] 装饰次序判据对账: "
+              + (order_readout if order_readout else "**本次未执行**（规则没跑到）"))
         # 生成物聚合初始化的读数（债-118）：名单条数 + 命中数 + 位置初始化数 + 基线——
         # 「没有位置初始化」与「名单解析出 0 个类型所以什么都没对」必须一眼可分。
         gen_readout = generated_init_readout()

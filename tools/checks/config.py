@@ -464,3 +464,21 @@ GRAPH_FACT_PREDICATE_RE = r"^export\s+[^;{}]*?\b(graph[A-Z]\w*)\s*\("
 # 🔴 漏掉 `render_graph_facts.cppm` 会让谓词**自己给自己发问者**（`graphFsrColorInput` 调
 # `graphAttachmentSlot` 就在它里面）——传递存活那一半会整个失效。
 GRAPH_FACT_PROVIDER_FILES = ("render_graph.cppm", "render_graph_impl.cppm", "render_graph_facts.cppm")
+
+# ─── 链装饰器「次序判据不许裸奔」（债-129 S3；规则 = rules_text.decoration_order_predicate_checks，§15）──
+# 病根：链上装饰器都锚同一个「写 swapchain 且采色」的 pass 并用 `insert(begin() + idx, …)` 插入
+# ⟹ 锚点对**当前 desc** 求值 ⟹ main_impl 的调用序决定最终落点。挪错（velocity 排到 taa 之后）
+# 的图 compile 照样过、无 hazard、无 warning、**画面静默错**。补一条 velocity 的次序判据只守住
+# 今天，**下一个**链装饰器照样裸奔——所以钉的是覆盖面（本债 D 刀「加键不申报宿主绕不过去」同手法）。
+DECORATION_ORDER_SOURCE_FILE = "rgl/render_graph_decorate.cppm"
+# 锚点判据（= 「装饰器插在谁之前」的那个共享搜索）。调了它 = 本装饰器排在链上、受次序契约约束。
+DECORATION_ORDER_ANCHOR = "swapchainColorConsumerIndex"
+# 共用次序判据（「我装饰得太晚了」）。🔴 只登记**这一个名字**：豁免名单不抄，由它的**函数体**里
+# 出现的 `kXxxPassName` 反推（`kTaaPassName` → `decorateTaaPass`）——抄一份「谁是晚装饰器」正是
+# 本规则要防的第二份真相源。
+DECORATION_ORDER_PREDICATE = "graphDecoratedTooLate"
+# 装饰器定义 = 行首「返回类型 decorate<大写>…Pass(」。🔴 字符类里只放**字面空格**不放 `\s`：
+# 放了就能跨过 `;` 后的换行，把「上一语句末尾 + 下一行调用点」粘成假定义。
+DECORATION_ORDER_DECORATOR_RE = r"^[A-Za-z_][A-Za-z0-9_:<>&* ]* (decorate[A-Z]\w*Pass)\s*\("
+# 从次序谓词函数体反推豁免名单用的式子（`k` + PascalCase 段 + `PassName`）。
+DECORATION_ORDER_LATE_NAME_RE = r"\bk([A-Z]\w*)PassName\b"
