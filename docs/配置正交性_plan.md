@@ -1057,6 +1057,19 @@ forward-only**（`render_graph.lua:31` + `scene.lua:21` 的 forward 规格）⟹
 - 交付：`aa = { mode = …, temporal = …, jitter = … }`（§5.3 试金石的 C 形态：mode=off 的表里没有
   `temporal` 字段可写）；`velocity_field` 撤并进 aa 块（拍板 C，`applyAaKey` 现成那行就是全部
   隐含逻辑）。
+> 🔴 **2026-10-17 收口裁决：本阶段的「`aa` 表形态」半件砍掉，`velocity_field` 撤并半件已落地。**
+> 砍的理由不是成本，是**收益对不上已定的口径**：激进形（`aa = { mode = …, temporal = …, jitter = … }`）
+> 相对现状的唯一增量 = 让「`mode=off` 的表里没有 `temporal` 字段可写」结构上不可能——
+> **那是一笔死值收益，而本计划对死值的裁决是 S4「排最后，且默认不做」。**
+> ⟹ 拿全计划最大的破坏面（动 loader 形态 + `--set` 文本语法 + `aa` 是使用面最广的键，
+> smoke.py / imgqa / regress / `qa/configs/**` / 锚点配方全动）去换一个**已明言不付费的问题**，
+> 是拿贵的东西换便宜的东西。**砍计划而不是砍质量**，与 S1b、需求类型的取消同类。
+> ⚠ 缺口是**真实存在且已实测**的：`aa="off"`（出厂）+ `fsr.temporal=false`（偏离默认）⟹
+> `warnings=0`，无人出声（本债 ② 类活体）。**若将来 S4 到期**，便宜的修法是先走保守形——
+> 把 `fsr.` 做成 `kGateBlocks` 的一块、宿主 `aa == fsr`，**复用 D 已建成的块级机制**，
+> 零 `--set` 破坏；激进形只在「连 warn 都不想要、要它写不出来」时才值得。
+> 本阶段另有一条硬前置「开工前必须先出纸面键名表」——它本身就是「命名是唯一不可回退的东西」
+> 这条红线的体现，砍掉即不需要出表。
 - 验收：aa 三档锚逐位 + `--set aa=…` 全部用法同步（smoke.py / imgqa profile / regress）+
   解析期「mode=off 的表里塞子字段」出声（复用 S2 已建的嵌套死键 lint）。
 
