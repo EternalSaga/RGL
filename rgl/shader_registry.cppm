@@ -54,9 +54,9 @@ export enum class MeshletMeshVariant : uint8_t {
  * **债-129 S2** 的类型消灭：原「tint 与 debug 同真 = tint 优先」的让位分支已删——
  * 配置层是一枚三值 `MeshletInstrument`，同真形态**不可表示**，无需也让位）。
  *
- * 🔴 变体位**归叠加段所有**：`overlay = false` 时**一律 base**——这是**条目级**开关（变体经
+ * 🔴 变体位**归叠加段所有**：`mode != "overlay"` 时**一律 base**——这是**条目级**开关（变体经
  * `bakeMeshletEntries` 的 `variant` 烘进**条目**），而那批条目同时是 β-1 原位取代的宿主
- * （`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 叠加段关着也能改产品路的几何
+ * （`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）⟹ 叠加段不开也能改产品路的几何
  * （DEBUG_OFFSET 把 clip.z 拉向相机 = 取代段整体错位；TINT 把着色输入写死 = 产品路变平色块）。
  * 这不是「仪器没宿主」而是「仪器渗进产品」。孤立组合（仪器开了但被强制归 base）的出声
  * 自债-106 起在 **gate_lint**（meshlet.instrument 规则）——原就近 warn
@@ -66,11 +66,11 @@ export enum class MeshletMeshVariant : uint8_t {
  * 三档返回语义（债-129 S2 合并前后逐字不变）：none→base、offset→debugOffset、tint→tint。
  * 住在 shader_registry（= `MeshletMeshVariant` 与 SPV 路径表的 owner）= 单测可达：
  * 原住 `module main:meshlets` 实现分区，rgl_tests 链不到 main（既有覆盖缺口，本刀收口）。
- * @param cfg 运行配置（读 overlay 门 + instrument 三态位）
+ * @param cfg 运行配置（读 mode 选路档 + instrument 三态位）
  * @return 本跑该烘的 mesh SPV 变体
  */
 export inline MeshletMeshVariant pickMeshletMeshVariant(const RuntimeConfig& cfg) {
-	if (!cfg.meshletOverlay)
+	if (!cfg.modeIsOverlay())
 		return MeshletMeshVariant::base;
 	if (cfg.instrumentIsTint())
 		return MeshletMeshVariant::tint;

@@ -195,7 +195,7 @@ uint32_t meshletTaskCount(uint32_t clusterCount) {
  * @param asset/mat 本实体资产与材质（判据 1 / 2）
  * @param table 簇区间表（nullptr = 门关 = 判据 3；槽越界那一支也归它）
  * @param objectSlot = MeshRef.objectSlot（表下标 = shader objectIndex）
- * @param overlayActive **第五枚**：叠加段**自己的**门 `meshlet.overlay` 的生效标记——ctx 里有没有
+ * @param overlayActive **第五枚**：叠加段**自己的**档 `meshlet.mode = "overlay"` 的生效标记——ctx 里有没有
  *        `MeshletOverlayOn`（装配层 wireMeshletOverlayActivation 判定一次，本层不重述条件）
  * @param meshletInPlace **第六枚**：β-1 原位取代的生效标记 = 与本体 draw 的互斥抑制（★1-a1ii-β-1
  *        既有那条，原本写在调用点的 `if (!meshletInPlace)` 上，本批把判点搬进函数 = 同一个
@@ -721,10 +721,13 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 				glm::dot(d, d)});  // 距离²（免 sqrt，排序单调等价）
 			// 簇化轴 ★1-a1ii-α：影子叠加 draw（视锥剔除后 = 与本体同进同退；五条发射条件 +
 			// 互斥抑制**全部在 helper 内判**，本行只搬事实 = 债-105 把「条件集中在唯一可单测的
-			// 纯函数里」这条做到底：叠加段自己的门（`meshletOverlay`）与 ★1-a1ii-β-1 既有的
-			// switch 互斥（switch 生效时那批几何已**原位**画过一遍，再叠加 = 同一几何画两遍，
+			// 纯函数里」这条做到底：叠加段自己的档（ctx 事实 `meshletOverlay`，配置层 =
+			// `meshlet.mode = "overlay"`）与 ★1-a1ii-β-1 既有的取代抑制（取代生效时那批几何已
+			// **原位**画过一遍，再叠加 = 同一几何画两遍，
 			// 且叠加段在段尾会连带挪动与透明/天空盒的相对序）都在 collectMeshletOverlay 里
-			// 判，同一个 `MeshletSwitchOn` 事实不再有两处表达；装配层照旧 warn 出声）。
+			// 判，同一个 `MeshletSwitchOn` 事实不再有两处表达。🔴 债-129 S2 起配置层写不出
+			// overlay/switch 同真（mode 三值），本抑制在配置路径上成为**结构性不可达**的保险丝——
+			// 判据钉的是 ctx 两标志的语义对（单测直打），故保留；装配层互斥 warn 已随合并删）。
 			collectMeshletOverlay(asset, mat, clusterTable, meshRef.objectSlot,
 				meshletOverlay, meshletInPlace,
 				std::as_bytes(std::span<const RGL::DrawArgs>{&args, 1}), meshletPending);

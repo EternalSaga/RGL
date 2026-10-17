@@ -152,11 +152,11 @@ export struct MeshletCullItemTable {
 export MeshletCullItemTable buildClusterCullItems(ClusterRangeTable& table);
 
 /**
- * 簇路径「opaque 段原位取代」的**生效**标记（★1-a1ii-β-1，`meshlet.switch`）。
+ * 簇路径「opaque 段原位取代」的**生效**标记（★1-a1ii-β-1，`meshlet.mode = "switch"` 档）。
  *
  * 住在 registry ctx 的理由与 `ClusterRangeTable` 完全同款——**同一个生产者/消费者一对**：
  * 装配层 `wireMeshletSwitch` 在启动期判定并 emplace，`renderListSystem` 每帧 find 只读。
- * 「生效」这件事**只判定一次**（`assets && switch && cull_replay == cpu && 逐资产对账通过`），
+ * 「生效」这件事**只判定一次**（`assets && mode == "switch" && cull_replay == cpu && 逐资产对账通过`），
  * 消费者重述条件 = 两处真相源迟早漂（本项目的反复教训）。
  *
  * **存在即生效**（不 emplace = 不切）：与 `ClusterRangeTable` 的「门关 = ctx 无条目 = 执行器
@@ -166,19 +166,21 @@ export MeshletCullItemTable buildClusterCullItems(ClusterRangeTable& table);
 export struct MeshletSwitchOn {};
 
 /**
- * α 影子**叠加段**的**生效**标记（债-105，`meshlet.overlay`，默认关）。
+ * α 影子**叠加段**的**生效**标记（债-105，`meshlet.mode = "overlay"` 档，出厂 `"off"`）。
  *
  * 与 `MeshletSwitchOn` 同一个生产者/消费者一对、同一种「存在即生效」形态：装配层
  * `wireMeshletOverlayActivation` 在启动期判定并 emplace，`renderListSystem` 每帧 find 只读，
  * 判据落在 `collectMeshletOverlay` 的第五枚条件上。
  *
- * 🔴 **生效条件不含 `meshlet.assets`**（本键与 `mdi_shadow` 同定性）：本标记只决定「叠加段采不采
- * draw」，条目的烘焙条件仍挂在 `assets` 上（那些条目同时是 `switch` 原位取代的宿主）。二者解耦的
- * 后果是 `overlay = true` + `assets = false` 这种**孤立组合**——装配层出声（判据 = 有没有条目这个
- * 事实，不是配置意图），不静默空开关。
+ * 🔴 **生效条件不含 `meshlet.assets`**（本档与 `mdi_shadow` 同定性）：本标记只决定「叠加段采不采
+ * draw」，条目的烘焙条件仍挂在 `assets` 上（那些条目同时是原位取代档的宿主）。二者解耦的
+ * 后果是 `mode = "overlay"` + `assets = false` 这种**合法但零条目可采**的组合——装配层出声
+ * （判据 = 有没有条目这个事实，不是配置意图），不静默空开关。
+ * 🔴 债-129 S2 起本档与取代档**同真写不出来**（一枚三值 mode）——
+ * 原两布尔时代的运行期裁决与两条互斥告警已随合并结构性消失。
  *
- * 关（默认）= 不 emplace = 叠加段一条 draw 都不采 ⟹ 出厂拿回 +1571 draws / +4713 vkCmd /
- * +1.59ms 每帧（`docs/mdi_plan.md` §18.9 判据 5 的 counters 口径、§18.11 欠账 ④）。
+ * 关（出厂默认 `"off"`）= 不 emplace = 叠加段一条 draw 都不采 ⟹ 出厂拿回 +1571 draws /
+ * +4713 vkCmd / +1.59ms 每帧（`docs/mdi_plan.md` §18.9 判据 5 的 counters 口径、§18.11 欠账 ④）。
  */
 export struct MeshletOverlayOn {};
 

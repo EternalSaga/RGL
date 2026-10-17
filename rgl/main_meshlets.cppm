@@ -75,26 +75,31 @@ bool writeMeshletSectionDescriptors(DeviceContext& device, Resources& resources,
 }
 
 /**
- * α 影子叠加段的**生效**接线（债-105，`meshlet.overlay` → registry ctx 标记 `MeshletOverlayOn`；
- * 对外经 `wireMeshletPostRegistration` 第三步进入）。三步：门关早退（零 ctx 零日志 = 「门关
+ * α 影子叠加段的**生效**接线（债-105，`meshlet.mode = "overlay"` 档 → registry ctx 标记
+ * `MeshletOverlayOn`，债-129 S2 起该档由三值 mode 选出；对外经 `wireMeshletPostRegistration`
+ * 第三步进入）。三步：档关早退（零 ctx 零日志 = 「门关
  * `grep -ci meshlet` = 0」护栏）→ emplace 生效标记 → 按**事实**出声或打印生效档。
  *
  * 🔴 **生效条件里没有 `meshlet.assets`**（同 `mdi_shadow` 的定性：`meshlet` 块里生效条件不依赖
- * `assets` 的键）——本键的宿主是叠加段自己。但条目的**烘焙**条件挂在 `wireMeshletBindings` 的
- * `slots`（= `assets`）上 ⟹「overlay 开 + assets 关」= 没有条目可采 = **零 draw 而日志一行不出**
+ * `assets` 的键）——本档的宿主是叠加段自己。但条目的**烘焙**条件挂在 `wireMeshletBindings` 的
+ * `slots`（= `assets`）上 ⟹「mode = \"overlay\" + assets = false」= 没有条目可采 = **零 draw
+ * 而日志一行不出**
  * 的静默空开关（§18.9 第 9 条抓到的同一形态）。所以这里读**事实**（有没有资产带着簇管线条目）
  * 而不是配置意图：无产物 / 多产物回落 / 零模型命中这几条回落路都不写配置，只比 `assets` 会漏。
  * 孤立组合 = **出声但仍 emplace**（标记只代表「本段采集开启」，画不画由 `collectMeshletOverlay`
- * 的判据 1 决定）——别把门改成 `assets && overlay`，那等于把两件事焊回一处，`switch` 的宿主与
+ * 的判据 1 决定）——别把门改成 `assets && overlay`，那等于把两件事焊回一处，取代档的宿主与
  * 叠加段的门重新纠缠。
+ * 🔴 债-129 S2：本函数**只按事实出声**，配置层的「overlay × assets = false」组合本身是**合法**
+ * 组合（overlay 的生效前置不含 assets），gate_lint 不判它死值——原 meshlet.overlay 块条目
+ * （在 !assets 时发射）随合并删除，落空归因收敛到这里这一条按事实的 warn。
  * @param registry 场景 registry（emplace 目标 + MeshRef 事实扫描；🔴 **必须在实体注册之后**）
  * @param assets   资产表（读 `meshletPipelineIndex` = 条目宿主在不在）
- * @param cfg      运行配置（读本键）
+ * @param cfg      运行配置（读本档）
  */
 void wireMeshletOverlayActivation(entt::registry& registry, const AssetTable& assets,
 	const RuntimeConfig& cfg) {
-	if (!cfg.meshletOverlay)
-		return;  // 门关（出厂默认）= 零 ctx 零日志
+	if (!cfg.modeIsOverlay())
+		return;  // 档关（出厂默认 mode = "off"）= 零 ctx 零日志
 	registry.ctx().emplace<MeshletOverlayOn>();
 	auto* logger = RLLogger::getInstance();
 	uint32_t hosts = 0;
@@ -104,8 +109,8 @@ void wireMeshletOverlayActivation(entt::registry& registry, const AssetTable& as
 	});
 	if (hosts == 0) {
 		if (logger)
-			logger->warn("meshlet: overlay 开但**没有一条簇管线条目可采**（meshlet.assets 关 / 无簇产物 "
-						 "/ 多产物回落 / 零模型命中）—— 叠加段零 draw，本跑画面与 overlay 关逐位相同；"
+			logger->warn("meshlet: mode = \"overlay\" 开但**没有一条簇管线条目可采**（meshlet.assets 关 / 无簇产物 "
+						 "/ 多产物回落 / 零模型命中）—— 叠加段零 draw，本跑画面与 mode = \"off\" 逐位相同；"
 						 "要它生效请把 meshlet.assets 一并置 true（条目的烘焙条件挂在那枚门上）");
 		return;
 	}
@@ -167,19 +172,27 @@ SwitchCoverage auditMeshletSwitch(entt::registry& registry, const AssetTable& as
 }
 
 /**
- * 簇路径「opaque 段原位取代」接线（★1-a1ii-β-1；对外经 wireMeshletPostRegistration 第二步
- * 进入，完整口径 → main.cppm 声明）。四步：
+ * 簇路径「opaque 段原位取代」接线（★1-a1ii-β-1，`meshlet.mode = "switch"` 档，债-129 S2 起
+ * 该档由三值 mode 选出；对外经 wireMeshletPostRegistration 第二步进入，完整口径 → main.cppm
+ * 声明）。四步：
  * ① 门关 / 关档早退（零 ctx 零日志 = 门关 grep meshlet = 0 护栏）→ ② cull 档闸门 →
  * ③ 逐资产对账（停止条件的机器版）→ ④ emplace 生效标记 + INFO 打印**生效**档。
  *
- * 生效标记走 registry ctx（`MeshletSwitchOn`，存在即生效）而不是把三枚配置传进 render_list：
+ * 生效标记走 registry ctx（`MeshletSwitchOn`，存在即生效）而不是把配置传进 render_list：
  * 「生效」这件事必须**只判定一次**（消费者重述条件 = 两处真相源迟早漂），且 ctx 是本项目
  * 装配层 → system 的既有唯一通道（`ClusterRangeTable` / `SsrTuning` / `WetTuning` 同法）。
+ *
+ * 🔴 债-129 S2：原「与 α 影子叠加互斥」的装配层 warn（switch 生效 ⟹ 叠加段整段清空）随
+ * overlay/switch 两布尔合并**结构性删除**——mode 三值下取代档的叠加段**本就不存在**
+ * （MeshletOverlayOn 只在 "overlay" 档 emplace），没有「清空」这个裁决动作，也没有被压的
+ * overlay。coplanar 双臂在取代档下无消费者这条前置是纯配置事实，归 gate_lint
+ * （meshlet.coplanar 行按 mode ≠ "overlay" 判）。下面三条**回落路** warn 原样保留——
+ * 它们是「为什么这条取代没切成」的装配期事实，不是配置互斥。
  */
 void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
 	const RuntimeConfig& cfg, const DeviceContext& device) {
 	auto* logger = RLLogger::getInstance();
-	if (!cfg.meshletAssets || !cfg.meshletSwitch)
+	if (!cfg.meshletAssets || !cfg.modeIsSwitch())
 		return;  // 门关 / 不切 = 零 ctx 零日志（门关 grep meshlet = 0 护栏）
 	// ①.5 设备发射规格核对（口径 → checkMeshletDeviceFit）。放在门关之后、其余判据之前：
 	// 规格不成立时后面每一步都毫无意义，且这条**与配置无关**——配置一样、换机器就会变。
@@ -191,8 +204,8 @@ void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
 	// 出声（静默切一半 = 判据全绿而结论是假的）。
 	if (diagnostics().cullReplay != CullReplayMode::cpu) {
 		if (logger)
-			logger->warn("meshlet: switch 在非默认 cull 档不生效（cull_replay = {}，只有 \"cpu\" 档的 "
-						 "opaque 段是逐 draw 盲执行、才认段内换管线条目）—— 本跑保持旧路径 + 影子叠加",
+			logger->warn("meshlet: mode = \"switch\" 在非默认 cull 档不生效（cull_replay = {}，只有 \"cpu\" 档的 "
+						 "opaque 段是逐 draw 盲执行、才认段内换管线条目）—— 本跑保持旧路径",
 				cullReplayName(diagnostics().cullReplay));
 		return;
 	}
@@ -216,14 +229,12 @@ void wireMeshletSwitch(entt::registry& registry, const AssetTable& assets,
 	if (logger && cov.gated == 0)
 		logger->warn("meshlet: switch 生效但**零图元可取代**（没有任何簇产物通过扫描/对账）—— 本档"
 					 "与门关逐位相同，阳性对照必须另外跑");
-	// 与 α 影子叠加互斥（render_list 侧的抑制 = `collectMeshletOverlay` 的第六枚判据，入参
-	// `meshletInPlace`；债-105 把判定点从调用点的 `if` 搬进函数，事实仍是同一个 `MeshletSwitchOn`）。coplanar 双臂只作用**叠加**那批 draw ⟹ 叠加清空后它在本档下没有消费者，
-	// 而 wireMeshletOverlayDepthCompare 的 INFO 照打不误 —— 不点出来会被读成"双臂还在跑"。
-	if (logger)
-		logger->warn("meshlet: switch 生效 ⟹ α 影子叠加段（meshletCalls / executeMeshletOverlay）整段"
-					 "清空（同一批几何不画两遍）{}",
-			cfg.meshletCoplanar == MeshletCoplanarMode::off ? ""
-								: "；且 coplanar 双臂只作用叠加 draw，本档下它无消费者");
+	// 🔴 债-129 S2：此处原有「与 α 影子叠加互斥」warn（switch 生效 ⟹ 叠加段整段清空 + coplanar
+	// 无消费者从句）——overlay/switch 两布尔合并成 mode 三值后**结构性删除**：取代档的叠加段
+	// 本就不存在（MeshletOverlayOn 只在 "overlay" 档 emplace），「清空」这个裁决动作消失了；
+	// coplanar 前置是纯配置事实，归 gate_lint（meshlet.coplanar 行按 mode ≠ "overlay" 判）。
+	// render_list 侧 collectMeshletOverlay 的第六枚判据（meshletInPlace 抑制）**不动**——
+	// 它钉的是 ctx 事实层的对账（单测直打两枚 ctx 标志），与配置层互斥无关。
 }
 
 }  // namespace
@@ -307,12 +318,13 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 	SamplerLibrary& samplers, RenderTargetCache& rtCache,
 	const MeshletGeometryStore& meshletGeometry, const std::optional<MeshletBindingSlots>& slots,
 	MeshletMeshVariant variant) {
-	// 🔴 **关 overlay ≠ 关条目**（债-105 的宿主契约，别再往这条门上挂任何东西）：本函数的存在
-	// 条件只有 `slots`（= `meshlet.assets`），而**不**看 `meshlet.overlay`。理由是这批条目同时是
-	// 两个消费者的宿主——① α 影子叠加段（`collectMeshletOverlay`，由 overlay 门决定采不采 draw）、
-	// ② β-1 的原位取代（`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）。把烘焙挪进 overlay 门下
-	// ⟹ `overlay = false` 时 `switch` **静默失去宿主**（取代分支整个不成立，画面回到旧路径而日志
-	// 里没有任何东西说它没切）。叠加段关 = **不采 draw**，条目照烘。
+	// 🔴 **叠加档关 ≠ 关条目**（债-105 的宿主契约，别再往这条门上挂任何东西）：本函数的存在
+	// 条件只有 `slots`（= `meshlet.assets`），而**不**看 `meshlet.mode` 选到哪一档。理由是这批条目同时是
+	// 两个消费者的宿主——① α 影子叠加段（`collectMeshletOverlay`，由 mode 的 "overlay" 档决定采不采
+	// draw）、② β-1 的原位取代（`makeOpaqueCall` 读 `asset.meshletPipelineIndex`）。把烘焙挪进
+	// "overlay" 档门下
+	// ⟹ `mode != "overlay"` 时取代档**静默失去宿主**（取代分支整个不成立，画面回到旧路径而日志
+	// 里没有任何东西说它没切）。叠加档关 = **不采 draw**，条目照烘。
 	if (!slots)
 		return;  // 门关 / 无产物 / 多产物回落 = 一条条目都不建（逐位不变）
 	// 材质侧三槽幂等重取 = 与模型条目同号（bakePipelineEntries 已领；binding 12/13/15
@@ -588,10 +600,10 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
  * gate_lint 启动期申报（现为 meshlet.instrument 一条规则），原就近 warnMeshletVariantInstruments
  * 已随迁移删除——门关 grep meshlet = 0 的护栏由「门关默认档无偏离」保证）。
  *
- * 🔴 债-105 起变体位**归叠加段所有**：`meshlet.overlay` 关 = 变体一律 base（变体烘进条目、
- * 条目是 β-1 取代的宿主 ⟹ 不归位会让关掉叠加段的跑仍然被诊断改掉产品路几何；偏离默认时
+ * 🔴 债-105 起变体位**归叠加段所有**：`meshlet.mode != "overlay"` = 变体一律 base（变体烘进条目、
+ * 条目是 β-1 取代的宿主 ⟹ 不归位会让叠加档关着的跑仍然被诊断改掉产品路几何；偏离默认时
  * 由 gate_lint meshlet.instrument 规则 warn）。
- * 本函数**不**因为 overlay 关而少烘一条条目——见 `bakeMeshletEntries` 的宿主契约注释。
+ * 本函数**不**因为叠加档关而少烘一条条目——见 `bakeMeshletEntries` 的宿主契约注释。
  */
 MeshletAssembly wireMeshletOverlay(Resources& resources,
 	DeviceContext& device,
@@ -646,11 +658,12 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
 		break;
 	}
 	renderer.setMeshletOverlayDepthCompareOp(op);
-	// ⚠ 叠加段关（债-105 的出厂默认）时双臂**没有消费者**——叠加零 draw ⟹ 这条 INFO 若不加
-	// 说明会被读成"双臂还在跑"（与 wireMeshletSwitch 的互斥告警同一条例）。
-	const std::string_view orphan = (!cfg.meshletOverlay && cfg.meshletCoplanar != MeshletCoplanarMode::off)
-		                                ? "；🔴 meshlet.overlay 关 ⟹ 叠加段零 draw，本档**没有消费者**"
-		                                  "（要跑共面双臂请同时置 meshlet.overlay = true）"
+	// ⚠ 叠加档不开（债-105 的出厂默认 mode = "off"）时双臂**没有消费者**——叠加零 draw ⟹ 这条
+	// INFO 若不加说明会被读成"双臂还在跑"（gate_lint 的 meshlet.coplanar 行按同一判据申报，
+	// 同因不同层：那条是纯配置预测，这条排在「setter 真的设了」的生效证据上）。
+	const std::string_view orphan = (!cfg.modeIsOverlay() && cfg.meshletCoplanar != MeshletCoplanarMode::off)
+		                                ? "；🔴 meshlet.mode ≠ \"overlay\" ⟹ 叠加段零 draw，本档**没有消费者**"
+		                                  "（要跑共面双臂请置 meshlet.mode = \"overlay\"）"
 		                                : "";
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("meshlet: coplanar 双臂生效档 = {}（叠加 draw depthCompare = {}；"
@@ -661,8 +674,8 @@ void wireMeshletOverlayDepthCompare(Renderer& renderer, const RuntimeConfig& cfg
 /**
  * 逐簇视锥剔除生效接线（★1-a2-i，main.cppm 声明；调用序契约 = assembleBackEnd 之后）。
  * 四步：门关早退（零调用零日志——门关「帧首零新命令」的构造性保证就在这第一行）→ 服务缺位
- * 而出声（配置说开了而实际没跑 = 判据全绿而结论是假的，同 switch/coplanar 的第二道护栏）→
- * 无消费者（switch 关）出声且不 dispatch → setter + INFO 打印生效档。
+ * 而出声（配置说开了而实际没跑 = 判据全绿而结论是假的，同取代档/coplanar 的第二道护栏）→
+ * 无消费者（mode ≠ "switch"）出声且不 dispatch → setter + INFO 打印生效档。
  */
 void wireMeshletCull(Renderer& renderer, entt::registry& registry, const RuntimeConfig& cfg,
 	MeshletCullService* cullService) {
@@ -676,16 +689,17 @@ void wireMeshletCull(Renderer& renderer, entt::registry& registry, const Runtime
 		return;
 	}
 	// 🔴 消费者 = **已生效**的取代档（ctx 里有没有 `MeshletSwitchOn`），读生效事实而不是配置意图：
-	// switch 的三条回落路（设备规格 / 非 cpu cull 档 / 对账失败）都不写配置，读配置会让剔除在
-	// 那些档下照跑而取代根本没发生。switch 关时簇 draw 只存在于 α 影子叠加段，而叠加默认
-	// coplanar="off" = 共面全拒零像素写入 ⟹ 剔它纯属白干；更坏的是 debug 档（DEBUG_OFFSET 变体
-	// 把 clip.z 拉向相机）下几何已被位移，用**未位移**位置做的视锥测试会剔掉"位移后其实在屏内"
+	// 取代档（mode = "switch"）的三条回落路（设备规格 / 非 cpu cull 档 / 对账失败）都不写配置，
+	// 读配置会让剔除在
+	// 那些档下照跑而取代根本没发生。取代档不切时簇 draw 只存在于 α 影子叠加段，而叠加默认
+	// coplanar="off" = 共面全拒零像素写入 ⟹ 剔它纯属白干；更坏的是仪器 offset 档（DEBUG_OFFSET
+	// 变体把 clip.z 拉向相机）下几何已被位移，用**未位移**位置做的视锥测试会剔掉"位移后其实在屏内"
 	// 的簇 = 让诊断档的图少画东西。故这里**不 dispatch**（标志表恒为启动期填的 1，叠加段照画），
 	// 只出声。承诺出处 = runtime_config.cppm meshletCull 注释「单独开 = 无消费者，装配层 warn
 	// 出声（静默空开关是本项目反复踩的形态）」。
 	if (!registry.ctx().contains<MeshletSwitchOn>()) {
 		if (logger)
-			logger->warn("meshlet: meshlet.cull 开但取代档未生效（meshlet.switch 关 / 设备规格不够 / "
+			logger->warn("meshlet: meshlet.cull 开但取代档未生效（meshlet.mode ≠ \"switch\" / 设备规格不够 / "
 						 "非 cpu cull 档 / 逐资产对账失败）—— 标志数组没有消费者，逐簇剔除**不运行**，"
 						 "本跑画面与 meshlet.cull 关逐位相同");
 		return;

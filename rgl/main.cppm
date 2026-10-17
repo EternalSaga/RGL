@@ -326,8 +326,8 @@ export struct MeshletAssembly {
  * @param cfg 运行配置（读 meshletAssets 门 + meshletInstrument 三态 SPV 变体位：
  *   offset = 阳性对照（判据 3），tint = ★0.5-b2 双臂阳性对照（债-129 S2 起一枚三值键，
  *   原 debug/tint 两布尔的让位规则已随合并消失）。
- *   🔴 债-105 起本键**只在 meshlet.overlay 开时**才被采纳——变体烘进的是 `switch` 原位取代
- *   共用的那批条目，叠加段关着也能改条目 = 诊断渗进产品路 ⟹ 关时强制 base + 偏离默认才 warn）
+ *   🔴 债-105 起本键**只在 meshlet.mode = "overlay" 档**才被采纳——变体烘进的是原位取代
+ *   共用的那批条目，叠加档不开也能改条目 = 诊断渗进产品路 ⟹ 不在档时强制 base + 偏离默认才 warn）
  * @param sceneData scene data 服务（★1-a2-i：`MeshletCullService` 要它的槽号与 buffer 句柄）
  * @return 簇化轴的 GPU 侧服务持有者 `MeshletAssembly`（★M-1a 起两格）：
  *   · `cullService`（★1-a2-i）= 逐簇视锥剔除服务；门不开 / 无产物 / 多产物回落 = nullptr。
@@ -371,8 +371,9 @@ export std::unique_ptr<MeshletShadowArgsService> wireMeshletShadowArgs(entt::reg
  * 实际没跑 = 判据全绿而结论是假的，同 switch 的第二道机器护栏）→ 消费者缺位出声且不 dispatch →
  * setter + INFO 打印生效档。
  *
- * 🔴 第 ③ 步读的是 ctx 里的 `MeshletSwitchOn`（**生效**事实）而不是配置里的 `meshletSwitch`
- * （**意图**）：switch 有三条回落路（设备发射规格不够 / 非 cpu cull 档 / 逐资产对账失败）都只
+ * 🔴 第 ③ 步读的是 ctx 里的 `MeshletSwitchOn`（**生效**事实）而不是配置里的
+ * `meshlet.mode = "switch"`（**意图**）：取代档有三条回落路（设备发射规格不够 / 非 cpu cull 档 /
+ * 逐资产对账失败）都只
  * emplace 失败不写配置，读配置会让剔除在这些档下照跑而取代根本没发生 = 空转。判定只有一处的
  * 纪律同 `render_list_impl.cppm` 的 `meshletInPlace`。
  *
@@ -415,28 +416,32 @@ export void wireMeshletRendererServices(entt::registry& registry, Renderer& rend
 /**
  * 簇化轴 ★1-a1ii-β-1：实体注册之后的簇轴装配合成一次调用（`main()` 已在 120 行代码
  * 红线，`wireSceneSpinContext` 同法抽 helper）= ① `wireClusterRangeTable`（簇区间表；★18-B2
- * 起同一个循环还建阴影远级联 LOD 选级表）→ ② `wireMeshletSwitch`（`meshlet.switch` 落地）
- * → ③ `wireMeshletOverlayActivation`（债-105：`meshlet.overlay` 落地）。
+ * 起同一个循环还建阴影远级联 LOD 选级表）→ ② `wireMeshletSwitch`（`meshlet.mode = "switch"`
+ * 档落地）
+ * → ③ `wireMeshletOverlayActivation`（债-105：`meshlet.mode = "overlay"` 档落地）。
  * 顺序契约内聚在定义处：区间表**先**建，
  * ② 的逐资产对账要读它的逐槽 l0Count；③ 只读配置 + 资产表里的**条目事实**。
  *
- * ② 的语义：`assets && switch` 时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在主
+ * ② 的语义：`assets && mode = "switch"` 时，门开资产（有簇管线条目 + L0 簇数 > 0 + 非 blend）在主
  * opaque 段里由簇路径 draw **1:1 原位**顶掉旧 mesh draw（同 objectIndex / 同 pushData /
- * 同段内位置，只换管线条目与 task 数），同时清空 α 的影子叠加段（互斥）。三态语义与
- * 「为什么是原位而不是另开一段」→ `RuntimeConfig::meshletSwitch` 注释；生效标记 = registry
+ * 同段内位置，只换管线条目与 task 数）。🔴 债-129 S2 起「同时清空 α 影子叠加段（互斥）」这句
+ * **失效**——overlay/switch 合并成一枚三值 mode 后取代档的叠加段本就不存在，没有清空动作；
+ * 三态语义与
+ * 「为什么是原位而不是另开一段」→ `MeshletMode` 枚举注释；生效标记 = registry
  * ctx 里的 `MeshletSwitchOn`（存在即生效，消费者 = renderListSystem）。
  *
  * 两道**不生效**闸门（各自 warn 出声、保持旧路径，绝不静默半切）：
- *  · `diagnostics.cull_replay != "cpu"` → warn「switch 在非默认 cull 档不生效」（gpu_sync 档
+ *  · `diagnostics.cull_replay != "cpu"` → warn「mode = "switch" 在非默认 cull 档不生效」（gpu_sync 档
  *    的 opaque 段按候选表重放，段内换管线不在那条路上）；
  *  · 逐资产对账失败（有簇条目却无 L0 簇）→ warn 并停用（半切形态的画面可能逐位不变而结论假）。
  *
  * 🔴 门开且切档时 INFO 打印**生效**档（同 coplanar 的第二道机器护栏：主判据是截图哈希，
  * 开关静默不落地时哈希也可能全绿）。门关 = 零 ctx 零日志。
  *
- * ③ 的语义（**债-105**）：`meshlet.overlay` 落地 = emplace `MeshletOverlayOn`，消费者 =
- * `collectMeshletOverlay` 的第五枚判据。生效条件**不含** `assets`（本键的宿主是叠加段自己），
- * 但 assets 关时条目没烘 ⟹ 孤立组合按**事实**（有无资产带簇管线条目）出声，不静默空开关。
+ * ③ 的语义（**债-105**）：`mode = "overlay"` 档落地 = emplace `MeshletOverlayOn`，消费者 =
+ * `collectMeshletOverlay` 的第五枚判据。生效条件**不含** `assets`（本档的宿主是叠加段自己），
+ * 但 assets 关时条目没烘 ⟹ 该组合**合法但零条目可采**，按**事实**（有无资产带簇管线条目）
+ * 出声，不静默空开关。
  *
  * 调用序契约 = `registerSceneEntities` 之后（三步都读 MeshRef）；与
  * `wireMeshletOverlayDepthCompare` 互不依赖。
@@ -444,7 +449,7 @@ export void wireMeshletRendererServices(entt::registry& registry, Renderer& rend
  * @param uploaded   已上传资产（区间表扫描输入）
  * @param meshlets   簇产物容器（区间表扫描输入）
  * @param assetTable 资产表（对账读 pipelineIndex / groupCount / meshletPipelineIndex）
- * @param cfg        运行配置（读 meshletAssets / meshletSwitch / meshletCoplanar）
+ * @param cfg        运行配置（读 meshletAssets / meshletMode / meshletCoplanar）
  * @param device     设备上下文（**只读物理设备属性**：核对簇路径的发射规格，见 checkMeshletDeviceFit）
  * @param assembly   ★1-a2-i / ★M-1a：`wireMeshletOverlay` 装配出来的服务持有者（就地填两格）。
  *   `cullService` = 逐簇剔除服务，剔除项表扫出来后**就地上传**给它（同一处产出 cullBase 与

@@ -40,7 +40,7 @@ struct GateRule {
 
 /** 块内单枚键：只回答「本键配了吗」，宿主条件由块给。 */
 struct BlockKey {
-	std::string_view gate;            ///< 回显表拼写，如 "meshlet.overlay"
+	std::string_view gate;            ///< 回显表拼写，如 "meshlet.mode"
 	bool (*present)(const Ctx&);      ///< 本键偏离默认 / 为真
 	std::string_view message{};       ///< 空 = 用块级消息；非空 = 本键自己的归因
 };
@@ -105,24 +105,27 @@ constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
 constexpr std::string_view kMsgMeshletInstrument{
 	"instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint "
 	"两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）："
-	"① overlay = false ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay**，不看 assets）；"
+	"① mode ≠ \"overlay\" ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay 档**，不看 assets）；"
 	"② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，"
-	"变体位没有条目可烘。变体烘进的是 switch 原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）"
-	"⟹ 要么开 meshlet.overlay 让仪器有消费者，要么把它归 \"none\""
+	"变体位没有条目可烘。变体烘进的是原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）"
+	"⟹ 要么置 meshlet.mode = \"overlay\" 让仪器有消费者，要么把它归 \"none\""
 	"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）"};
 
-/** coplanar 的两个失效面（assets 关 / overlay 关）写在一条消息里 = 债-106 原文。 */
+/** coplanar 的两个失效面（assets 关 / mode 不是 overlay）写在一条消息里 = 债-106 原文骨架
+ *  （债-129 S2：overlay 布尔并入 mode 三值后，原「第三条死路（switch 生效清空叠加段）」
+ *  升级为**配置可判**——取代档下叠加段本就不存在，谓词按 mode ≠ "overlay" 直接吃进）。 */
 constexpr std::string_view kMsgMeshletCoplanar{
-	"coplanar 双臂只作用**叠加段**那批 draw：assets = false（无条目）或 overlay = false（零采集）⟹ "
-	"没有作用对象。生效档 INFO 在 wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」"
-	"的生效证据）。⚠ 第三条死路（switch 生效清空叠加段）不在本判据里——switch 有设备规格 / cull 档 / "
-	"对账三条回落路，那是装配期事实，判不了"};
+	"coplanar 双臂只作用**叠加段**那批 draw：assets = false（无条目）或 mode ≠ \"overlay\"（零采集，"
+	"含 \"switch\" 档——该档下叠加段不存在，不是被清空）⟹ 没有作用对象。生效档 INFO 在 "
+	"wireMeshletOverlayDepthCompare（同因不同层：那条是「setter 真的设了」的生效证据）。"
+	"⚠ 取代档自身的三条回落路（设备规格 / cull 档 / 对账）是装配期事实，判不了——但它们只影响"
+	"「取代切没切」，不影响本判据（叠加段在 mode ≠ \"overlay\" 下恒零采集）"};
 
-/** cull 的真实宿主 = assets && switch（比 meshlet 块的 owner 更强），块消息表达不出来 = 债-106 原文。 */
+/** cull 的真实宿主 = assets && mode="switch"（比 meshlet 块的 owner 更强），块消息表达不出来 = 债-106 原文。 */
 constexpr std::string_view kMsgMeshletCull{
-	"cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 assets && switch，"
-	"单独开 = 无消费者。装配层 wireMeshletCull 还按「switch 是否生效」的事实出声（同因不同层：switch "
-	"的回落路不写配置）"};
+	"cull 只作用于**已被簇路径接管**的 draw（旧 mesh 管线读不到标志数组）⟹ 需 assets && "
+	"mode = \"switch\"，单独开 = 无消费者。装配层 wireMeshletCull 还按「取代档是否生效」的事实出声"
+	"（同因不同层：取代档的回落路不写配置）"};
 
 /** mdi_shadow 的宿主 = assets + shadow_lod ≥ 0（两脚），消息写全等式 = 债-106 原文。 */
 constexpr std::string_view kMsgMeshletMdiShadow{
@@ -131,11 +134,13 @@ constexpr std::string_view kMsgMeshletMdiShadow{
 	"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）"};
 
 /**
- * 42 行独立申报 = diagnostics 侧 24 行 + shadow 侧 9 行 + runtime.lua **meshlet 块** 9 行
- * （债-106 整块挂号；债-129 第二刀 D 后其中 7 枚「宿主 = assets」的键塌进 kGateBlocks，
+ * 41 行独立申报 = diagnostics 侧 24 行 + shadow 侧 9 行 + runtime.lua **meshlet 块** 8 行
+ * （债-106 整块挂号；债-129 第二刀 D 后其中 6 枚「宿主 = assets」的键塌进 kGateBlocks，
  * 本表只留跨档前置 / 链式前置 / 结构性错位的行；债-129 S2 把 meshlet.debug/tint 三条
- * ——两条残留 + 一条让位——合并成 meshlet.instrument 一条）。与三份配置结构体 / 两份回显表 +
- * 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm 钉死（去重后 52 门，
+ * ——两条残留 + 一条让位——合并成 meshlet.instrument 一条，meshlet.overlay + meshlet.switch
+ * 合并成 meshlet.mode 一条——其中**互斥申报行整删**，「同真」态在三值键下写不出来）。
+ * 与三份配置结构体 / 两份回显表 + 一份键表一一对应，覆盖率由 tests/test_gate_lint.cppm
+ * 钉死（去重后 51 门，
  * 覆盖 = 本表行 ∪ 块条目）。
  * 级别判据 = 计划 §4：error 只留给「必然完全无效且无其他信号」，拿不准一律 warn / inertNote。
  * **行数 ≠ 门数**：一门可以有多条规则（`izb` 两条 = 非 deferred 图 / mode="none"，
@@ -239,48 +244,47 @@ const GateRule kGateRules[]{
 	// 探针子键（picking_probe.x/y、ui_click_probe.x/y、camera_probe.key/holdFrames）的
 	// 「frame=0（宿主）⟹ 子键是死值」塌进 kGateBlocks 的三个探针块（宿主 = 各自 frame 键）。
 
-	// ———— runtime.lua 的 meshlet 块（债-106：整块 9 枚键挂号，「子键开了但资源门关」从装配层
-	//      就近告警升级成启动期申报式护栏；债-129 第二刀 D：块宿主 = assets 的 7 枚键塌进
+	// ———— runtime.lua 的 meshlet 块（债-106：整块 8 枚键挂号，「子键开了但资源门关」从装配层
+	//      就近告警升级成启动期申报式护栏；债-129 第二刀 D：块宿主 = assets 的 6 枚键塌进
 	//      kGateBlocks 的 meshlet 块，本表只留**非 owner 根因**的残留行——owner 项已按
-	//      「同一根因只准一处出声」从残留行里删掉；🔴 assets 是**资源门**不是 9 键总门（生效前置
-	//      不含它的只有 overlay，逐键消息见 kMeshletKeys；路径选择语义归 meshlet.mode）；
+	//      「同一根因只准一处出声」从残留行里删掉；🔴 assets 是**资源门**不是 8 键总门（生效前置
+	//      不含它的只有 mode 的 "overlay" 档，逐键消息见 kMeshletKeys）；
 	//      判据出处 = 字段注释 + wireMeshlet*）————
-	{"meshlet.assets", GateSeverity::inertNote, "", nullptr},  // 资源门本身：无生效前置（= meshlet 块的宿主，进覆盖率对账；不是总门——overlay 的生效前置不含它）
+	{"meshlet.assets", GateSeverity::inertNote, "", nullptr},  // 资源门本身：无生效前置（= meshlet 块的宿主，进覆盖率对账；不是总门——mode="overlay" 档的生效前置不含它）
 	{"meshlet.instrument", GateSeverity::warn, kMsgMeshletInstrument,
-		// 残留行只报 ①（overlay 关）；②（assets 关）由 meshlet 块出声——本行**谓词**已删掉该
+		// 残留行只报 ①（mode 不是 overlay）；②（assets 关）由 meshlet 块出声——本行**谓词**已删掉该
 		// owner 项（不双报），但**消息**保持并集原文（金标准钉文本，逐键归因不并入块消息）。
 		// 债-129 S2：原 meshlet.debug / meshlet.tint 两条残留行 + 一条让位行（tint 与 debug
 		// 同真 ⟹ tint 优先）随两布尔合并为这一条——让位断的形态在三值键下**不可表示**，整删
 		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletInstrument)
-			&& c.runtime.meshletAssets && !c.runtime.meshletOverlay; }},
+			&& c.runtime.meshletAssets && !c.runtime.modeIsOverlay(); }},
 	{"meshlet.coplanar", GateSeverity::warn, kMsgMeshletCoplanar,
-		// 残留行只报 overlay 关那条；assets 关（无条目）由 meshlet 块出声（谓词删 owner、
+		// 残留行只报 mode 不是 overlay 那条；assets 关（无条目）由 meshlet 块出声（谓词删 owner、
 		// 消息留债-106 并集原文，同 meshlet.instrument）
 		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletCoplanar)
-			&& c.runtime.meshletAssets && !c.runtime.meshletOverlay; }},
-	{"meshlet.switch", GateSeverity::warn,
-		"switch 只在 diagnostics.cull_replay = \"cpu\" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放"
-		"（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到"
-		"那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）",
-		[](const Ctx& c) { return c.runtime.meshletSwitch && c.runtime.meshletAssets
+			&& c.runtime.meshletAssets && !c.runtime.modeIsOverlay(); }},
+	{"meshlet.mode", GateSeverity::warn,
+		"mode = \"switch\" 档只在 diagnostics.cull_replay = \"cpu\" 生效：非默认档的 opaque 段由 cullDriver "
+		"按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 "
+		"wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）",
+		// 债-129 S2：原 meshlet.switch 两条行 → 本条（cull 档前置）+ **互斥行整删**——一枚三值键
+		// 写不出 overlay/switch 同真，互斥不再由运行期裁决，那条申报行连同装配层互斥 warn
+		// （wireMeshletSwitch 的「switch 生效 ⟹ 叠加段清空」）一起结构性消失。消灭的是**实测可达
+		// 态**：同开截图与 switch 单开逐位同（dc846396…）而 warnings 1→2，增量就是互斥告警
+		// （/tmp/opencode/o3b_premerge_anchors.txt，合并后此实验永远做不了 = 旧写法配不出来）。
+		[](const Ctx& c) { return c.runtime.modeIsSwitch() && c.runtime.meshletAssets
 			&& c.cfg.cullReplay != CullReplayMode::cpu; }},
-	{"meshlet.switch", GateSeverity::warn,
-		"switch 与 overlay 互斥：cpu 档下 switch 生效时 α 影子叠加段整段清空（同一批几何不画两遍）⟹ 同开的"
-		"代价 = overlay 白采。装配层 wireMeshletSwitch 在**真的生效**时再 warn 一次（同因不同层：switch 有"
-		"设备规格 / 对账回落，overlay 是否被清空是装配期事实）",
-		[](const Ctx& c) { return c.runtime.meshletSwitch && c.runtime.meshletAssets
-			&& c.runtime.meshletOverlay && c.cfg.cullReplay == CullReplayMode::cpu; }},
 	{"meshlet.cull", GateSeverity::warn, kMsgMeshletCull,
-		// 残留行只报 switch 关那条；assets 关由 meshlet 块出声（原判据 assets && switch 的
-		// 谓词已删 owner 项；消息留原文「需 assets && switch」——cull 的真实宿主比块 owner 强，
-		// 块消息表达不出这条逐键语义，金标准钉文本）
+		// 残留行只报取代档关那条；assets 关由 meshlet 块出声（原判据 assets && mode="switch" 的
+		// 谓词已删 owner 项；消息留原文「需 assets && mode = "switch"」——cull 的真实宿主比块 owner
+		// 强，块消息表达不出这条逐键语义，金标准钉文本）
 		[](const Ctx& c) { return c.runtime.meshletCull
-			&& c.runtime.meshletAssets && !c.runtime.meshletSwitch; }},
+			&& c.runtime.meshletAssets && !c.runtime.modeIsSwitch(); }},
 	{"meshlet.cull", GateSeverity::warn,
-		"cull 与 switch 同款限制：只在 diagnostics.cull_replay = \"cpu\" 生效（它挂在取代档上，"
-		"非默认档下 switch 本身就不生效）",
+		"cull 与取代档同款限制：只在 diagnostics.cull_replay = \"cpu\" 生效（它挂在取代档上，"
+		"非默认档下取代本身就不生效）",
 		[](const Ctx& c) { return c.runtime.meshletCull && c.runtime.meshletAssets
-			&& c.runtime.meshletSwitch && c.cfg.cullReplay != CullReplayMode::cpu; }},
+			&& c.runtime.modeIsSwitch() && c.cfg.cullReplay != CullReplayMode::cpu; }},
 	{"meshlet.shadow_lod_fallback", GateSeverity::inertNote,
 		"shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 assets 开时才有消费者（逐模型选级住在 "
 		"wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）",
@@ -329,27 +333,34 @@ const BlockKey kCameraProbeKeys[]{
 };
 
 /**
- * meshlet 块 7 枚键（宿主 = meshlet.assets）。present 口径 = 「本键配了」：
+ * meshlet 块 6 枚键（宿主 = meshlet.assets）。present 口径 = 「本键配了」：
  * 布尔键 = 为真；coplanar / instrument = **偏离默认**（off / none；🔴 不是「偏离出厂档」
  * 的歧义——两枚都是三态字符串键，deviated 即「配了仪器/双臂」）；shadow_lod = **≥ 0**
  * （🔴 不是「偏离默认」——门关档 -1 也偏离默认 5，写成 deviated 会打破「门关 grep meshlet = 0」
  * 护栏，tests 红线 A 用例钉住这条）。
- * 🔴 7 枚键**全部**自带消息（块消息只是新键缺省）：逐键归因不是重复项——overlay 的
- * 「生效条件**不含** assets」、cull 的「真实宿主 = assets && switch（比块 owner 强）」
- * 这类微妙区别块消息表达不出来，塌成一条 = 抹掉下一刀（拍板 A）要消费的语义。
- * 与残留行共享的文本走 kMsgMeshlet* 常量（单一来源）。
+ * 🔴 6 枚键**全部**自带消息（块消息只是新键缺省）：逐键归因不是重复项——cull 的「真实宿主 =
+ * assets && mode="switch"（比块 owner 强）」这类微妙区别块消息表达不出来，塌成一条 =
+ * 抹掉拍板 A 要消费的语义。与残留行共享的文本走 kMsgMeshlet* 常量（单一来源）。
+ * 🔴 债-129 S2 按档分立（拍板 D 约束②「owner 不只有布尔」③「块吞不得」的落地处）：
+ * overlay + switch 两布尔合并成一枚 mode 后，**两条不同的生效前置必须按档各自成立**——
+ * 本表的 `meshlet.mode` 条目 present **只吃 switch 档**（它需 assets：簇条目没烘 ⟹ 无 draw
+ * 可原位取代）。`mode = "overlay"` 档**不进本表**：它的生效条件**不含** assets（宿主是叠加段
+ * 自己），把它申报进 owner = assets 的块门下 = **假申报**（比没申报更坏——那会让
+ * `mode = "overlay"` × `assets = false` 这个合法组合被判成死值）。该组合的实际落空
+ * （slots = nullopt ⟹ 没有条目可采、零 draw）由装配层 `wireMeshletOverlayActivation` 按
+ * 「有没有条目可采」的**事实**出声（无产物 / 多产物回落 / 零模型命中只有装配期看得见），
+ * 不静默空开关——原 meshlet.overlay 块条目的谓词（present = overlay 布尔 ⟺ 在 !assets 时
+ * 发射）就是在把 overlay 吞进 assets 门下，随合并删除。
  */
 const BlockKey kMeshletKeys[]{
-	{"meshlet.overlay", [](const Ctx& c) { return c.runtime.meshletOverlay; },
-		"overlay 的生效条件**不含** assets（它的宿主是叠加段自己），但 assets = false ⟹ slots = nullopt = "
-		"条目烘焙整段早退 ⟹ 没有条目可采（零 draw）。装配层 wireMeshletOverlayActivation 还按「有没有条目可采」"
-		"的**事实**出声（同因不同层：无产物 / 多产物回落 / 零模型命中只有装配期看得见）"},
+	{"meshlet.mode", [](const Ctx& c) { return c.runtime.modeIsSwitch(); },
+		"mode = \"switch\" 需 assets：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）"
+		"⟹ 无 draw 可原位取代。⚠ mode = \"overlay\" 档**不**在本块申报——它的生效条件不含 assets"
+		"（宿主是叠加段自己），零条目可采的落空事实归装配层 wireMeshletOverlayActivation 出声"},
 	{"meshlet.instrument", [](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletInstrument); },
 		kMsgMeshletInstrument},
 	{"meshlet.coplanar", [](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletCoplanar); },
 		kMsgMeshletCoplanar},
-	{"meshlet.switch", [](const Ctx& c) { return c.runtime.meshletSwitch; },
-		"switch 需 assets：簇条目根本没烘（makeOpaqueCall 读 asset.meshletPipelineIndex）⟹ 无 draw 可原位取代"},
 	{"meshlet.cull", [](const Ctx& c) { return c.runtime.meshletCull; }, kMsgMeshletCull},
 	{"meshlet.shadow_lod", [](const Ctx& c) { return c.runtime.meshletShadowLod >= 0; },
 		"shadow_lod ≥ 0 但 assets = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = "

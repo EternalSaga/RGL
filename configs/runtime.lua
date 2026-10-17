@@ -125,10 +125,11 @@ return {
     },
 
     -- ── ★0-b1 簇化渲染路径（meshlet 产物）资源门，🔴 **★18-C 起默认开** ──
-    -- 🔴 **资源门 ≠ 块内 9 键的总门**（拍板 A(a) 的语义本体）：本键决定簇条目烘不烘、4 段簇 buffer
-    --    与描述符槽在不在；生效前置**不含**它的只有 `overlay`（它的宿主是叠加段自己，只经「条目烘不烘」
-    --    间接受本键影响），其余 8 枚键各自还带额外宿主条件（逐键 → rgl/gate_lint_impl.cppm 的 kMeshletKeys）；
-    --    路径选择的语义归 `meshlet.mode`（O1 已挂号），不归本键。
+    -- 🔴 **资源门 ≠ 块内 8 键的总门**（拍板 A(a) 的语义本体）：本键决定簇条目烘不烘、4 段簇 buffer
+    --    与描述符槽在不在；生效前置**不含**它的只有 `mode = "overlay"` 档一枚（它的宿主是叠加段自己，
+    --    只经「条目烘不烘」间接受本键影响），其余 6 枚键与 mode 的 `"switch"` 档各自还带额外宿主条件
+    --    （逐键 → rgl/gate_lint_impl.cppm 的 kMeshletKeys）；
+    --    路径选择的语义归 `meshlet.mode`（债-129 S2 已把两布尔合并成它），不归本键。
     -- 🔴 门关 = 逐位不变**仍是硬护栏**（docs/mdi_plan.md P5），但**出厂不再是门关态**（2026-10-12
     -- 用户拍板「默认开 D=5」）⟹ 要门关必须显式给 `assets = false` + `shadow_lod = -1`。
     -- 出厂默认截图锚随之从 54e40665…（门关）换成 95edc8cc…（本态）；两锚与三条已明写代价
@@ -137,21 +138,31 @@ return {
     -- ★1-a1ii-α 起 assets 开 = 恒 L0 簇**影子叠加**（同 objectIndex 重画一遍，正常档与底
     -- 共面 + eLess ⟹ 零像素写入）；默认值唯一真相源 = RuntimeConfig 成员初始化。
     -- 🔴 ★1-a1ii-β-1 起本块**全部布尔键**走严格类型读：写成字符串/数字 = 启动失败并点名键，
-    --   不再静默当键缺失（实测旧行为：`switch = "yes"` 跑完整程 errors=0 warnings=0，而实际
+    --   不再静默当键缺失（实测旧行为：`cull = "yes"` 跑完整程 errors=0 warnings=0，而实际
     --   跑的是关档 = 截图哈希判据整批假绿）。coplanar 的未知值 fail-fast 同纪律。
     meshlet = {
         assets = true,
-        -- 🔴 债-105：**α 影子叠加段自己的门**（默认关）。★18-C 翻默认后 `assets = true` 出厂，
-        -- 而叠加段当时没有独立门 ⟹ 出厂白付 **+1571 draws / +4713 vkCmd / +1.59ms 每帧**买一个
-        -- **一像素都不写**的验证脚手架（同批几何在 opaque 之后重画一遍、共面 + eLess 全拒）。
-        -- 本键只决定**采不采叠加 draw**：条目的烘焙条件仍挂在 `assets` 上（🔴 那些条目同时是
-        -- `switch` 原位取代的宿主，关 overlay ≠ 关条目，否则 `switch` 静默失去宿主）。
-        -- 生效条件**不含** `assets`（同 `mdi_shadow` 定性），但 `overlay = true` + `assets = false`
-        -- = 没有条目可采 ⟹ 装配层出声，不静默空开关。
-        -- 🔴 本键关时 `instrument` **条目级**变体位（三档全部）一律取 base（它会改 `switch` 共用的
-        --   条目 = 叠加仪器渗进产品取代路），且偏离默认时 warn 出声。
-        -- ⚠ 想跑 α 的四臂判据（coplanar / instrument=offset/tint）必须显式开本键，否则仪器没有消费者。
-        overlay = false,
+        -- 🔴 债-105 + 债-129 S2：簇路径**选路**档（原 `overlay` + `switch` 两布尔 → 一枚三值键，
+        -- `aa` 三态先例复刻；原「同真 ⟹ 运行期裁决、switch 赢」的互斥态**写不出来**，
+        -- 互斥告警两条随合并结构性消失——合并前实测：同开截图与 switch 单开逐位同而
+        -- warnings 1→2，消灭的是真实可达态，不只像素同值）：
+        --   "off"     = 出厂态（原两布尔全 false）：旧路径照画、叠加段零采（债-105「不白付」：
+        --               ★18-C 翻默认后 assets = true 出厂，而叠加段没有独立档时白付
+        --               +1571 draws / +4713 vkCmd / +1.59ms 每帧买一个一像素不写的验证脚手架）
+        --   "overlay" = ★1-a1ii-α α 影子叠加段采 draw。🔴 生效条件**不含** `assets`（它的宿主是
+        --               叠加段自己，同 `mdi_shadow` 定性），但 `overlay` + `assets = false`
+        --               = 没有条目可采 ⟹ 装配层按事实出声，不静默空开关（该组合**合法**，
+        --               gate_lint 不判它死值——按档分立 → rgl/gate_lint_impl.cppm kMeshletKeys）
+        --   "switch"  = ★1-a1ii-β-1 原位取代档：门开资产在主 opaque 段里由簇路径 draw **1:1 原位**
+        --               顶掉旧 mesh draw（同 objectIndex / 同 pushData / 同段内位置，只换管线
+        --               条目与 task 数 = 2×L0 簇数），而不是 α 那种「旧路径照画 + 共面影子叠加」。
+        --               原位而非另开一段的理由 = opaque 段序被 GPU culling 候选序对账强依赖。
+        --               🔴 **需 assets**（簇条目没烘 ⟹ 无 draw 可原位取代）；只在
+        --               diagnostics.cull_replay = "cpu"（默认档）生效，非默认档不切 + 启动 warn
+        --               （gpu_sync 档 opaque 段由候选表重放，段内换管线不在那条路上）。
+        --               边界（β-1 不做）：阴影/CSM、picking、IZB mask 重放、透明排序仍走旧路径。
+        -- 未知值 = 启动 fail-fast（aa/present_mode 纪律：静默回落 = 选错路而截图判据全绿）。
+        mode = "off",
         -- ★1-a1ii-α + ★0.5-b2 阳性对照仪器位（债-129 S2：原 debug/tint 两布尔 → 一枚三值键，
         -- `aa` 三态先例复刻；原「同真 ⟹ tint 优先」的让位形态**写不出来**，让位规则已删）：
         --   "none"   = 正常叠加（base SPV：共面 + eLess ⟹ 零写入）
@@ -162,7 +173,10 @@ return {
         --              平色块）= 共面双臂的阳性对照：coplanar=equal + tint 图必须变 = equal
         --              臂的非空洞证明；coplanar=off + tint 必须 = 基线（eLess 共面全拒）
         -- 未知值 = 启动 fail-fast（aa/present_mode 纪律：静默回落 = 仪器臂根本没跑而判据全绿）。
-        -- assets 关时无意义（条目根本不建）。
+        -- 🔴 本键**条目级**变体位（三档全部）在 `mode != "overlay"` 时一律取 base（它会改取代档
+        --   共用的条目 = 叠加仪器渗进产品取代路），且偏离默认时 warn 出声。
+        -- ⚠ 想跑 α 的四臂判据（coplanar / instrument=offset/tint）必须显式 `mode = "overlay"`，
+        --   否则仪器没有消费者。assets 关时无意义（条目根本不建）。
         instrument = "none",
         -- ★0.5-b2 共面双臂：叠加那批 draw 自带的深度比较档（动态状态，只作用叠加 draw，
         -- pass 与旧路径状态序列不动；off = 不碰 = 与门关逐 bit 同 = A1 构造性保证）。
@@ -176,19 +190,11 @@ return {
         --   位置逐位同这条改由 equal 臂的**放行集**承担：实测 32.74% ≈ offset 覆盖足迹 34.27%。
         -- 未知值 = 启动 fail-fast（aa/present_mode 纪律：静默回落 = 四臂假绿的地基事故）。
         -- 与 instrument 正交；assets 关时无意义（叠加零 draw）。
-        -- 🔴 债-105 起**还要 overlay = true 才有消费者**：叠加段关 = 一条叠加 draw 都不采 ⟹ 本档
+        -- 🔴 债-105 起**还要 mode = "overlay" 才有消费者**：叠加段不开 = 一条叠加 draw 都不采 ⟹ 本档
         --   没有作用对象（生效档 INFO 会当场点出来，别把"双臂在跑"读进日志）。
         coplanar = "off",
-        -- ★1-a1ii-β-1 原位取代档：= true（且 assets = true）时，门开资产在主 opaque 段里
-        -- 由簇路径 draw **1:1 原位**顶掉旧 mesh draw（同 objectIndex / 同 pushData / 同段内
-        -- 位置，只换管线条目与 task 数 = 2×L0 簇数），而不是 α 那种「旧路径照画 + 共面影子
-        -- 叠加」。原位而非另开一段的理由 = opaque 段序被 GPU culling 候选序对账强依赖。
-        -- 与叠加互斥：本键开 = 叠加段清空（同一批几何不画两遍），装配层 warn 出声。
-        -- 🔴 只在 diagnostics.cull_replay = "cpu"（默认档）生效；非默认档不切 + 启动 warn
-        --   一次（gpu_sync 档 opaque 段由候选表重放，段内换管线不在那条路上）。
-        -- 边界（β-1 不做）：阴影/CSM、picking、IZB mask 重放、透明排序仍走旧路径。
-        switch = false,
-        -- ★1-a2-i 逐簇视锥剔除：= true（且 assets = switch = true）时每帧一次 compute 逐 L0 簇
+        -- ★1-a2-i 逐簇视锥剔除：= true（且 assets = true 且 mode = "switch"）时每帧一次 compute
+        -- 逐 L0 簇
         -- 做保守视锥测试（与 CPU 参考剔除器 cullClustersLinear 同式），mesh shader 对不可见簇
         -- 早退。判据（🔴 主判据是零阈值的「cull=on 逐位 = cull=off」——保守剔除按构造不可能
         -- 改变交付图像）与定价 → docs/mdi_plan.md §17。单独开 = 无消费者，装配层 warn 出声。

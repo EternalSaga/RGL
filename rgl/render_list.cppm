@@ -264,7 +264,7 @@ export uint32_t meshletTaskCount(uint32_t clusterCount);
  *  2. 材质非 blend（透明段按距离排序，叠加不参与——画进独立向量会破坏其排序语义）；
  *  3. registry ctx 有簇区间表（门关 = 装配层根本不建）且不越界（表比实例矩阵槽短 = 不采）；
  *  4. 本 objectSlot 的 L0 簇数 > 0（无簇 = 零 group，连空 draw 都不发）；
- *  5. 🔴 **`meshlet.overlay` 生效**（债-105 新增，`overlayActive` 入参）——叠加段是 ★1-a1ii-α
+ *  5. 🔴 **`meshlet.mode = "overlay"` 档生效**（债-105 新增，`overlayActive` 入参）——叠加段是 ★1-a1ii-α
  *     的验证脚手架（同批几何重画一遍、共面 + `eLess` 一像素不写），出厂默认不再连带它；
  *  6. β-1 原位取代**未**生效（`meshletInPlace` 入参）——同一批几何不能既原位取代又再叠加画第二遍。
  *

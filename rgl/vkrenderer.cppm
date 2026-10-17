@@ -375,7 +375,7 @@ export class Renderer {
 	 * 前插 = 任何图形态的 pass 0，且 shadow_meshlet.mesh.slang 不声明 binding 21（不读标志）
 	 * ⟹ 同 pass 无读写 feedback。消费者锚点判据用 drawSource 而不是 pass 名：deferred 的
 	 * 主 opaque 段叫 "geometry"（drawSource 仍是 "opaque"），forward 叫 "opaque"；
-	 * meshlet.switch 只替换主 opaque 段 ⟹ 消费者就是它。失败 = throw（装配期路径，
+	 * meshlet.mode = "switch" 档只替换主 opaque 段 ⟹ 消费者就是它。失败 = throw（装配期路径，
 	 * 同 syncIzbGraphAttachments 写上界对账的 fail-fast 口径；对账缺边红在声明现场）。
 	 */
 	void syncMeshletGraphAttachments();

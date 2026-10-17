@@ -45,9 +45,8 @@ constexpr std::string_view kRuntimeKeys[]{
 	"wet.ripple_amp",
 	"wet.puddle_freq_radii",
 	"meshlet.assets",
-	"meshlet.overlay",
+	"meshlet.mode",
 	"meshlet.instrument",
-	"meshlet.switch",
 	"meshlet.cull",
 	"meshlet.shadow_lod",
 	"meshlet.shadow_lod_fallback",
@@ -472,7 +471,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * **值不是布尔时立即报错**，而不是静默当键缺失）。
  *
  * 为什么必须换（实测，不是推测）：`sol::optional<bool> v = root[key]` 在值是字符串或数字时
- * **静默给 nullopt** —— `meshlet.switch = "yes"` 与 `meshlet.switch = 1` 两条都按「键不存在」
+ * **静默给 nullopt** —— `meshlet.cull = "yes"` 与 `meshlet.cull = 1` 两条都按「键不存在」
  * 跑完整程，errors=0 warnings=0、日志零行。对 meshlet 块这是最坏的失效形态：β 的主判据是
  * 「截图哈希对基线」，键被静默吃掉 ⟹ 实际跑的是旧路径而判据全绿。`present_mode` / `aa` /
  * `meshlet.coplanar` 的「笔误不静默回落」纪律同向。
@@ -523,6 +522,42 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 		return fmt::format(
 			"runtime config ({}): meshlet.{} must be an integer (got {})", path, key, raw);
 	dst = static_cast<int32_t>(raw);
+	return std::nullopt;
+}
+
+/**
+ * `meshlet.mode` 三态字符串键解析（债-129 S2 O1-1.2 = 原 `overlay` + `switch` 两布尔合并，
+ * `aa` 三态先例复刻；形态先例 = `applyMeshletCoplanarKey` / `applyMeshletInstrumentKey`）。
+ *
+ * 缺键 = 保持默认 `off`（= 原两布尔全 false = 出厂不叠加不取代，债-105「不白付」+ P5 逐位
+ * 不变护栏的构造性前提）。**未知值 = 返回错误消息由调用方 fail-fast 且点名全部合法值**，
+ * 不静默回落（`aa` / `meshlet.coplanar` 的既有纪律：选路位被静默回落 = 取代臂根本没跑而
+ * 截图判据全绿 = 整批假绿）。🔴 配置串 `"switch"` 对应枚举值 `inplaceSwitch`（`switch` 是
+ * C++ 关键字，只有枚举值名让位，用户写的东西不让位）。
+ * 🔴 旧两布尔键 `overlay` / `switch` **无兼容双读**（本仓硬切红线）——残留旧键由未知键护栏
+ * 出声（`runtime: 未知键 'meshlet.overlay'`，tests 变异红线钉死）；两布尔的「同真」互斥态
+ * 从此**写不出来**（合并的存在理由，实测证据 = /tmp/opencode/o3b_premerge_anchors.txt 第四行）。
+ * @param root meshlet 块表（与 readMeshletBlock 同层）
+ * @param cfg  写入目标（仅在键存在且合法时被写）
+ * @param path 仅用于错误消息（与 aa/present_mode 同口径带配置文件路径）
+ * @return nullopt = 合法（含缺键）；有值 = 错误消息
+ */
+[[nodiscard]] static std::optional<std::string> applyMeshletModeKey(
+	const sol::table& root, RuntimeConfig& cfg, std::string_view path) {
+	sol::optional<std::string> raw = root["mode"];
+	if (!raw)
+		return std::nullopt;
+	if (*raw == "off")
+		cfg.meshletMode = MeshletMode::off;
+	else if (*raw == "overlay")
+		cfg.meshletMode = MeshletMode::overlay;
+	else if (*raw == "switch")
+		cfg.meshletMode = MeshletMode::inplaceSwitch;
+	else
+		return fmt::format(
+			"runtime config ({}): meshlet.mode must be \"off\", \"overlay\" or \"switch\", "
+			"got \"{}\"",
+			path, *raw);
 	return std::nullopt;
 }
 
@@ -591,27 +626,28 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 
 /**
  * `meshlet` 嵌套块解析（★0-b1 簇路径**资源门**（assets：决定条目烘不烘、4 段簇 buffer 与描述符槽
- * 在不在；不是块内 9 键的总门——生效前置不含它的只有 overlay，路径选择语义归 meshlet.mode，
- * 三条语义的权威展开 → RuntimeConfig::meshletAssets 注释）+ ★1-a1ii-α/★0.5-b2 仪器档
- * （instrument，债-129 S2 由 debug/tint 两布尔合并）+ ★0.5-b2 coplanar +
- * ★1-a1ii-β-1 switch 原位取代档 + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级 +
- * ★M-0 mdi_shadow 真 MDI 档 + **债-105** overlay α 叠加段自己的门）：
- * `meshlet = { assets, overlay, instrument, coplanar, switch, cull, shadow_lod,
+ * 在不在；不是块内 8 键的总门——生效前置不含它的只有 mode 的 `"overlay"` 档，三条语义的权威展开
+ * → RuntimeConfig::meshletAssets 注释）+ ★1-a1ii-α/β-1 选路档（mode，债-129 S2 由 overlay/switch
+ * 两布尔合并）+ ★1-a1ii-α/★0.5-b2 仪器档（instrument，债-129 S2 由 debug/tint 两布尔合并）+
+ * ★0.5-b2 coplanar + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级 +
+ * ★M-0 mdi_shadow 真 MDI 档）：
+ * `meshlet = { assets, mode, instrument, coplanar, cull, shadow_lod,
  * shadow_lod_fallback, mdi_shadow }`。
  * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletAssets = true` + `meshletShadowLod = 5`
  * = 出厂即开簇路径与阴影远级联 LOD，2026-10-12 用户拍板。P5「门关 = 逐位不变」**仍是硬护栏**，
  * 只是门关态现在要显式 `assets = false` + `shadow_lod = -1`（实测精确复现旧锚 54e40665…）。
- * 逐键默认值唯一真相源 = RuntimeConfig 成员初始化，本行只列其余形态：`meshletOverlay = false` =
- * α 叠加段不采 draw（债-105，出厂不再白付 1.59ms）；`meshletInstrument = none` =
+ * 逐键默认值唯一真相源 = RuntimeConfig 成员初始化，本行只列其余形态：`meshletMode = off` =
+ * 不叠加不取代（债-129 S2 合并原 overlay/switch 两布尔，「同真」互斥态写不出来；债-105 起
+ * 出厂不再白付 1.59ms）；`meshletInstrument = none` =
  * 正常叠加档（不选仪器变体，债-129 S2 合并原 debug/tint 两布尔）；`meshletCoplanar = off` =
- * 不碰动态状态；`meshletSwitch = false` = 不取代；`shadow_lod_fallback = deepest`；
+ * 不碰动态状态；`shadow_lod_fallback = deepest`；
  * `meshletMdiShadow = false` = 不走 MDI（★M-1b 起本键**有消费者**：键开则烘 MDI 条目并回填，
  * 宿主条件 → 字段注释）。
  * 形态先例 = readFsrBlock（嵌套块，无扁平键双读兼容）；coplanar / shadow_lod_fallback /
- * instrument 三枚三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。
- * 五枚布尔走 readStrictBoolKey、shadow_lod 走 readStrictIntKey（类型错 = 启动失败，理由 →
+ * instrument / mode 四枚三态键先例 = applyAaKey（未知值 fail-fast，错误经返回值上抛给调用方）。
+ * 四枚布尔走 readStrictBoolKey、shadow_lod 走 readStrictIntKey（类型错 = 启动失败，理由 →
  * 各自注释）。
- * 债-106 已挂号：gate_lint 的 `Ctx` 现含 `RuntimeConfig` 与它的出厂默认，整块 9 枚键逐枚
+ * 债-106 已挂号：gate_lint 的 `Ctx` 现含 `RuntimeConfig` 与它的出厂默认，整块 8 枚键逐枚
  * 申报（规则表 → `gate_lint_impl.cppm` 的 meshlet 段；判据出处 = 各字段注释 + `wireMeshlet*`
  * 消费者）。★18-C 的就近 WARNING（`warnIfShadowLodOrphaned`）与叠加仪器的就近 warn
  * （`warnMeshletVariantInstruments`）判据是纯配置组合，已随迁移删除（同一根因两条喊 =
@@ -619,16 +655,15 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
  * @param path 仅用于错误消息
- * @param trace 键轨迹（九枚键在块入口**无条件**记全 = 覆盖率护栏输入；三枚三态字符串键
+ * @param trace 键轨迹（八枚键在块入口**无条件**记全 = 覆盖率护栏输入；四枚三态字符串键
  *              由本函数记，不进 applyMeshlet*Key 内部记——每键恰好记一次）
  * @return nullopt = 合法；有值 = 首个错误消息（调用方 fail-fast）
  */
 [[nodiscard]] static std::optional<std::string> readMeshletBlock(const sol::table& root,
 	RuntimeConfig& cfg, std::string_view path, RuntimeKeyTrace& trace) {
 	trace.read.emplace_back("meshlet.assets");
-	trace.read.emplace_back("meshlet.overlay");
+	trace.read.emplace_back("meshlet.mode");
 	trace.read.emplace_back("meshlet.instrument");
-	trace.read.emplace_back("meshlet.switch");
 	trace.read.emplace_back("meshlet.cull");
 	trace.read.emplace_back("meshlet.shadow_lod");
 	trace.read.emplace_back("meshlet.shadow_lod_fallback");
@@ -640,14 +675,12 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 	// 顺序 = 键在 configs/runtime.lua 里的出现序；任一失败即返回（fail-fast，不收集后合并）
 	if (auto err = readStrictBoolKey(meshlet, "assets", cfg.meshletAssets, path))
 		return err;
-	// 债-105 α 影子叠加段自己的门（默认 false ⟹ 出厂不再白付 +1.59ms）
-	if (auto err = readStrictBoolKey(meshlet, "overlay", cfg.meshletOverlay, path))
+	// 债-129 S2 选路三态键（off/overlay/switch = 原 overlay/switch 两布尔合并，互斥态写不出来；
+	// 债-105 α 影子叠加段 = "overlay" 档，出厂 "off" ⟹ 出厂不再白付 +1.59ms）
+	if (auto err = applyMeshletModeKey(meshlet, cfg, path))
 		return err;
 	// 债-129 S2 仪器位三态键（none/offset/tint = 原 debug/tint 两布尔合并，让位态写不出来）
 	if (auto err = applyMeshletInstrumentKey(meshlet, cfg, path))
-		return err;
-	// ★1-a1ii-β-1 原位取代档
-	if (auto err = readStrictBoolKey(meshlet, "switch", cfg.meshletSwitch, path))
 		return err;
 	// ★1-a2-i 逐簇视锥剔除
 	if (auto err = readStrictBoolKey(meshlet, "cull", cfg.meshletCull, path))

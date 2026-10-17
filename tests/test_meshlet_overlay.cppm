@@ -5,7 +5,8 @@ module;
 #include <fstream>
 
 /**
- * test_meshlet_overlay —— **债-105**：α 影子叠加段自己的门 `meshlet.overlay`（默认关）。
+ * test_meshlet_overlay —— **债-105**：α 影子叠加段自己的档 `meshlet.mode = "overlay"`
+ * （出厂 `"off"`；债-129 S2 起该档与取代档同吃一枚三值 `meshlet.mode`）。
  *
  * 被测对象 = `rgl/render_list_impl.cppm` 的 `collectMeshletOverlay` + `meshletTaskCount`
  * （债-105 抬为 render_list 导出接缝，`collectShadowCasters` 的 ★18-B2 先例：接口声明 export、
@@ -21,7 +22,7 @@ module;
  *   · 门开 ⟹ **恰一条**且 task 数 = 2×L0 簇数（摘开关不能把 ×2 也顺手摘掉）；
  *   · 互斥抑制（β-1 switch）与既有四条判据**一条都不能被第五枚挤掉**——`collectMeshletOverlay`
  *     的六条判据里任何一条短路，画面都不报错，只在命令流上多/少几条。
- * 加上配置键那一半：`overlay` 的默认**是 false**，所以探针必须取 **true**（§18.11 的
+ * 加上配置键那一半：`mode` 的默认**是 off**，所以探针必须取 **"overlay"**（§18.11 的
  * 「默认翻方向，探针就得翻方向」——探针与默认同值时「键被静默忽略」与「读到默认」不可区分 = 假绿）。
  *
  * ## 🔴 两枚布尔入参不用同值探针（参数序坑的同族）
@@ -59,24 +60,25 @@ module;
  *      逐条点名（实测列出，不是推测）：本文件 5 条（阳性锚点 / 四条反向 / 规格常量 / ×2 逐槽 /
  *      属性）+ `tests/test_shadow_lod_emit.cppm` 的 2 条（emit 主用例 + collect+emit 属性）
  *      ⟹ 这就是「单一真相源」的兑现：改它，三个消费者各自的用例一起红
- *   ⑪ 解析器键名 `overlay → overlay_x`（键被静默忽略）→ 红 **1** 条（配置用例；探针取 true 才红，
+ *   ⑪ 解析器键名 `mode → mode_x`（键被静默忽略）→ 红 **1** 条（配置用例；探针取 "overlay" 才红，
  *      与默认同值则整条绿 = §18.11 的 M5 形态）
- *   ⑫ 成员初始化 `meshletOverlay = true`（默认翻向 = 出厂又白付一次）→ 红 **1** 条（配置用例默认断言）
+ *   ⑫ 成员初始化 `meshletMode = overlay`（默认翻向 = 出厂又白付一次）→ 红 **1** 条（配置用例默认断言）
  *
  * ## 已知覆盖缺口（写出来，别让「全绿」被读成「全验过」）
  *   · 🔴 **调用点的实参互换测不到**（上面 M13 的实测读数）。单测直打函数本体，调用点在
  *     `renderListSystem`（要 registry + Resources = 设备级），进不了 `just test`。兜住这条的
  *     不是单测而是
- *     **A4 的 counters**（互换 ⟹ 叠加段不再采 draw ⟹ `overlay=true` 臂的 `draw.count` 从 8172
+ *     **A4 的 counters**（互换 ⟹ 叠加段不再采 draw ⟹ `mode="overlay"` 臂的 `draw.count` 从 8172
  *     掉回 6601）与 **A6 的变图**（debug/tint 臂根本不会变）。⟹ 交验收时 A4/A6 不能省。
  *   · ~~**装配层那三步进不了单测**~~ 之一已收口（债-129 S2）：`pickMeshletMeshVariant` 原住
  *     `module main:meshlets` 实现分区（rgl_tests 链不到 main = 当时不可达的真根因，与 registry
  *     无关——函数本体是纯的），已下移到 shader_registry，三档选档 + overlay 关强制 base
  *     现由本文件「七」节直打。`wireMeshletOverlayActivation` 的 emplace/出声仍要 registry +
  *     设备级资产表 + 日志单例（防线 = 验收判据 A6b 与 A8，不变）。
- *   · **烘焙不受 overlay 门管辖**这件事（β-1 取代段的宿主不能丢）在单测里**测不到**——
+ *   · **烘焙不受叠加档管辖**这件事（β-1 取代段的宿主不能丢）在单测里**测不到**——
  *     `bakeMeshletEntries` 要 ShaderRegistry/设备。防线 = 该函数头的钉死注释 + 一条**专门跑
- *     `switch=true + overlay=false` 的臂**（若烘焙被误挂到 overlay 门下，那臂会静默退回旧路径：
+ *     `mode = "switch"` 的臂**（债-129 S2 起该臂**写不出** overlay——一枚三值键，取代档下叠加段
+ *     本就不存在，若烘焙被误挂到叠加档门下，那臂会静默退回旧路径：
  *     `draw.count` 仍 = 6601 与出厂态相同，所以**必须看日志里 switch 的「取代图元 N 个」是否为 0**，
  *     只看 counters 抓不到）。
  *   · 叠加段「真的被执行器画出来」（`executeMeshletOverlay` / 动态状态那侧）不在本文件射程，
@@ -93,7 +95,7 @@ import meshlet_ranges;                   // ClusterRangeTable
 import scene_forward_types_generated;    // ObjectClusterRange（区间表的条目类型，反射生成）
 import material_types_generated;         // DrawArgs（push 字节的真实类型，判 pushData 身份）
 import meshlet_cull_types_generated;     // kSlotsPerCluster（×2 契约的 CPU 端规格常量）
-import runtime_config;                   // 配置键 meshlet.overlay 的解析契约
+import runtime_config;                   // 配置键 meshlet.mode 的解析契约
 import shader_registry;                  // pickMeshletMeshVariant / MeshletMeshVariant（债-129 S2 下移到本模块 = 单测可达）
 
 namespace RGL {
@@ -425,58 +427,66 @@ TEST_CASE("collectMeshletOverlay：随机实体序列 ⟹ 条数与逐条内容�
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 六、配置键 meshlet.overlay（默认 false ⟹ 探针必须取 true）
+// 六、配置键 meshlet.mode 的叠加档（默认 off ⟹ 探针必须取 "overlay"）
+//     债-129 S2：原 `meshlet.overlay` 布尔并入三值 mode（三值全谱 + fail-fast 文本 +
+//     非字符串已知限制在 test_scene_config 的 meshlet.mode 用例逐档钉；本节吃
+//     **叠加档视角**：默认、探针命中、不与 assets 焊死、旧两布尔无扁平双读）
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("runtime_config：meshlet.overlay 默认 false、探针 true 命中、非布尔即失败、无扁平双读") {
-	// 变异红线 ⑫（键名打错 = 静默忽略）、⑬（默认翻成 true）在此红。
-	// 🔴 探针取 **true**：默认是 false，探针与默认同值时「键被读到」与「键被静默忽略」不可区分
+TEST_CASE("runtime_config：meshlet.mode 默认 off、叠加档探针 \"overlay\" 命中、不与 assets 焊死、无旧键双读") {
+	// 变异红线 ⑪（键名打错 = 静默忽略）、⑫（默认翻向）在此红。
+	// 🔴 探针取 **"overlay"**（≠ 默认 off）：探针与默认同值时「键被读到」与「键被静默忽略」不可区分
 	// （§18.11 那条纪律，本仓 M5 实测坐实过）。
-	{  // 成员初始化默认路径（不看 lua 文件）= 债-105 的"出厂不白付"全靠这一枚默认
-		CHECK(RuntimeConfig{}.meshletOverlay == false);
+	{  // 成员初始化默认路径（不看 lua 文件）= 债-105 的"出厂不白付" + P5 逐位护栏全靠这一枚默认
+		CHECK(RuntimeConfig{}.meshletMode == MeshletMode::off);
 	}
-	{  // 缺块 / 缺键 = 保持默认 false（门不会因为 assets 或别的键被顺手打开）
+	{  // 缺块 / 缺键 = 保持默认 off（档不会因为 assets 或别的键被顺手打开）
 		TempLua f("rt_ovl_default", "return {}\n");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletOverlay == false);
+		CHECK(r->meshletMode == MeshletMode::off);
 		TempLua g("rt_ovl_nokey", R"lua(return { meshlet = { assets = true } })lua");
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
-		CHECK(r2->meshletOverlay == false);
+		CHECK(r2->meshletMode == MeshletMode::off);
 	}
-	{  // 块内键名命中（探针 true）
-		TempLua f("rt_ovl_on", R"lua(return { meshlet = { overlay = true } })lua");
+	{  // 块内键名命中（探针 "overlay" ≠ 默认 off，漏读即红）+ 谓词同步
+		TempLua f("rt_ovl_on", R"lua(return { meshlet = { mode = "overlay" } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletOverlay == true);
+		CHECK(r->modeIsOverlay() == true);
+		CHECK(r->modeIsSwitch() == false);
 	}
-	{  // 显式 false 也读得到（与「缺键回落」同读数，键名命中路径由上一条钉）
-		TempLua f("rt_ovl_off", R"lua(return { meshlet = { overlay = false } })lua");
+	{  // 显式 "off" 也读得到（与「缺键回落」同读数，键名命中路径由上一条钉）
+		TempLua f("rt_ovl_off", R"lua(return { meshlet = { mode = "off" } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletOverlay == false);
+		CHECK(r->meshletMode == MeshletMode::off);
 	}
-	{  // 本键**不**与 assets 焊死：assets=false + overlay=true 读到的仍是 overlay=true
-		// （孤立组合由装配层按事实出声，配置层不做隐含耦合 = 交付物 (1) 的红线）
-		TempLua f("rt_ovl_orphan", R"lua(return { meshlet = { assets = false, overlay = true } })lua");
+	{  // 本档**不**与 assets 焊死：assets=false + mode="overlay" 读到的仍是 overlay
+		// （该组合**合法**——生效前置不含 assets；零条目可采由装配层按事实出声，
+		//  配置层不做隐含耦合 = 交付物 (1) 的红线，债-129 S2 后 gate_lint 也不判它死值）
+		TempLua f("rt_ovl_orphan",
+		          R"lua(return { meshlet = { assets = false, mode = "overlay" } })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletOverlay == true);
+		CHECK(r->modeIsOverlay() == true);
 		CHECK(r->meshletAssets == false);
 	}
-	{  // 非布尔 = **启动失败**点名键（meshlet 块全部布尔键同纪律：静默回落 = 截图判据整批假绿）
-		for (const char* bad : {R"lua(return { meshlet = { overlay = "yes" } })lua",
-		                        R"lua(return { meshlet = { overlay = 1 } })lua"}) {
-			TempLua f("rt_ovl_bad", bad);
-			CHECK_FALSE(loadRuntimeConfig(f.pathStr()).has_value());
-		}
+	{  // 非法值 = **启动失败**点名（meshlet 块三态字符串键同纪律：静默回落 = 截图判据整批假绿）
+		TempLua f("rt_ovl_bad", R"lua(return { meshlet = { mode = "on" } })lua");
+		CHECK_FALSE(loadRuntimeConfig(f.pathStr()).has_value());
 	}
-	{  // 🔴 **没有**扁平键的兼容双读（两个真相源 = 本仓反复登记的反模式）
+	{  // 🔴 **没有**扁平键的兼容双读 + 旧两布尔块内键也不被读（硬切；warn 点名那条在
+	   //  test_scene_config 的债-129 S2 变异红线用例）
 		TempLua f("rt_ovl_flat", R"lua(return { meshlet_overlay = true })lua");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->meshletOverlay == false);
+		CHECK(r->meshletMode == MeshletMode::off);
+		TempLua g("rt_ovl_old_bool", R"lua(return { meshlet = { overlay = true } })lua");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->meshletMode == MeshletMode::off);
 	}
 }
 
@@ -484,28 +494,35 @@ TEST_CASE("runtime_config：meshlet.overlay 默认 false、探针 true 命中、
 // 七、pickMeshletMeshVariant 三档选档（债-129 S2：函数下移到 shader_registry 后单测可达）
 // ─────────────────────────────────────────────────────────────────────────────
 
-TEST_CASE("pickMeshletMeshVariant：instrument 三档各返回正确变体；overlay 关 = 一律 base（让位分支已删）") {
+TEST_CASE("pickMeshletMeshVariant：instrument 三档各返回正确变体；mode ≠ \"overlay\" = 一律 base（让位分支已删）") {
 	// 🔴 三档返回语义与合并前**逐字不变**（约束红线）：none→base、offset→debugOffset、tint→tint。
 	// 原「tint 与 debug 同真 ⟹ tint 优先」的用例**整删**——两布尔已合并为一枚三值键，
 	// 该输入**不可构造**，让位分支连同规则一起消失（「消灭的是一个真实可达态」的实测证据 =
 	// 合并前基线第四行：overlay+debug+tint 三真截图与 tint 单开**逐位同** = /tmp/opencode/
 	// o1_premerge_anchors.txt，合并后这个实验永远做不了 = 旧写法配不出来）。
+	// 🔴 债-129 S2 第二件：闸门从 `meshletOverlay` 布尔改读 `modeIsOverlay()` 谓词——
+	// mode = "switch" 档同样强制 base（取代档下仪器变体会渗进产品路 = 债-105 归属裁决，
+	// 原「overlay=false + switch=true」臂现在由 mode 三值直接表达）。
 	// 变异红线：① tint/offset 两档 return 互换 → overlay 开两断言红；
-	//           ② overlay 闸门删掉 → overlay 关三断言全红（债-105 归属裁决 = 仪器渗进产品路）；
+	//           ② overlay 闸门删掉 → 档关（off/switch）三×2 断言全红（债-105 归属裁决 = 仪器渗进产品路）；
 	//           ③ none 档改成返回 debugOffset → none 断言红（出厂叠加 = 正常档）。
 	RuntimeConfig on;
-	on.meshletOverlay = true;
+	on.meshletMode = MeshletMode::overlay;
 	CHECK(pickMeshletMeshVariant(on) == MeshletMeshVariant::base);  // instrument = none（默认）
 	on.meshletInstrument = MeshletInstrument::offset;
 	CHECK(pickMeshletMeshVariant(on) == MeshletMeshVariant::debugOffset);
 	on.meshletInstrument = MeshletInstrument::tint;
 	CHECK(pickMeshletMeshVariant(on) == MeshletMeshVariant::tint);
-	// 🔴 overlay 关 = 一律 base（债-105 的归属裁决：变体位归叠加段，三档全钉）
-	for (const MeshletInstrument instr : {MeshletInstrument::none, MeshletInstrument::offset,
-	                                      MeshletInstrument::tint}) {
-		RuntimeConfig off;  // overlay = false（出厂默认）
-		off.meshletInstrument = instr;
-		CHECK(pickMeshletMeshVariant(off) == MeshletMeshVariant::base);
+	// 🔴 叠加档不开（出厂 "off" 与取代档 "switch" 都算）= 一律 base（债-105 的归属裁决：
+	// 变体位归叠加段，三档仪器 × 两档 mode 全钉）
+	for (const MeshletMode mode : {MeshletMode::off, MeshletMode::inplaceSwitch}) {
+		for (const MeshletInstrument instr : {MeshletInstrument::none, MeshletInstrument::offset,
+		                                      MeshletInstrument::tint}) {
+			RuntimeConfig off;  // mode ≠ overlay（off = 出厂默认）
+			off.meshletMode = mode;
+			off.meshletInstrument = instr;
+			CHECK(pickMeshletMeshVariant(off) == MeshletMeshVariant::base);
+		}
 	}
 }
 

@@ -2,9 +2,10 @@ module;
 /**
  * test_gate_lint —— 门组合自检（gate_lint 立项批，docs/gate_lint_plan.md）
  *
- * 被测 = rgl/gate_lint.cppm（rlscene 成员）：52 门申报规则表（diagnostics 侧 30 +
- * shadow.lua 侧 13 + runtime.lua **meshlet 块** 9，债-106 整块接管、债-129 S2 把
- * debug+tint 两枚布尔门合并成 instrument 一枚）+ variant 交叉校验。
+ * 被测 = rgl/gate_lint.cppm（rlscene 成员）：51 门申报规则表（diagnostics 侧 30 +
+ * shadow.lua 侧 13 + runtime.lua **meshlet 块** 8，债-106 整块接管、债-129 S2 把
+ * debug+tint 两枚布尔门合并成 instrument 一枚、overlay+switch 两枚布尔门合并成 mode 一枚）
+ * + variant 交叉校验。
  * 纯函数（一切事实入参），无 GPU 无窗口，`just test` 毫秒级。
  *
  * ## 判据纪律（本文件比别处更严的原因）
@@ -34,7 +35,7 @@ import rlstd;
 import gate_lint;
 import diagnostics;
 import shadow_config;
-import runtime_config;  // 债-106：meshlet 块十枚键的申报 + runtimeConfigKnownKeys() 覆盖率输入
+import runtime_config;  // 债-106：meshlet 块八枚键的申报 + runtimeConfigKnownKeys() 覆盖率输入
 import render_graph;
 import render_graph_config;  // RgGraphVariant
 
@@ -111,7 +112,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	//   · kGateRules 删任一行 / 改任一门名拼写 → 行数钉 42 + 双向 hasGate 红；
 	//   · kGateBlocks 删任一枚块条目 → 键数钉 20 + 该键「块条目 ∪ 独立行」双落空红（点名）；
 	//   · 任一配置结构体加字段不更新两侧 → 回显表/键表的键数钉先红；
-	//   · 把下面的 meshlet 前缀过滤改成扫不到的前缀（如 "meshlett."）→ meshletKeys.size() == 9
+	//   · 把下面的 meshlet 前缀过滤改成扫不到的前缀（如 "meshlett."）→ meshletKeys.size() == 8
 	//     的钉先红（对账面缩小不会静默通过）。
 	// 🔴 新口径的真收益：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有
 	//   = 断言失败并**点名**；且命中块前缀的键必须是块条目或该块宿主——「往块里加一枚键而
@@ -138,14 +139,16 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
 			meshletKeys.push_back(k);
-	CHECK(rules.size() == 42u);       // 独立行（19 行 nullptr 挂号 + 23 行谓词；债-129 S2：
-	                                  // meshlet.debug/tint 三条 → meshlet.instrument 一条）
+	CHECK(rules.size() == 41u);       // 独立行（19 行 nullptr 挂号 + 22 行谓词；债-129 S2：
+	                                  // meshlet.debug/tint 三条 → meshlet.instrument 一条，
+	                                  // meshlet.switch 两条 → meshlet.mode 一条（互斥行整删））
 	CHECK(blocks.size() == 6u);       // pcss / evssm / 三探针 / meshlet
-	CHECK(blockKeys.size() == 20u);   // 3 + 4 + 2 + 2 + 2 + 7
+	CHECK(blockKeys.size() == 19u);   // 3 + 4 + 2 + 2 + 2 + 6
 	CHECK(echo.size() == 30u);
 	CHECK(shadowEcho.size() == 13u);
-	CHECK(meshletKeys.size() == 9u);  // 整块 9 枚（债-106 红线：接管整块 = 一枚都不能少；
-	                                  // 债-129 S2 起 debug+tint 合并为 instrument）
+	CHECK(meshletKeys.size() == 8u);  // 整块 8 枚（债-106 红线：接管整块 = 一枚都不能少；
+	                                  // 债-129 S2 起 debug+tint 合并为 instrument、
+	                                  // overlay+switch 合并为 mode）
 	// 正向：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有 = 红并点名。
 	auto coveredBy = [&](std::string_view k) {
 		return hasGate(rules, k) ? "独立行" : (hasGate(blockKeys, k) ? "块条目" : "");
@@ -159,7 +162,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 去重门数钉在「独立行 ∪ 块条目」的并集上（= 三方来源键数之和）。
 	std::vector<std::string> unionGates = rules;
 	unionGates.insert(unionGates.end(), blockKeys.begin(), blockKeys.end());
-	CHECK(distinctGateCount(unionGates) == 52u);
+	CHECK(distinctGateCount(unionGates) == 51u);
 	// 反向：独立行与块条目吃的都必须是已知来源键（陈旧/拼错门名）。
 	auto known = [&](std::string_view k) {
 		return hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);
@@ -526,14 +529,14 @@ RuntimeConfig redlineA(void (*tweak)(RuntimeConfig&) = nullptr) {
 
 TEST_CASE("gate_lint meshlet 红线 A：门关态（assets=false + shadow_lod=-1，其余默认）除了该喊的不多喊") {
 	// 门关态 = P5 逐位不变的验收态（旧锚 54e40665…），**不是**出厂态（shadow_lod = -1 已偏离
-	// 默认 5）——但它是**合法**态：meshlet 十门的期望集合 = 空（shadow_lod 判据要「≥ 0」，
-	// -1 = 本档关不是孤立；其余 9 枚未开/未偏离）。逐门钉 nullptr = 「不多喊」的机器形态；
+	// 默认 5）——但它是**合法**态：meshlet 八门的期望集合 = 空（shadow_lod 判据要「≥ 0」，
+	// -1 = 本档关不是孤立；其余 7 枚未开/未偏离）。逐门钉 nullptr = 「不多喊」的机器形态；
 	// 全局零条只按 meshlet 前缀计——非 meshlet 侧本组合也应为零，但那是上面总锚的口径，
 	// 本用例的判据对象是 meshlet 块，别把两条红线焊成一条。
 	// 变异红线：任何 meshlet 规则改成「与 assets / 偏离态无关的恒真」→ 本用例红。
 	const auto fs = lintRt(redlineA());
-	for (const char* k : {"meshlet.assets", "meshlet.overlay", "meshlet.instrument",
-		 "meshlet.coplanar", "meshlet.switch", "meshlet.cull", "meshlet.shadow_lod",
+	for (const char* k : {"meshlet.assets", "meshlet.mode", "meshlet.instrument",
+		 "meshlet.coplanar", "meshlet.cull", "meshlet.shadow_lod",
 		 "meshlet.shadow_lod_fallback", "meshlet.mdi_shadow"})
 		CHECK(find(fs, k) == nullptr);
 	// 「门关 grep -ci meshlet = 0」护栏的 lint 侧对等物：meshlet.* 前缀的 finding 一条都不许有
@@ -560,22 +563,77 @@ TEST_CASE("gate_lint meshlet.shadow_lod：≥ 0 而 assets 关 = warn（★18-C 
 	}
 }
 
-TEST_CASE("gate_lint meshlet.overlay：生效不含 assets，但 overlay && !assets = 没有条目可采") {
-	{  // 正例：overlay 开 + assets 关（红线 A 打底，别把 shadow_lod 的归因混进来）
-		const auto fs = lintRt(redlineA([](RuntimeConfig& r) { r.meshletOverlay = true; }));
-		REQUIRE(find(fs, "meshlet.overlay") != nullptr);
-		CHECK(find(fs, "meshlet.overlay")->severity == GateSeverity::warn);
-		// 消息点名装配层的事实级出声（同因不同层的读者导航；逐键消息自带全名，断言不降格）
-		CHECK(find(fs, "meshlet.overlay")->message.find("wireMeshletOverlayActivation")
-			!= std::string::npos);
+TEST_CASE("gate_lint meshlet.mode：按档前置（overlay **不含** assets / switch **需** assets）+ cull 档限制") {
+	// 🔴 债-129 S2 O1-1.2 判据本体（拍板 D 约束②「owner 不只有布尔」③「块吞不得」的落地）：
+	// overlay + switch 两布尔合并成一枚 mode 后，**两条不同的生效前置必须按档各自成立**——
+	//   · `mode = "overlay"` × `assets = false` = **合法组合，不判死值**（overlay 的宿主是叠加段
+	//     自己；把它申报进 owner = assets 的块门下 = 假申报。零条目可采的落空事实归装配层
+	//     wireMeshletOverlayActivation 按事实出声，lint 沉默）。
+	//   · `mode = "switch"` × `assets = false` = **判死值**（簇条目没烘 ⟹ 无 draw 可原位取代，
+	//     meshlet 块条目出声）。
+	// 原「meshlet.overlay 块条目（overlay && !assets 发射）」**整删**——它的发射条件就是把 overlay
+	// 吞进 assets 门下；原「meshlet.switch × meshlet.overlay 互斥」申报行**整删**——三值键下
+	// 「同真」不可构造（消灭的是实测可达态：同开截图与 switch 单开逐位同而 warnings 1→2，
+	// /tmp/opencode/o3b_premerge_anchors.txt 第四行；合并后该实验永远做不了）。
+	// 变异红线声明：
+	//   ① mode 块条目 present 弱化成 `meshletMode != off`（把 overlay 档也吞进 assets 门下）→
+	//      「overlay × assets 关不判死」断言红（假申报复活 = 本用例的存在理由）。
+	//   ② present 改成恒 false（块条目失效）→ 「switch × assets 关判死」红。
+	//   ③ cull_replay 残留行谓词漏 `modeIsSwitch()`（对 overlay 档也喊）→ 「overlay × assets 开
+	//      零 findings」红。
+	//   ④ 残留行门名拼错（meshlet.mode → meshlet.switch）→ 覆盖率护栏双向对账先红。
+	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
+	{  // 🔴 正例①（判据本体 A）：mode = "switch" + assets 关（红线 A 打底）= 无 draw 可取代
+		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
+			r.meshletMode = MeshletMode::inplaceSwitch;
+		}));
+		REQUIRE(find(fs, "meshlet.mode") != nullptr);
+		CHECK(gateFindings(fs, "meshlet.mode").size() == 1u);  // 恰一条（cpu 默认档下 cull 档那条不成立）
+		CHECK(find(fs, "meshlet.mode")->severity == GateSeverity::warn);
+		CHECK(find(fs, "meshlet.mode")->message.find("wireMeshletOverlayActivation")
+			!= std::string::npos);  // 逐键消息自带 overlay 档对照导航（断言不降格）
 	}
-	{  // 反向：overlay 开 + assets 开 = 合法（条目烘焙宿主 = assets 的 slots）
+	{  // 🔴 正例②（判据本体 B）：mode = "overlay" + assets 关（红线 A 打底）= **合法组合不判死**
+	   // ——overlay 的生效前置不含 assets；meshlet.mode 一条都不许有（lint 沉默，落空事实
+	   // 归装配层按「有没有条目可采」出声）。原 meshlet.overlay 块条目在这格发射 = 假申报，
+	   // 随合并删除；本断言就是那条删除的判据。
+		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
+			r.meshletMode = MeshletMode::overlay;
+		}));
+		CHECK(gateFindings(fs, "meshlet.mode").empty());
+	}
+	{  // 正例③：assets 开 + mode = "switch" + cull_replay = gpu_sync = 段内换管线不在那条路上
+		DiagnosticsConfig d;
+		d.cullReplay = CullReplayMode::gpuSync;
 		RuntimeConfig r;
-		r.meshletOverlay = true;
-		CHECK(find(lintRt(r), "meshlet.overlay") == nullptr);
+		r.meshletMode = MeshletMode::inplaceSwitch;
+		const auto fs = lint(d, kDef, RgGraphVariant::deferred, kHappyEnv, ShadowConfig{}, r);
+		REQUIRE(find(fs, "meshlet.mode") != nullptr);
+		CHECK(find(fs, "meshlet.mode")->message.find("wireMeshletSwitch") != std::string::npos);
 	}
-	{  // 反向：overlay 关（出厂默认）任何 assets 态都不喊
-		CHECK(find(lintRt(redlineA()), "meshlet.overlay") == nullptr);
+	{  // 半边反向：mode = "overlay" + cull_replay = gpu_sync ⟹ overlay 档不受 cull 档限制
+	   // （那条前置只吃 switch 档）⟹ 零 findings。变异红线③的探针。
+		DiagnosticsConfig d;
+		d.cullReplay = CullReplayMode::gpuSync;
+		RuntimeConfig r;
+		r.meshletMode = MeshletMode::overlay;
+		CHECK(gateFindings(lint(d, kDef, RgGraphVariant::deferred, kHappyEnv, ShadowConfig{}, r),
+			"meshlet.mode").empty());
+	}
+	{  // 反向①：mode = "overlay" + assets 开 = 合法 α 形态，meshlet 侧零 findings
+		RuntimeConfig r;
+		r.meshletMode = MeshletMode::overlay;
+		CHECK(lintRt(r).empty());
+	}
+	{  // 反向②：mode = "switch" + assets 开（cpu 档）= 合法 β 形态，meshlet 侧零 findings
+	   // （原「switch + overlay 同开」的互斥用例**整删**——输入不可构造）
+		RuntimeConfig r;
+		r.meshletMode = MeshletMode::inplaceSwitch;
+		CHECK(lintRt(r).empty());
+	}
+	{  // 反向③：mode 保持出厂 off（含红线 A）任何 assets 态都不喊
+		CHECK(find(lintRt(RuntimeConfig{}), "meshlet.mode") == nullptr);
+		CHECK(gateFindings(lintRt(redlineA()), "meshlet.mode").empty());
 	}
 }
 
@@ -585,26 +643,26 @@ TEST_CASE("gate_lint meshlet.instrument：条目级变体位的死值（债-129 
 	// 同真）在 `MeshletInstrument` 三值键下**不可构造**，让位规则本身已随合并从申报表消失。
 	// 「消灭的是一个真实可达态」的实测证据 = 合并前基线第四行（overlay+debug+tint 同真截图
 	// 与 tint 单开逐位同 = tint 优先赢下），见 /tmp/opencode/o1_premerge_anchors.txt。
-	// 变异红线：instrument 残留行谓词把 `!meshletOverlay` 删掉（弱化 = overlay 开也喊）→
+	// 变异红线：instrument 残留行谓词把 `!modeIsOverlay()` 删掉（弱化 = overlay 档也喊）→
 	// 「反向」两条红；把 deviated 改成恒真 → 红线 A 用例红。
-	{  // 正例①：assets 开 + overlay 关 + offset = 强制归 base（债-105 的归属裁决）
+	{  // 正例①：assets 开 + mode = off（默认）+ offset = 强制归 base（债-105 的归属裁决）
 		RuntimeConfig r;
 		r.meshletInstrument = MeshletInstrument::offset;
 		const auto fs = lintRt(r);
 		REQUIRE(find(fs, "meshlet.instrument") != nullptr);
 		CHECK(find(fs, "meshlet.instrument")->severity == GateSeverity::warn);
 	}
-	{  // 正例②：assets 关（overlay 开）+ tint = 条目根本不烘，也是死值（块条目出声）
+	{  // 正例②：assets 关（mode = "overlay"）+ tint = 条目根本不烘，也是死值（块条目出声）
 	   // 🔴 这条同时钉住「门关 + 仪器开」不再静默——债-106 的挂号原文形态
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
-			r.meshletOverlay = true;
+			r.meshletMode = MeshletMode::overlay;
 			r.meshletInstrument = MeshletInstrument::tint;
 		}));
 		CHECK(find(fs, "meshlet.instrument") != nullptr);
 	}
-	{  // 反向①：assets + overlay 都开 + offset = 变体真被烘，不喊
+	{  // 反向①：assets + mode = "overlay" 都开 + offset = 变体真被烘，不喊
 		RuntimeConfig r;
-		r.meshletOverlay = true;
+		r.meshletMode = MeshletMode::overlay;
 		r.meshletInstrument = MeshletInstrument::offset;
 		CHECK(find(lintRt(r), "meshlet.instrument") == nullptr);
 	}
@@ -614,8 +672,8 @@ TEST_CASE("gate_lint meshlet.instrument：条目级变体位的死值（债-129 
 	}
 }
 
-TEST_CASE("gate_lint meshlet.coplanar：偏离 off 而无叠加 draw = warn；off 与合法组合不喊") {
-	{  // 正例①：assets 开 + overlay 关 + coplanar = equal（setter 设了但没有 draw 可作用）
+TEST_CASE("gate_lint meshlet.coplanar：偏离 off 而无叠加 draw（mode ≠ \"overlay\"）= warn；off 与合法组合不喊") {
+	{  // 正例①：assets 开 + mode = off（默认）+ coplanar = equal（setter 设了但没有 draw 可作用）
 		RuntimeConfig r;
 		r.meshletCoplanar = MeshletCoplanarMode::equal;
 		const auto fs = lintRt(r);
@@ -628,65 +686,20 @@ TEST_CASE("gate_lint meshlet.coplanar：偏离 off 而无叠加 draw = warn；of
 		}));
 		CHECK(find(fs, "meshlet.coplanar") != nullptr);
 	}
-	{  // 反向：assets + overlay 都开 + coplanar = equal = 合法四臂档，不喊
+	{  // 反向：assets + mode = "overlay" 都开 + coplanar = equal = 合法四臂档，不喊
 		RuntimeConfig r;
-		r.meshletOverlay = true;
+		r.meshletMode = MeshletMode::overlay;
 		r.meshletCoplanar = MeshletCoplanarMode::equal;
 		CHECK(find(lintRt(r), "meshlet.coplanar") == nullptr);
 	}
-	{  // 反向：overlay 关但 coplanar 保持 off（出厂默认）= 未偏离，不喊
+	{  // 反向：mode 保持 off（出厂默认）而 coplanar 也 off = 未偏离，不喊
 		CHECK(find(lintRt(RuntimeConfig{}), "meshlet.coplanar") == nullptr);
 	}
 }
 
-TEST_CASE("gate_lint meshlet.switch：需 assets / 只在 cull_replay=cpu 生效 / 与 overlay 互斥（三条）") {
+TEST_CASE("gate_lint meshlet.cull：需 assets && mode=\"switch\"；同款 cull_replay 限制（两条）") {
 	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
-	{  // 正例①：switch 开 + assets 关 = 无 draw 可取代（恰一条——cpu 默认档下另两条不成立）
-		const auto fs = lintRt(redlineA([](RuntimeConfig& r) { r.meshletSwitch = true; }));
-		REQUIRE(find(fs, "meshlet.switch") != nullptr);
-		CHECK(gateFindings(fs, "meshlet.switch").size() == 1u);
-		CHECK(find(fs, "meshlet.switch")->severity == GateSeverity::warn);
-	}
-	{  // 正例②：assets 开 + switch 开 + cull_replay = gpu_sync = 段内换管线不在那条路上
-		DiagnosticsConfig d;
-		d.cullReplay = CullReplayMode::gpuSync;
-		RuntimeConfig r;
-		r.meshletSwitch = true;
-		const auto fs = lint(d, kDef, RgGraphVariant::deferred, kHappyEnv, ShadowConfig{}, r);
-		REQUIRE(find(fs, "meshlet.switch") != nullptr);
-		CHECK(find(fs, "meshlet.switch")->message.find("wireMeshletSwitch") != std::string::npos);
-	}
-	{  // 正例③：assets + switch + overlay 同开（cpu 档）= 互斥，overlay 会被清空
-		RuntimeConfig r;
-		r.meshletSwitch = true;
-		r.meshletOverlay = true;
-		const auto fs = lintRt(r);
-		REQUIRE(find(fs, "meshlet.switch") != nullptr);
-		CHECK(gateFindings(fs, "meshlet.switch").size() == 1u);  // 只有互斥这一条
-	}
-	{  // 🔴 半边反向：switch + overlay 同开但 cull_replay = gpu_sync ⟹ switch 不生效 ⟹
-	   // overlay **不会**被清空 ⟹ 互斥那条必须不喊（只剩 cull_replay 那条）。
-	   // 变异红线：互斥谓词删掉 `cullReplay == cpu` 这个合取 → 本断言红（两条一起喊）。
-		DiagnosticsConfig d;
-		d.cullReplay = CullReplayMode::gpuSync;
-		RuntimeConfig r;
-		r.meshletSwitch = true;
-		r.meshletOverlay = true;
-		const auto fs = lint(d, kDef, RgGraphVariant::deferred, kHappyEnv, ShadowConfig{}, r);
-		REQUIRE(gateFindings(fs, "meshlet.switch").size() == 1u);
-		CHECK(gateFindings(fs, "meshlet.switch")[0]->message.find("cull_replay")
-			!= std::string::npos);
-	}
-	{  // 反向：assets + switch（cpu 档、overlay 关）= 合法 β 形态，meshlet 侧零 findings
-		RuntimeConfig r;
-		r.meshletSwitch = true;
-		CHECK(lintRt(r).empty());
-	}
-}
-
-TEST_CASE("gate_lint meshlet.cull：需 assets && switch；同款 cull_replay 限制（两条）") {
-	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
-	{  // 正例①：cull 开而 switch 关（assets 开）= 标志数组无消费者
+	{  // 正例①：cull 开而取代档关（assets 开、mode = off）= 标志数组无消费者
 		RuntimeConfig r;
 		r.meshletCull = true;
 		const auto fs = lintRt(r);
@@ -694,30 +707,30 @@ TEST_CASE("gate_lint meshlet.cull：需 assets && switch；同款 cull_replay �
 		CHECK(find(fs, "meshlet.cull")->severity == GateSeverity::warn);
 		CHECK(find(fs, "meshlet.cull")->message.find("wireMeshletCull") != std::string::npos);
 	}
-	{  // 正例②：cull + switch 同开而 **assets 关** = 仍无消费者。
-	   // 🔴 这条抓「把 assets && switch 弱化成只查 switch」的变异（a && b → b）：
-	   // 弱化后本组合（switch 开）谓词变假 ⟹ 本断言红。
+	{  // 正例②：cull + mode = "switch" 同开而 **assets 关** = 仍无消费者。
+	   // 🔴 这条抓「把 assets && mode=\"switch\" 弱化成只查取代档」的变异（a && b → b）：
+	   // 弱化后本组合（取代档开）谓词变假 ⟹ 本断言红。
 		const auto fs = lintRt(redlineA([](RuntimeConfig& r) {
-			r.meshletSwitch = true;
+			r.meshletMode = MeshletMode::inplaceSwitch;
 			r.meshletCull = true;
 		}));
 		CHECK(find(fs, "meshlet.cull") != nullptr);
 	}
-	{  // 正例③：cull + switch + assets 但 cull_replay = gpuLagged = 同款限制（恰一条，
-	   // 宿主缺失那条不叠加——它的前置里 switch 已开）
+	{  // 正例③：cull + 取代档 + assets 但 cull_replay = gpuLagged = 同款限制（恰一条，
+	   // 宿主缺失那条不叠加——它的前置里取代档已开）
 		DiagnosticsConfig d;
 		d.cullReplay = CullReplayMode::gpuLagged;
 		RuntimeConfig r;
-		r.meshletSwitch = true;
+		r.meshletMode = MeshletMode::inplaceSwitch;
 		r.meshletCull = true;
 		const auto fs = lint(d, kDef, RgGraphVariant::deferred, kHappyEnv, ShadowConfig{}, r);
 		REQUIRE(gateFindings(fs, "meshlet.cull").size() == 1u);
 		CHECK(gateFindings(fs, "meshlet.cull")[0]->message.find("cull_replay")
 			!= std::string::npos);
 	}
-	{  // 反向：cull + switch + assets（cpu 档）= 合法 β+cull 形态，cull 不喊
+	{  // 反向：cull + 取代档 + assets（cpu 档）= 合法 β+cull 形态，cull 不喊
 		RuntimeConfig r;
-		r.meshletSwitch = true;
+		r.meshletMode = MeshletMode::inplaceSwitch;
 		r.meshletCull = true;
 		CHECK(find(lintRt(r), "meshlet.cull") == nullptr);
 	}
@@ -912,61 +925,72 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "rt/factory"},
 		{.name = "rt/off-redline", .runtime = redlineA()},
 		{.name = "rt/off-lod5", .runtime = {.meshletAssets = false}},
-		{.name = "rt/overlay-on", .runtime = {.meshletOverlay = true}},
-		{.name = "rt/overlay-offenable",
-			.runtime = redlineA([](RuntimeConfig& r) { r.meshletOverlay = true; })},
+		// 🔴 债-129 S2（第二件）：rt/overlay-* / rt/switch-* 五档随两布尔合并改写成 rt/mode-*；
+		// 原 rt/switch-overlay-cpu / rt/switch-overlay-sync 两档断的「同真互斥」输入**不可构造**
+		// （一枚三值键），改立两档**跨档前置**对照（mode-switch-coplanar / mode-overlay-cull-sync：
+		// coplanar 宿主 = overlay 档、cull 宿主 = switch 档，两档各自成立 = 按档分立的判据面）。
+		{.name = "rt/mode-overlay", .runtime = {.meshletMode = MeshletMode::overlay}},
+		{.name = "rt/mode-overlay-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) {
+				r.meshletMode = MeshletMode::overlay;
+			})},  // 🔴 期望 = 空：overlay 档生效前置**不含** assets（合法组合不判死值；原
+			     // rt/overlay-offenable 的 meshlet.overlay 块条目随合并删除——假申报）
 		{.name = "rt/instrument-offset", .runtime = {.meshletInstrument = MeshletInstrument::offset}},
 		{.name = "rt/instrument-offset-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) {
-				r.meshletOverlay = true;
+				r.meshletMode = MeshletMode::overlay;
 				r.meshletInstrument = MeshletInstrument::offset;
 			})},
 		{.name = "rt/instrument-tint", .runtime = {.meshletInstrument = MeshletInstrument::tint}},
 		{.name = "rt/instrument-tint-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) {
-				r.meshletOverlay = true;
+				r.meshletMode = MeshletMode::overlay;
 				r.meshletInstrument = MeshletInstrument::tint;
 			})},
 		// 🔴 债-129 S2：原 rt/tint-debug / rt/tint-debug-overlay / rt/tint-debug-offenable 三档
 		// （断「两布尔同真 ⟹ tint 优先让位」）随合并**整删**——输入不可构造；让位规则已不在
-		// 申报表里。补两档 instrument 的「overlay 开 = 合法沉默」反向（扫描面保持 90 档，
+		// 申报表里。补两档 instrument 的「overlay 档开 = 合法沉默」反向（扫描面保持 90 档，
 		// 删档 = 回归网静默缩小的形态用补档堵住，档位哨兵 CHECK(size==90) 不降格）。
 		{.name = "rt/instrument-offset-overlay-ok",
-			.runtime = {.meshletOverlay = true, .meshletInstrument = MeshletInstrument::offset}},
+			.runtime = {.meshletMode = MeshletMode::overlay, .meshletInstrument = MeshletInstrument::offset}},
 		{.name = "rt/instrument-tint-overlay-ok",
-			.runtime = {.meshletOverlay = true, .meshletInstrument = MeshletInstrument::tint}},
+			.runtime = {.meshletMode = MeshletMode::overlay, .meshletInstrument = MeshletInstrument::tint}},
 		{.name = "rt/coplanar-eq", .runtime = {.meshletCoplanar = MeshletCoplanarMode::equal}},
 		{.name = "rt/coplanar-ne-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) {
 				r.meshletCoplanar = MeshletCoplanarMode::ne;
 			})},
 		{.name = "rt/coplanar-ok",
-			.runtime = {.meshletOverlay = true, .meshletCoplanar = MeshletCoplanarMode::equal}},
-		{.name = "rt/switch-offenable",
-			.runtime = redlineA([](RuntimeConfig& r) { r.meshletSwitch = true; })},
-		{.name = "rt/switch-sync",
-			.cfg = {.cullReplay = CullReplayMode::gpuSync}, .runtime = {.meshletSwitch = true}},
-		{.name = "rt/switch-overlay-cpu",
-			.runtime = {.meshletOverlay = true, .meshletSwitch = true}},
-		{.name = "rt/switch-overlay-sync",
+			.runtime = {.meshletMode = MeshletMode::overlay, .meshletCoplanar = MeshletCoplanarMode::equal}},
+		{.name = "rt/mode-switch-offenable",
+			.runtime = redlineA([](RuntimeConfig& r) { r.meshletMode = MeshletMode::inplaceSwitch; })},
+		{.name = "rt/mode-switch-sync",
 			.cfg = {.cullReplay = CullReplayMode::gpuSync},
-			.runtime = {.meshletOverlay = true, .meshletSwitch = true}},
-		{.name = "rt/switch-ok", .runtime = {.meshletSwitch = true}},
+			.runtime = {.meshletMode = MeshletMode::inplaceSwitch}},
+		{.name = "rt/mode-switch-coplanar",
+			.runtime = {.meshletMode = MeshletMode::inplaceSwitch,
+				.meshletCoplanar = MeshletCoplanarMode::equal}},  // 跨档：取代档下双臂无消费者
+		{.name = "rt/mode-overlay-cull-sync",
+			.cfg = {.cullReplay = CullReplayMode::gpuSync},
+			.runtime = {.meshletMode = MeshletMode::overlay,
+				.meshletCull = true}},  // 跨档：cull 的宿主 = 取代档（overlay 档 + gpuSync 下
+		                                // 只喊「取代档关」一条，cull_replay 那条不成立）
+		{.name = "rt/mode-switch-ok", .runtime = {.meshletMode = MeshletMode::inplaceSwitch}},
 		{.name = "rt/cull-only", .runtime = {.meshletCull = true}},
 		{.name = "rt/cull-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) { r.meshletCull = true; })},
 		{.name = "rt/cull-switch-offenable",
 			.runtime = redlineA([](RuntimeConfig& r) {
-				r.meshletSwitch = true;
+				r.meshletMode = MeshletMode::inplaceSwitch;
 				r.meshletCull = true;
 			})},
 		{.name = "rt/cull-switch-sync",
 			.cfg = {.cullReplay = CullReplayMode::gpuSync},
-			.runtime = {.meshletSwitch = true, .meshletCull = true}},
+			.runtime = {.meshletMode = MeshletMode::inplaceSwitch, .meshletCull = true}},
 		{.name = "rt/cull-switch-lagged",
 			.cfg = {.cullReplay = CullReplayMode::gpuLagged},
-			.runtime = {.meshletSwitch = true, .meshletCull = true}},
-		{.name = "rt/cull-ok", .runtime = {.meshletSwitch = true, .meshletCull = true}},
+			.runtime = {.meshletMode = MeshletMode::inplaceSwitch, .meshletCull = true}},
+		{.name = "rt/cull-ok", .runtime = {.meshletMode = MeshletMode::inplaceSwitch, .meshletCull = true}},
 		{.name = "rt/lod-neg-enable", .runtime = {.meshletShadowLod = -1}},
 		{.name = "rt/fallback-l0-lodneg",
 			.runtime = {.meshletShadowLod = -1, .meshletShadowLodFallback = MeshletLodFallbackMode::l0}},
@@ -983,20 +1007,18 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "rt/mdi-ok", .runtime = {.meshletMdiShadow = true}},
 		{.name = "rt/kitchen-sink-off",
 			.runtime = redlineA([](RuntimeConfig& r) {
-				r.meshletOverlay = true;
+				r.meshletMode = MeshletMode::inplaceSwitch;
 				r.meshletInstrument = MeshletInstrument::tint;
 				r.meshletCoplanar = MeshletCoplanarMode::ne;
-				r.meshletSwitch = true;
 				r.meshletCull = true;
 				r.meshletShadowLodFallback = MeshletLodFallbackMode::l0;
 				r.meshletMdiShadow = true;
-			})},
+			})},  // 债-129 S2：原「overlay + switch 同真」全开形态写不出来，取取代档全开
 		{.name = "rt/kitchen-sink-on",
 			.cfg = {.cullReplay = CullReplayMode::gpuSync},
-			.runtime = {.meshletOverlay = true,
+			.runtime = {.meshletMode = MeshletMode::inplaceSwitch,
 				.meshletInstrument = MeshletInstrument::tint,
 				.meshletCoplanar = MeshletCoplanarMode::ne,
-				.meshletSwitch = true,
 				.meshletCull = true,
 				.meshletShadowLodFallback = MeshletLodFallbackMode::l0,
 				.meshletMdiShadow = true}},
@@ -1004,9 +1026,11 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "combo/all-blocks-off",
 			.cfg = {.pickingProbeX = 640, .uiClickProbeY = 200, .cameraProbeKey = 'W'},
 			.shadow = {.pcss = kTuningAll, .evssm = kTuningAll},
-			.runtime = {.meshletAssets = false, .meshletOverlay = true,
+			.runtime = {.meshletAssets = false, .meshletMode = MeshletMode::overlay,
 				.meshletInstrument = MeshletInstrument::offset,
-				.meshletMdiShadow = true}},
+				.meshletMdiShadow = true}},  // 🔴 mode = "overlay" 在 assets 关的「全灭」世界里
+		                                     // **不**出 meshlet.mode finding（按档分立：overlay
+		                                     // 档不吃 assets 门；原 meshlet.overlay 块条目的正主）
 	};
 	return kCases;
 }
