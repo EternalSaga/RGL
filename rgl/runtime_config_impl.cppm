@@ -312,19 +312,30 @@ static void readFsrBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * ⟹ 本函数**原样透传**，一条 warn 都不发（warn 会在每次跑消融档时刷屏，教人不信任日志）。
  * 不变式的权威措辞在 `SsrTuning` 字段注释与 `ssr.frag.slang` 参数段。
  *
- * ## 为什么**不**往 gate_lint 挂号（判断结论，防后来者"顺手补上"）
+ * ## 为什么**暂**未往 gate_lint 挂号（2026-10-17 重写：原结论的三条理由已全部失效）
  *
  * gate_lint 的覆盖率护栏 = 单测断言 `gateLintRuleGates()` 与 `diagnosticsEchoKeys() ∪
  * shadowConfigEchoKeys() ∪ runtimeConfigKnownKeys() 的 meshlet. 前缀键` 三方相等 ⟹ 它的
  * 管辖范围 = `configs/diagnostics.lua` 与 `configs/shadow.lua` 两份配置，外加
- * `configs/runtime.lua` 的 **meshlet 块**（债-106 整块接管，不挑键——那块有「子键开了而
- * 总门 `enable` 关」的孤立形态，且前置全是纯配置组合，lint 判得了）。`configs/runtime.lua`
- * 的**其余**键（含本块的 `enabled`，也含 `aa` / `render_scale` / `fsr.*` 这些既有键）
- * 不在那张表里，本批因此**没有欠账**：硬塞进去要么给 runtime.lua 造第三张回显表（= 与
- * `RuntimeConfig` 字段并存的第二真相源），要么把 runtime.lua 键混进 diagnostics 的回显
- * 语义（那张表按"诊断门"组织，画质系数不是）。
- * 本块键的"生效前置"本来也不依赖设备/图形态（`enabled` 的前置 = 渲染图支持 ssr，那条已由
- * `decorateSsrPass` 自己出 warn），lint 无话可说。
+ * `configs/runtime.lua` 的 **meshlet 块**（债-106 整块接管，不挑键）。**其余** runtime.lua
+ * 键（含本块 `enabled`、`aa` / `render_scale` / `fsr.*`）今天仍不在表里，但这**不再是裁决
+ * 结论，而是未还的账**（债-129 S2 射程）。原标题写「防后来者顺手补上」——实测方向正好防反了：
+ *
+ * 1. ❌「其余块没有『子键开而总门关』的孤立形态」——`fsr.temporal` / `fsr.jitter` 开了而
+ *    `aa ≠ "fsr"`、`clip_mode`（scene.lua）设了而 `aa ≠ "taa"` **就是这个形态**，且它一直
+ *    由工具层替引擎守着（`smoke.py` 的 `guard_flags` 两条 `fail()`）。**工具层的存在即本条反证**。
+ * 2. ❌「硬塞要给 runtime.lua 造第三张回显表 = 第二真相源」——那张表**已经有了**：
+ *    `kRuntimeKeys[]` / `runtimeConfigKnownKeys()`，meshlet 块吃的就是它。扩射程 = 改测试里
+ *    那个前缀过滤，**不新增真相源**。
+ * 3. ❌「`enabled` 的前置已由 `decorateSsrPass` 自己出 warn，lint 无话可说」——该 warn 已随
+ *    债-129 **S3-C 删除**（改为启动期抛 `std::runtime_error`）。本条是 2026-10-17 当天失效的。
+ *
+ * ✅ **仍然成立的一条**：不该把 runtime.lua 键混进 diagnostics 的**回显语义**（那张表按"诊断
+ * 门"组织，画质系数不是）⟹ 要扩的是**规则表 + 前缀过滤**，不是把键塞进 diagnostics 回显行。
+ * ⚠ 另有一条**真障碍**：`Ctx` 只吃 diagnostics / shadow / runtime 三份配置，**看不见
+ * scene.lua** ⟹ 「`clip_mode` × `aa`」这类**跨文件**矛盾今天结构上就判不了。这是 lint 的
+ * 真实盲区、不是借口——`clip_mode` 只会是第一个撞上来的（补 scene 配置进 `Ctx` 是 S2 的一步）。
+ * 键轨迹在块入口**无条件**记全七枚键（覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
  * 键轨迹在块入口**无条件**记全七枚键（覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
  */
 static void readSsrBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyTrace& trace) {

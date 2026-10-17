@@ -113,10 +113,12 @@ TEST_CASE("gate_lint 覆盖率护栏：规则表门名集合 == 三方来源键�
 	const auto shadowEcho = shadowConfigEchoKeys();
 	// 第三个来源 = runtime.lua 的 meshlet 块。前缀过滤**写死**在这里并吃 runtimeConfigKnownKeys()
 	// （🔴 不许把 10 枚键名抄进测试当清单——抄了键名就等于没抄来源，键表改名会静默漏对）。
-	// 为什么只有 meshlet 块：runtime.lua 其余块（ssr / wet / aa / fsr / render_scale …）
-	// 刻意不在射程——没有「子键开而总门关」的孤立形态、前置也不全是纯配置组合，
-	// 理由 → runtime_config_impl.cppm 的 readSsrBlock 头注释「为什么不往 gate_lint 挂号」段
-	// （债-106 的射程裁决：meshlet 块**整块**接管，不挑键）。
+	// 为什么目前只有 meshlet 块：见 runtime_config_impl.cppm 的 readSsrBlock 头注释
+	// 「为什么**暂**未往 gate_lint 挂号」段（债-106 整块接管，不挑键）。
+	// 🔴 2026-10-17 纠正：原在此处写的「其余块没有『子键开而总门关』的孤立形态」是**假的**——
+	// `fsr.*` × `aa`、`clip_mode` × `aa` 正是该形态（一直由 smoke.py 的 guard_flags 替引擎守着）。
+	// ⟹ 本前缀过滤是**未扩的射程**（债-129 S2），不是裁决结论。扩它**不需要**新真相源：
+	// `runtimeConfigKnownKeys()` 已是第三个来源，meshlet 块吃的就是它。
 	std::vector<std::string> meshletKeys;
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
