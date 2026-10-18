@@ -70,6 +70,12 @@ namespace RGL::imgqa {
 /// **仪器**切。📄 正文在 `judgments_table_block.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& mdiDiffBlockJudgments();
 
+/// 地基族 · **透明合成次序**（`blend-sort`，4 条）：背景区钉显示链尾段 / 两个 α 各钉一次
+/// 非预乘 over / 重叠区钉「按 distanceSq 降序逐层合成」（债-132 结案的那条正主）。族仍是
+/// Foundation（与机位运动无关、预测 = 闭式解、比较算子 = 逐位相同），缝按**仪器**切。
+/// 📄 正文在 `judgments_table_blend.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& blendSortJudgments();
+
 }  // namespace RGL::imgqa
 
 #endif  // RGL_IMGQA_JUDGMENTS_TABLE_H

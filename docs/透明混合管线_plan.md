@@ -83,7 +83,7 @@
 | **0** | 抽 `pbr.slang`，`light.frag` 改 import（**搬字不改式**） | `just regress ab` **逐位相同**；红了停 |
 | **1** | 透明 frag 本体 + 四支类别变体 + CMake/spec 注册 + blend 优先路由 + 内建图 transparent 段 + selfCheck 断言 + 测试手术 | `just gates` 绿；`just smoke` 出厂图逐位不变（bistro 0 BLEND ⟹ 空 pass）；`transparent.glb` 出图 |
 | **2** | 两把小刀（highlight 锚点 + BLEND 无人消费出声） | 各带正例 + 反向用例；highlight 用例改喂**真 deferred 图** |
-| **3** | 排序正确性判据：造一个双层 unlit 透明的合成场景，期望像素写成闭式混合式 （**合成场景已落地**；判据本体还没进任何会跑它的地方 → 债-132，用户拍板「先把这份测试输入造出来，暂不加工具子命令」） | 变异对照：`stable_sort` 比较子 `>` → `<` **必须红**（实测已红，见 §5 刀3） |
+| **3** | 排序正确性判据：造一个双层 unlit 透明的合成场景，期望像素写成闭式混合式 （**已落地**：合成场景 `blend_sort` + 常驻检查 `just imgqa blend-sort`，债-132 结案） | 变异对照：`stable_sort` 比较子 `>` → `<` **必须红**（实测已红，且只有 `blend-sort-order` 一条红，见 §5 刀3） |
 
 ## 4. 已知边界（第一版不做，逐条带触发条件）
 
@@ -240,12 +240,18 @@ G 锚点退化回「首个采色 pass」→ RED（旧 7 条同时全绿，见上
 3. **四个判据区由几何解析算出**（不在图里找边界）：far-only / overlap / near-only / bg-only。
    前三个各锚住「显示链 + 单个 α」，于是 overlap 区新增的**唯一未知就是合成次序**。
 
-**怎么重跑**（判据脚本今天还在仓库外，所以这两行就是它全部的入口；债-132 结案时换成 just 入口）：
+**怎么重跑**（债-132 结案后的常驻入口，一条命令跑完「复制冻结配置 → 起引擎 → 取四区像素 → 闭式对拍」）：
 
 ```bash
-python3 tools/qa_scenes.py --out build/rgl/models --only blend_sort
-just shot --config-base qa/configs/blend_sort --name blend_sort   # 再拿闭式脚本对拍该 PNG
+just imgqa blend-sort    # 四区逐字节对拍，任一不符 rc=1；无 flag（阈值是量具的组成部分，可调 = 能调绿）
+just imgqa selftest      # 闭式算式本体的自检：不启引擎、不读文件，无 GPU 的机器上照样断言那四个数
 ```
+
+缺 `build/rgl/models/blend_sort.glb` 时命令**直接 FAIL 不 SKIP**，并把生成命令打在错误消息里
+（`python3 tools/qa_scenes.py --out build/rgl/models --only blend_sort`）。
+⚠ `just gates` **不编 imgqa** ⟹ 这条判据的编译错误与断言只有 `just build-tools` 听得见，
+而 `just build-tools` 不在任何自动门禁里 → **债-133**（本任务接线时实测：刀1 那次提交起
+`imgqa selftest` 就已异常退出、其后测试一条不跑，而 `just gates` 连编三次全绿）。
 
 **闭式对拍读数**（1280×720，采样行 y=360）：
 
@@ -256,17 +262,20 @@ just shot --config-base qa/configs/blend_sort --name blend_sort   # 再拿闭式
 | near_only | 778 | layer_near | (0.5, 0, 0.5) | (158,0,159) | (158,0,159) ✅ |
 | bg_only | 1061 | — | (0, 0, 1.0) | (0,0,204) | (0,0,204) ✅ |
 
-**四区全部零误差**（不是 ±1 LSB 容差命中）。显示链是 `tools/imgqa/analytic.cpp` 的 `toBytes`
-（曝光 → Narkowicz ACES → sRGB 编码）的独立转录，转录对不对不靠注释：三个单层区各锚一次。
+**四区全部零误差**（不是 ±1 LSB 容差命中）。显示链吃 `tools/imgqa/analytic.cpp` 的 `toBytes`
+（曝光 → Narkowicz ACES → sRGB 编码）——它是 shader 那条链的**独立第二实现**，不是引擎代码；
+独立实现在不在这里红不靠注释：三个单层区各锚一次，而 `imgqa selftest` 把「`toBytes` 吃这四个
+线性值必须给出这四组字节」钉成了断言（有人改 ACES 常数会先在 selftest 红，那时 GPU 都不用跑）。
 
 **变异对照**（`render_list_impl.cppm` 的 `a.distanceSq > b.distanceSq` → `<`，还原后复绿）：
-overlap 实测变 **(142,115,142)** = **正好等于**反序闭式预测，其余三区照旧逐字节命中。
+overlap 实测变 **(142,115,142)** = **正好等于**反序闭式预测，其余三区照旧逐字节命中，且
+`imgqa blend-sort` 的 rc=1 里**只有 `blend-sort-order` 一条红**。
 ⟹ 判据不只"会红"，而是**两种次序都预测得中**——这是能拿来当验收的判据，不是一台差分噪声计。
 
-**判别力自检**（harness 先于对拍跑；备选模型与正确模型的最大字节差，阈值 8 LSB，不足即拒跑）：
+**判别力自检**（命令先于对拍跑；备选模型与正确模型的最大字节差，阈值 8 LSB，不足即拒跑）：
 反序 = **42**、预乘混合（把非预乘的 SRC_ALPHA 读成 ONE）= **95**。
-⟹ 顺带证了一句：混合方程本身也在这个判据看得见的范围内（near_only 的 (0.5,0,0.5) 与预乘模型的 (1,0,0.5)
-差 95），不必另外造一份输入去验"混合是不是非预乘"。
+⟹ 顺带证了一句：混合方程本身也在这个判据看得见的范围内（95 出在 far_only：非预乘给 (0,0.25,0.75)、
+预乘给 (0,1,0.75)；near_only 的预乘差是 58），不必另外造一份输入去验"混合是不是非预乘"。
 
 **生成器侧三条对账的变异读数**（各改一处 `build_scene` 的 manifest 落笔，全 RED）：
 JSON 写了 `alphaMode="BLEND"` 而 manifest 未申报 → 红 / 写了 `KHR_materials_unlit` 而 manifest
@@ -275,5 +284,12 @@ JSON 写了 `alphaMode="BLEND"` 而 manifest 未申报 → 红 / 写了 `KHR_mat
 
 **已知边界**：这份输入**只**裁合成次序。它不覆盖透明体的光照/阴影/自发光（全 unlit）、MASK discard、
 velocity、picking、GPU culling 候选（§4 那几条边界一条没被这份输入碰到）。
-判据本体今天住在**仓库外**的一次性 harness（`/tmp/opencode/blend_sort_check.py`）⟹ 不进
-`just gates`，红了没人会看见。判据以后写进哪个文件、以及前置 → **债-132**。
+
+**判据本体写在哪**（债-132 结案，2026-10-18）：仪器 = `tools/imgqa/blend_sort.cpp`（复制冻结配置
+到 `build/rgl/imgqa_blend_sort_profile` → 跑引擎 → 取四区像素 → 比字节 → 落台账），闭式算式 =
+`tools/imgqa/blend_sort_metric.h`(+`.cpp`)（投影 / 合成 / 判别力 / 三条拒跑，**不启引擎、不读文件、
+不碰 OpenCV**），契约表 = `tools/imgqa/judgments_table_blend.cpp`（四条，族 = Foundation，阈值同
+1 LSB），自检 = `tools/imgqa/selftest_blend_sort.cpp`。三条前置自检**不做成 PASS/FAIL，做成立即抛**
+（rc=3）：它们的含义是"这次测量没有意义"，输出一条 PASS 是在撒谎。
+⚠ 刀3 当时那份写在仓库外（/tmp）的一次性 Python 脚本自本次起作废，不再是任何读数的出处。
+

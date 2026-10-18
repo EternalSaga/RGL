@@ -18,6 +18,8 @@ add_executable(imgqa
     cli_table_diffstruct.cpp
     # `diffblock` 的 spec 段（★0.5-b1，同上一条的拆法：主表撞护栏，缝按仪器切）。
     cli_table_diffblock.cpp
+    # `blend-sort` 的 spec 段（债-132，同上一条的拆法：主表撞 500 行、specsSwimAndProbe 撞 120 行）。
+    cli_table_blend.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -55,6 +57,8 @@ add_executable(imgqa
     judgments_table_tail.cpp
     # `diffblock` 判据段（★0.5-b1，1 条 `diffblock-thickness`），缝按仪器切（同 ssr 段）。
     judgments_table_block.cpp
+    # `blend-sort` 判据段（债-132，4 条），缝按仪器切（同 block / ssr 段）。
+    judgments_table_blend.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -78,6 +82,9 @@ add_executable(imgqa
     # 合成小图/合成帧序列直测打印形态，不启引擎。
     selftest_ao_noise.cpp
     selftest_swim.cpp
+    # `blend-sort` 口径层（债-132）的自检段：投影锚点 / 合成闭式 / 显示链金标准 / 判别力 /
+    # 三条拒跑 / 挂号，全部**不启引擎**（合成 BlendPiece 直打 `blend_sort_metric.cpp`）。
+    selftest_blend_sort.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -181,6 +188,13 @@ add_executable(imgqa
     # 三条判决线。常数唯一出处 = `shadow_kernel_metric.h`（两处各抄一份 = 第二份真相）。
     shadow_kernel_metric.cpp
     shadow_kernel_scale.cpp
+    # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
+    # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
+    # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器
+    # （复制冻结配置目录 → 跑引擎 → 取四区像素 → 比字节 → 落台账）。常数唯一出处 =
+    # `blend_sort_metric.h`；显示链不在任何一份里，吃 `analytic.cpp` 的 `toBytes`。
+    blend_sort_metric.cpp
+    blend_sort.cpp
     # `diffstruct`（批 15.2 子步 D1：把一次性脚本 ssr_subtract_check.py 升成常驻算子）。
     # 拆两 TU 的缝 = **口径 vs 仪器**（同 shadow_kernel_*）：`diff_struct_metric.cpp` 是纯度量
     # （selftest 用合成数组闭式直接测，不读图、不启引擎），`diff_struct.cpp` 是读图 + 报数 + 判决。

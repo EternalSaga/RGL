@@ -1127,6 +1127,31 @@ struct ShadowScanSample {
 /// 缺靶（.glb / .manifest.json）= 抛，**不 SKIP**。
 int cmdShadowKernelScale();
 
+// ═══════════════════════════════════════════ 透明合成次序（blend-sort，债-132 结案）
+//
+// 缺陷本体不是某一处写错的代码，而是**透明没有深度排序**这件事本身：正确性全靠
+// `rgl/render_list_impl.cppm` 的 `stable_sort(a.distanceSq > b.distanceSq)`（远先画），
+// 而排序代理是 entity 世界矩阵的平移列（`tf.world[3]`）不是几何中心。判据本体与全部口径
+// 理由 = `tools/imgqa/blend_sort.cpp` 头注释；闭式算子（投影 / 合成 / 判别力）住在
+// `blend_sort_metric.{h,cpp}`，被 `just imgqa selftest` 用合成输入直接测（不启引擎）。
+
+/**
+ * 透明合成次序的四区闭式对拍（输入 = 冻结配置 `qa/configs/blend_sort` +
+ * `build/rgl/models/blend_sort.glb`）。**无 flag**：判据区、阈值、帧号都是量具的组成部分，
+ * 可调 = 能调绿。
+ *
+ * 四条判决线（阈值同为 1 LSB，逐条容差理由 → `imgqa check`）：
+ *  · `blend-sort-backdrop` —— 背景区只钉显示链（ACES / sRGB 尾段），与混合无关
+ *  · `blend-sort-layer-far` / `-layer-near` —— 两个 α 各钉一次非预乘 over
+ *  · `blend-sort-order` —— 重叠区按 distanceSq **降序**逐层合成的闭式（本命令的正主）
+ *
+ * 三条前置自检**不做成 Verdict，做成立即抛**（rc=3，与「缺输入不 SKIP」同形）：半透层的
+ * distanceSq 相等（排序键退化 = 变异结构性不红）、camera.lua 与 manifest 的相机不一致
+ * （采样点量到别的几何上而闭式照旧自洽）、判别力 < 8 LSB（分不开对错的检查没有资格当验收）。
+ * 缺 `.glb` 或缺 manifest = 抛，**不 SKIP**。
+ */
+int cmdBlendSort();
+
 // ═══════════════════════════════════════════ 结构差分（diffstruct，Phase 15 批 15.2 子步 D1）
 //
 // 判据本体（拍板 → docs/phase15_plan.md §2 批次表 15.2 行）= 湿面/SSR「反射结构的对比度」：

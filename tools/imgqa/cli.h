@@ -54,6 +54,11 @@ const SubcommandSpec* findSubcommand(const std::string& name);
 /// `diffblock` 段的正文在 `cli_table_diffblock.cpp`（同上一条的拆法：主表撞护栏，缝按仪器切）。
 [[nodiscard]] std::vector<SubcommandSpec> diffBlockSpecs();
 
+/// `blend-sort` 段的正文在 `cli_table_blend.cpp`（同上一条的拆法：主表撞「单文件 < 500 代码行」
+/// 而 `specsSwimAndProbe()` 装下本条后撞「单函数 < 120 代码行」，缝按仪器切）。它在 -h 里的
+/// 位置由 `cli_table.cpp` 的 allSpecs() 决定 = 紧跟 shadow/probe 那一段。
+[[nodiscard]] std::vector<SubcommandSpec> blendSortSpecs();
+
 /// 绑定到某个 spec 的解析结果。**默认值只能来自 spec**——旧的三参数
 /// `get(args, key, def)` 已删除：留着它，字面量默认值就还有地方活。
 /// 读未声明的 flag 直接抛（不抛 = 校验是摆设）。

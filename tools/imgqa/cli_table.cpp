@@ -515,6 +515,9 @@ std::vector<SubcommandSpec> allSpecs()
     };
     append(specsMetaAndRig());
     append(specsSwimAndProbe());
+    // `blend-sort` 排在 shadow/probe 那一段之后（施工单要求它紧跟 `shadow-kernel-scale`；
+    // 主表撞护栏后正文搬进 `cli_table_blend.cpp`，这里就是它在 -h 里的位置）。
+    append(blendSortSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

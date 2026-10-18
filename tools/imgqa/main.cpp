@@ -1,7 +1,7 @@
 // imgqa CLI。子命令：selftest / check / refuse / attribution / faces / switch / izb / swim /
 // probe / temporal / temporal-residual / temporal-motion / temporal-feedback /
 // temporal-flicker / temporal-homography / aa-coverage / taa-swim / shadow-softness /
-// shadow-kernel-scale / diffstruct / diffblock / note。
+// shadow-kernel-scale / blend-sort / diffstruct / diffblock / note。
 // （权威清单 = `cli_table.cpp` 的注册表，本行只是路标。）
 //
 // ## 本文件 = **路由**，不是仪器
@@ -14,6 +14,8 @@
 //   · rig_attribution.cpp  attribution / faces / switch —— 吃 manifest 区域归因的三条判据
 //   · rig_shadow_field.cpp izb / swim —— izb_rig 影场仪器族（同一套 deferred+shadowPass 采集）
 //   · probe.cpp            probe —— 闭式解探针（消费冻结配置目录，不吃 --glb）
+//   · blend_sort.cpp       blend-sort —— 透明合成次序（同样消费冻结配置目录 + manifest 的
+//                          closedForm 块；口径在 blend_sort_metric.cpp，selftest 直接打）
 //   · registry_read.cpp    check / refuse —— 只读注册表的命令
 //
 // 缝按**仪器**切，不按行数切（护栏：单文件 < 500 代码行）。命令函数的**声明集中在 imgqa.h**
@@ -179,6 +181,7 @@ int dispatch(const std::string& cmd, const Args& P)
         { "check", cmdCheck },
         { "shadow-softness", cmdShadowSoftness },
         { "shadow-kernel-scale", cmdShadowKernelScale },
+        { "blend-sort", cmdBlendSort },
     };
     if (const auto meta = kMeta.find(cmd); meta != kMeta.end())
         return meta->second();

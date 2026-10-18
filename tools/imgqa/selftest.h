@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 46 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 47 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -32,6 +32,9 @@
 //                                    burstDiffFiles 帧数不足早退出声（合成小图直测）
 //     · `selftest_swim.cpp`        = **taa-swim 仪器层输出面**（债-94）：lagTable 输出行数
 //                                    不随实测噪声变（合成帧序列 + captureStdout 直测打印形态）
+//     · `selftest_blend_sort.cpp`  = **blend-sort 口径层**（债-132）：投影锚点 / 合成闭式 /
+//                                    显示链金标准 / 判别力 / 三条拒跑 / 挂号（合成 BlendPiece
+//                                    直打 `blend_sort_metric.cpp`，不启引擎、不读文件）
 //
 //   为什么 Checker 必须住在这里：`chk` **只在失败时打印** ⟹ 全绿时 stdout 只有一句汇总，
 //   这套自检**没有「逐条通过」的正向读数**。每个 TU 各抄一份 Checker 的后果不是编译不过，
@@ -41,7 +44,7 @@
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 402
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 441
 //   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。）
 //   🔴 改这个数字的仪式：只在**逐条可红**的断言进出时改。曾删掉 `topLevelValueOf` 的两条断言
 //   ——npos 分支经 findKeyHits 不可达 ⟹ 改前改后都绿，**买了信心不买覆盖**，那种断言不配进这个数。
@@ -129,7 +132,7 @@ std::string captureStdout(F fn)
     return out;
 }
 
-// ── 46 条测试的声明（定义按仪器族分散在九个 TU；调用顺序只写在 `cmdSelftest`）──
+// ── 47 条测试的声明（定义按仪器族分散在十个 TU；调用顺序只写在 `cmdSelftest`）──
 void testSrgb(Checker& c);
 void testObjectId(Checker& c);
 void testRegion(Checker& c);
@@ -176,5 +179,6 @@ void testLuaEditBlockBoundary(Checker& c);
 void testGlbChunkValidation(Checker& c);
 void testPercentile100(Checker& c);
 void testCallLedger(Checker& c);
+void testBlendSort(Checker& c);
 
 }  // namespace RGL::imgqa

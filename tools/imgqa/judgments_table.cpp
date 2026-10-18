@@ -455,6 +455,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         append(shadowKernelScaleJudgments());
         append(ssrDiffStructJudgments());
         append(mdiDiffBlockJudgments());
+        append(blendSortJudgments());
         return v;
     }();
     return kAll;
