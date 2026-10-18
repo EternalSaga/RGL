@@ -1,12 +1,16 @@
 import scene;    // SceneLight/readSceneLight（共享 eyePos/ambient，头区 UBO binding 22）
-import lights;   // 多灯：readLightCount/readGpuLight（lights 自带 binding 24 载体，不再 import scene）
+import lights;   // 多灯载体（binding 24）；readLightCount/readGpuLight 的**调用点**已随刀0 进 pbr
 import sky;      // 天穹射线重建：skyClipToWorld（读 @64 invViewProj）——sky 背景合成（@64 字段名 skyboxInvViewProj 的来历 = 已删的 forward skybox pass，契约字段保留）
 import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13；forward 三个光照风格曾与本路共用，已随刀②.2 删除）
+import pbr;      // 共享着色核（GGX / 植被 / IBL 环境光 / 多灯循环），2026-10-18 刀0 自本文件抽出
 
 // Phase 7 D1：deferred light pass —— 全屏逐灯光照，读 G-buffer 4+1 RT 重建 albedo/法线/
 // 世界位置/metal-rough，套用与已删除的 model_pbr.frag **逐式相同**（历史对偶，git history）的简化 PBR（GGX Cook-Torrance）。
 // Phase 7 D3：升级为多灯循环——灯数据源 = scene data 尾区 GpuLight[]（lights.slang）；
 // 共享 eyePos(@12)/ambient(@36) 仍来自 scene.slang readSceneLight（与已删除的 forward 路同源）。
+// 🔴 2026-10-18 透明混合管线刀0：GGX / 植被 / IBL 环境光 / 多灯循环**算式本体**已抽进 pbr.slang
+//（docs/透明混合管线_plan.md §1-2），本文件与透明 frag 同吃那一份，不再各存副本；本文件剩下的
+// 全是 light pass 专属形态：G-buffer 读取、材质类别分支（emissive.a）、天穹合成、IZB 消费。
 // 点光（type=1）线性衰减 1-dist/range（无物理 1/r²，够用）；定向（type=0）atten=1。
 //
 // 批次 2 refine（Phase 7 收尾）：
@@ -72,20 +76,8 @@ float izbShadowFactor(float3 P, float3 N, float2 uv)
 }
 #endif
 
-// env 参数（头区契约字段 SceneHeaderBlock::envParams.xy，scene.slang readEnvIntensity /
-// readEnvMipRange 共用读取面；本结构只是本地成对取值，无字节偏移）
-struct EnvParamsL
-{
-    float intensity;
-    float mipRange;
-};
-EnvParamsL readEnvParamsL()
-{
-    EnvParamsL e;
-    e.intensity = readEnvIntensity();
-    e.mipRange  = readEnvMipRange();
-    return e;
-}
+// env 参数与 GGX / 植被 / 多灯循环 = 共享着色核 pbr.slang（刀0 抽出，见其文件头）；
+// 本文件只留 light pass 专属形态：G-buffer 读取、材质类别分支、天穹合成、IZB 消费。
 
 struct LightInput
 {
@@ -96,64 +88,6 @@ struct LightInput
 // octDecode（G-buffer oct 法线解码）批 15.1 后半起走 `import scene;` 单一来源——
 // 本文件曾是唯一消费者，ssr.frag 是第二个；抬升理由与逐字搬移纪律见 scene.slang
 // 「屏幕 ↔ 世界重建」段头（clipToWorld 先例）。
-
-// 单灯 GGX 贡献（与 model_pbr.frag 逐式相同，epsilon 相对化 1e-7·a2）；atten = 距离衰减
-float3 shadeLight(float3 N, float3 V, float3 albedo, float metallic, float roughness,
-                  float3 L, float3 radiance, float atten)
-{
-    float3 F0 = lerp(float3(0.04), albedo, metallic);
-    float NdotL = saturate(dot(N, L));
-    float NdotV = max(dot(N, V), 1e-4);
-    float3 H = normalize(V + L);
-    float NdotH = saturate(dot(N, H));
-    float VdotH = saturate(dot(V, H));
-
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    float D = a2 / (3.14159265 * d * d + 1e-7 * a2);
-    float3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
-    float k = a * 0.5;
-    float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
-    float3 specular = D * G * F / (4.0 * NdotV * NdotL + 1e-4);
-
-    float3 diffuse = albedo * (1.0 - metallic) / 3.14159265;
-    return atten * radiance * NdotL * (diffuse + specular);
-}
-
-// Phase 8 批次 F：植被单灯贡献（对齐已删除的 forward model_vegetation 的 shadeDirect + shadeTransmit，
-// 独立副本不与其源码耦合）：漫反射 = half-Lambert wrap（保底 0.3 = 冠内弹射），叠加背光透射
-//（出射向 T=normalize(-L+0.2N)、backLit=pow(dot(V,T),3)、thickness 用 albedo 亮度近似保底 0.45）；
-// specular 保持标准 saturate（高光不该绕）。metallic 恒 0（调用方已置）。
-float3 shadeLightVeg(float3 N, float3 V, float3 albedo, float roughness,
-                     float3 L, float3 radiance, float atten)
-{
-    float3 F0 = float3(0.04);
-    float NdotL = saturate(dot(N, L));
-    float NdotV = max(dot(N, V), 1e-4);
-    float3 H = normalize(V + L);
-    float NdotH = saturate(dot(N, H));
-    float VdotH = saturate(dot(V, H));
-
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float d = NdotH * NdotH * (a2 - 1.0) + 1.0;
-    float D = a2 / (3.14159265 * d * d + 1e-7 * a2);
-    float3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
-    float k = a * 0.5;
-    float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
-    float3 specular = D * G * F / (4.0 * NdotV * NdotL + 1e-4);
-
-    float wrap = max(pow(saturate(dot(N, L) * 0.5 + 0.5), 2.0), 0.3);
-    float3 diffuseWrap = albedo * wrap / 3.14159265;
-
-    float3 T = normalize(-L + 0.20 * N);
-    float backLit = pow(saturate(dot(V, T)), 3.0);
-    float thickness = 0.45 + 0.55 * saturate(dot(albedo, float3(0.333)));
-    float3 transmit = albedo * backLit * thickness * 1.5;
-
-    return atten * radiance * (NdotL * specular + diffuseWrap + transmit);
-}
 
 [shader("fragment")]
 float4 main(LightInput input) : SV_Target0
@@ -229,26 +163,11 @@ float4 main(LightInput input) : SV_Target0
         return float4(0.0, 0.0, 0.0, 1.0);  // 无环境 = 黑天（旧行为：清 0 G-buffer 光照亦黑）
     }
 
-    // 几何像素 ambient 项（Phase 8 批次 ④a 完整版 IBL，与已删除的 forward model_pbr_ibl 逐式同源）：
-    // 漫反射 = SH9 辐照度 irradianceSH(N)（scene.slang），镜面 = prefiltered env × BRDF
-    // split-sum（envBrdfFactor）。env.mipRange=0（无环境）回落常 ambient（旧行为 BIT 兼容）。
-    float3 F0 = lerp(float3(0.04), albedo, metallic);
-    float NdotV = max(dot(N, V), 1e-4);
-    float3 color;
-    if (env.mipRange > 0.0)
-    {
-        float3 R = reflect(-V, N);
-        float3 irradiance = irradianceSH(N);
-        float3 envSpec    = envMapL.SampleLevel(envSamplerL, R, roughness * env.mipRange).rgb;
-        // 植被 env 镜面 = 0（同已删除的 forward model_vegetation：掠射天空镜像 = 油亮湿感，探针定案）
-        // Lambert 1/π：irradianceSH 输出真辐照度 E，出射 = E·albedo/π（与直接光 shadeLight 的 albedo/π 一致；Filament 把该 1/π 烘进 CPU SH 系数，我们在求值端）
-        color = (irradiance / 3.14159265 * albedo * (1.0 - metallic)
-            + envSpec * envBrdfFactor(NdotV, roughness, F0) * (isVeg ? 0.0 : 1.0)) * env.intensity;
-    }
-    else
-    {
-        color = shared.ambient * albedo * (1.0 - metallic);
-    }
+    // 几何像素 ambient 项（Phase 8 批次 ④a 完整版 IBL）：算式本体在 pbr.shadeAmbient
+    //（2026-10-18 刀0 抽出，与透明 frag 同源；逐式理由——Lambert 1/π、植被 env 镜面归零、
+    //  mipRange=0 回落常 ambient——写在该函数注释里）
+    float3 color = shadeAmbient(envMapL, envSamplerL, N, V, albedo, metallic, roughness,
+        isVeg, env, shared.ambient);
 
     // Phase 11 批 11.2：阴影因子。当年**与 forward 三个光照风格同体**（同一份 shadow.slang，
     // forward 已随刀②.2 删除）——11.0c 的教训：两路只要有一路没接就是“只有一路有”的破口。
@@ -259,43 +178,9 @@ float4 main(LightInput input) : SV_Target0
 #else
     const float shadowFactor = sampleShadow1Tap(P, N);
 #endif
-    uint n = readLightCount();
-    if (n == 0)
-    {
-        // count=0 回落 @0 头单灯（与已删除的 forward model_pbr_ibl/model_light/model_vegetation 同款；
-        // shadeLightVeg 已含植被透射项 ≈ 其 forward 回落的 shadeDirect+shadeTransmit）
-        float3 L0 = -shared.direction;
-        color += (isVeg ? shadeLightVeg(N, V, albedo, roughness, L0, shared.color, 1.0)
-                        : shadeLight(N, V, albedo, metallic, roughness, L0, shared.color, 1.0))
-            * shadowFactor;
-    }
-    else
-    {
-        for (uint i = 0; i < n; ++i)
-        {
-            GpuLight gl = readGpuLight(i);
-            float3 L;
-            float atten = 1.0;
-            if (gl.params.y < 0.5)  // 定向光：照射方向 = -direction，无衰减
-            {
-                L = -gl.direction.xyz;
-            }
-            else                    // 点光：指向光源，线性衰减 clamp(1 - dist/range)
-            {
-                float3 toLight = gl.position.xyz - P;
-                float dist = length(toLight);
-                L = toLight / max(dist, 1e-4);
-                atten = gl.params.x > 0.0 ? saturate(1.0 - dist / gl.params.x) : 0.0;
-            }
-            if (atten <= 0.0)
-                continue;
-            if (isVeg)
-                color += shadeLightVeg(N, V, albedo, roughness, L, gl.color.rgb, atten) * shadowFactor;
-            else
-                color += shadeLight(N, V, albedo, metallic, roughness, L, gl.color.rgb, atten)
-                    * shadowFactor;
-        }
-    }
+    // 直接光多灯循环（Phase 8 ③）——算式本体在 pbr.shadeLights（刀0 抽出）。🔴 color 作**初值
+    // 累加**进去（不是「返回直接光再相加」）：浮点结合律不成立，抽出前后必须逐次同序
+    color = shadeLights(color, N, V, P, albedo, metallic, roughness, isVeg, shadowFactor, shared);
     // Phase 8 剩余批次 B：自发光相加（deferred_geometry SV_Target4 写入的第 5 G-buffer 通道，
     // 与已删除的 forward model_pbr_ibl 的 od.emissive.rgb × emissiveTexture 相加项同源；天空分支已提前返回）
     // Phase 8 批次 F：光源类 ×1/4 = 还原 strength 预乘（同已删除的 forward model_light，暗绿玻璃定案）

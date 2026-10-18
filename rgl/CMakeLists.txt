@@ -40,20 +40,24 @@ rgl_shader(deferred_geometry.frag DEFERRED_GEOM_FRAG_SPV model material scene no
 rgl_shader(deferred_geometry_vegetation.frag DEFERRED_GEOM_VEG_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
 rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
 rgl_shader(deferred_geometry_unlit.frag DEFERRED_GEOM_UNLIT_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
-# Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
+# Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）。
+# DEP 里的 pbr = 共享着色核（2026-10-18 透明混合管线刀0 抽出，docs/透明混合管线_plan.md §1-2）：
+# 改 pbr.slang 必须触发 light.frag **全部六个变体**重编译（漏一个 = 该变体吃陈旧 SPV，
+# 而门关/门开各档分别红，是最难归因的一类静默错图）；lights 仍留在 DEP 是 R1 的**传递闭包**
+# 要求（light.frag → pbr → lights），不是本文件直接 import。
 rgl_shader(light.mesh LIGHT_MESH_SPV)
-rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow)
+rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow pbr)
 # 批 11.3-1e：IZB 消费变体（-DIZB_CONSUME；门关选原版 = 逐位红线构造性保证，见 RglSlang.cmake）
-rgl_shader_defined(light.frag LIGHT_IZB_FRAG_SPV IZB_CONSUME scene lights sky shadow)
+rgl_shader_defined(light.frag LIGHT_IZB_FRAG_SPV IZB_CONSUME scene lights sky shadow pbr)
 # 批 11.5：PCSS 接触硬化软阴影变体（-DPCSS_SOFT；阴影采样 frag = light.frag 一族——
 # forward 三个 import shadow 的 frag 已随刀②删除）。
 # 门关选原版 = 逐位红线构造性保证；IZB×PCSS 组合 = 双 define（registry 拼接顺序 = 此处顺序））
-rgl_shader_defined(light.frag LIGHT_PCSS_FRAG_SPV PCSS_SOFT scene lights sky shadow)
-rgl_shader_defined2(light.frag LIGHT_IZB_PCSS_FRAG_SPV IZB_CONSUME PCSS_SOFT scene lights sky shadow)
+rgl_shader_defined(light.frag LIGHT_PCSS_FRAG_SPV PCSS_SOFT scene lights sky shadow pbr)
+rgl_shader_defined2(light.frag LIGHT_IZB_PCSS_FRAG_SPV IZB_CONSUME PCSS_SOFT scene lights sky shadow pbr)
 # 批 11.6d-2：EVSSM 远场软阴影变体（-DEVSSM_SOFT；同 light.frag 一族 + IZB 组合，
 # 门控模式同 11.5。两门同开 = shadow.slang 内 EVSSM 优先分支）
-rgl_shader_defined(light.frag LIGHT_EVSSM_FRAG_SPV EVSSM_SOFT scene lights sky shadow)
-rgl_shader_defined2(light.frag LIGHT_IZB_EVSSM_FRAG_SPV IZB_CONSUME EVSSM_SOFT scene lights sky shadow)
+rgl_shader_defined(light.frag LIGHT_EVSSM_FRAG_SPV EVSSM_SOFT scene lights sky shadow pbr)
+rgl_shader_defined2(light.frag LIGHT_IZB_EVSSM_FRAG_SPV IZB_CONSUME EVSSM_SOFT scene lights sky shadow pbr)
 # Phase 11 批 11.2：级联阴影 depth-only 管线。mesh 自带 8B push（objectIndex +
 # cascadeIndex）——**不 import material.slang**：共享的 4B DrawArgs 契约不能为阴影多加一个
 # 字段（改了 = 1591 条模型条目全重建），故阴影管线自带 push 块。frag 空壳（无输出）。

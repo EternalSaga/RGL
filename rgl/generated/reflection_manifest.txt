@@ -42,7 +42,7 @@ e7ca6b40bcb186223d6e9bb6af603f10f13152a4  rgl/shaders/deferred_geometry_vegetati
 110ade1692463f7e16bc2c40c4123d54d5dabf2a  rgl/shaders/highlight.frag.slang
 ed9566632545b937e5c2906593fcc25fca9e84bf  rgl/shaders/izb_mask.frag.slang
 176b60e69f1df83c98afe68128742bfe957e5060  rgl/shaders/izb_mask.mesh.slang
-c2d1185c215c3f6bb4640c7b456b255c50178cdb  rgl/shaders/light.frag.slang
+681e22203390745b0101302aa5005b918f224b62  rgl/shaders/light.frag.slang
 84f290013a4639f98be41702dee75f649d971951  rgl/shaders/light.mesh.slang
 2c438777a9045fc848d039f44e218be50dc76cc3  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
@@ -51,6 +51,7 @@ db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 297805826f7fae6014ac5599acda57d70fe00873  rgl/shaders/model.mesh.slang
 109b471b7e2d56b03acdb887deae8c3f377b647a  rgl/shaders/model.slang
 0744e35838f1e645ec73c8b047f0a3ce9fcdc254  rgl/shaders/normalmap.slang
+4a1314018e9d5f80a0ed58b91550256fdae137f0  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
 87b17aeb9df2c2c05b2fc0b7d2383c5ca079c77e  rgl/shaders/scene.slang
 8fe5a123abeb0d4c5d823c953fa90be0a5f1fdcd  rgl/shaders/scene_tables.slang
@@ -88,7 +89,7 @@ e7ca6b40bcb186223d6e9bb6af603f10f13152a4  rgl/shaders/deferred_geometry_vegetati
 110ade1692463f7e16bc2c40c4123d54d5dabf2a  rgl/shaders/highlight.frag.slang
 ed9566632545b937e5c2906593fcc25fca9e84bf  rgl/shaders/izb_mask.frag.slang
 176b60e69f1df83c98afe68128742bfe957e5060  rgl/shaders/izb_mask.mesh.slang
-c2d1185c215c3f6bb4640c7b456b255c50178cdb  rgl/shaders/light.frag.slang
+681e22203390745b0101302aa5005b918f224b62  rgl/shaders/light.frag.slang
 84f290013a4639f98be41702dee75f649d971951  rgl/shaders/light.mesh.slang
 2c438777a9045fc848d039f44e218be50dc76cc3  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
@@ -97,6 +98,7 @@ db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 297805826f7fae6014ac5599acda57d70fe00873  rgl/shaders/model.mesh.slang
 109b471b7e2d56b03acdb887deae8c3f377b647a  rgl/shaders/model.slang
 0744e35838f1e645ec73c8b047f0a3ce9fcdc254  rgl/shaders/normalmap.slang
+4a1314018e9d5f80a0ed58b91550256fdae137f0  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
 87b17aeb9df2c2c05b2fc0b7d2383c5ca079c77e  rgl/shaders/scene.slang
 8fe5a123abeb0d4c5d823c953fa90be0a5f1fdcd  rgl/shaders/scene_tables.slang
@@ -133,7 +135,7 @@ e7ca6b40bcb186223d6e9bb6af603f10f13152a4  rgl/shaders/deferred_geometry_vegetati
 110ade1692463f7e16bc2c40c4123d54d5dabf2a  rgl/shaders/highlight.frag.slang
 ed9566632545b937e5c2906593fcc25fca9e84bf  rgl/shaders/izb_mask.frag.slang
 176b60e69f1df83c98afe68128742bfe957e5060  rgl/shaders/izb_mask.mesh.slang
-c2d1185c215c3f6bb4640c7b456b255c50178cdb  rgl/shaders/light.frag.slang
+681e22203390745b0101302aa5005b918f224b62  rgl/shaders/light.frag.slang
 84f290013a4639f98be41702dee75f649d971951  rgl/shaders/light.mesh.slang
 2c438777a9045fc848d039f44e218be50dc76cc3  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
@@ -143,6 +145,7 @@ db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 297805826f7fae6014ac5599acda57d70fe00873  rgl/shaders/model.mesh.slang
 109b471b7e2d56b03acdb887deae8c3f377b647a  rgl/shaders/model.slang
 0744e35838f1e645ec73c8b047f0a3ce9fcdc254  rgl/shaders/normalmap.slang
+4a1314018e9d5f80a0ed58b91550256fdae137f0  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
 87b17aeb9df2c2c05b2fc0b7d2383c5ca079c77e  rgl/shaders/scene.slang
 8fe5a123abeb0d4c5d823c953fa90be0a5f1fdcd  rgl/shaders/scene_tables.slang
