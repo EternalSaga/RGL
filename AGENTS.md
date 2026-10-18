@@ -48,7 +48,8 @@ just config              # CMake 配置（默认 clang, Release）；just config
 just build               # 增量编译（需先 config）；just build-release / build-debug = 一键配置+编译
 just reflect             # 重跑 11 条反射管线（改动 shader 契约/schema/模板后必须，见 skill rgl-shader-contract）
 just checks / doc-check / style-check [--strict]  # 源码检查统一入口（每次 just build 已随 source_checks 跑、只警告）
-just build-tools         # 构建 imgqa + 跑 checks（imgqa 不进 ALL，`just build` 不编它 ⟹ 它编译失败没人发现）
+just tools-check         # 编 imgqa + 跑 imgqa selftest + 编 meshlet_pack（无引擎无设备；**已并进 just gates**）
+just build-tools         # tools-check + 一遍非严格 checks（改完 tools/ 想立刻知道编不编得过）
 just run                 # 运行
 just smoke / just shot   # agent 一次性 headless 冒烟 / 截图（配置走 RGL_CONFIG_DIR，**不碰 configs 副本**）
 just regress ab|floor|burst|selftest  # 逐位回归 + 同构建地板归因（改渲染后验收的默认起手；口径红线 → skill rgl-verify）
@@ -58,7 +59,9 @@ just cpu [--arms default,no-vvl --json f.json --compare f.json --list-arms]  # C
 just run-igpu / run-dgpu / run-intel   # 强制核显 / NVIDIA prime 独显 / Intel anv
 just test                # 单元测试（tests/，**无 GPU 无窗口**，毫秒级；排除 gpu 套件）
 just test-all / test-gpu # 含设备级原语用例（要真设备 + VVL；无设备**FAIL 不 SKIP**）
-just gates               # 三道门禁一条命令（build → test → checks --strict，**逐条取退出码**）。
+just gates               # 四道门禁一条命令（build → test → tools-check → checks --strict，**逐条取
+                       # 退出码**）。第四步是债-133 补的：imgqa 是 EXCLUDE_FROM_ALL，而它的
+                       # selftest 一异常退出会**连带其后测试一起不跑**——实测坏过 4 个提交而三道全绿。
                        # 🔴 别拿 `just checks 2>&1 | grep 汇总` 判绿——管道只返回最后一段的状态
                        # ⟹ 退出码被吞成 grep 的 0，而"0 警告"那行有没有 ERROR 都会被打
 just install-hooks       # 装 pre-push 钩子（push 前跑 just test，实测 2s）；🔴 **每台机器 / 每个

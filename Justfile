@@ -200,22 +200,31 @@ doc-check *ARGS="":
 style-check *ARGS="":
     @python "{{ WORKSPACE }}/tools/checks/main.py" --build-dir "{{ BUILD }}" --only style {{ ARGS }}
 
-# 构建 imgqa 再跑 checks。为什么需要这条：imgqa 是 EXCLUDE_FROM_ALL，`just build`
-# 根本不编它，编译失败会一直躺着，直到某个人显式跑 `just imgqa` / `just analytic`
-# 才发现（真实踩过：`clipArmName` 与 `case 11` 撞 duplicate case，潜伏到下次 analytic
-# 才炸）。改完 tools/imgqa 就 `just build-tools`，把「编译不过」压回当轮。
+# 工具层自检（债-133）：编 imgqa + 跑它的自检 + 编 meshlet_pack。**无引擎、无设备、亚秒级**。
+#
+# 为什么这条必须存在**且必须有人自动跑**：imgqa / meshlet_pack 都是 EXCLUDE_FROM_ALL，
+# `just build` 根本不编它们，编译失败会一直躺着，直到某个人显式跑 `just imgqa` 才发现
+# （真实踩过：`clipArmName` 与 `case 11` 撞 duplicate case，潜伏到下次 analytic 才炸）。
+# selftest 同理：**只在某个工具里自检的护栏，必须有人自动跑它**（2026-10-09 实测：给判据
+# 注册表加两条却没抬 selftest 里写死的总数 ⟹ 护栏本身是红的，而提交者听不见）。
+#
+# 🔴 本条已进 `just gates`（债-133 的结案形态）。进 gates 的实测代价：imgqa 目标无改动
+# **≈0s**、改一个源文件 **3s**、十个 TU 加链接 **5s**、`imgqa selftest` **<1s**。
+# 反面先例（本条立项的由来）：刀1 的 ac90a61 把 `deferred_styles` 的读取改成走解析 helper
+# ⟹ imgqa 的键名校验器抽不到那种写法 ⟹ **反向误报**一个合法键 ⟹ `imgqa selftest` 异常退出、
+# 其后测试一条不跑，潜伏 4 个提交，期间 `just gates` 连编三次全绿。
 #
 # 注意方向：**checks 本身不去编译 imgqa**——source_checks 是 just build 的内建步骤，
 # 检查步骤里再触发编译会形成递归并拖慢每次构建。checks 只要 compile_commands.json
 # 里的编译命令（configure 期即导出），imgqa 未构建也能解析它。
-#
-# selftest 也在这里跑（不要设备、毫秒级）：**只在某个工具里自检的护栏，必须有人自动跑它**。
-# 2026-10-09 实测踩过：给判据注册表加两条却没抬 selftest 里写死的总数 ⟹ 护栏本身是红的，
-# 而本 recipe 原先不跑它 ⟹ 提交者听不见，红留给下一个人才被发现。
-build-tools:
+tools-check:
     @cmake --build {{ BUILD }} --target imgqa
     @{{ BUILD }}/tools/imgqa/imgqa selftest
     @cmake --build {{ BUILD }} --target meshlet_pack
+
+# 工具层全套 = 上面的自检 + 一遍非严格 checks（改完 tools/ 用这条；收尾验收用 just gates）
+build-tools:
+    just tools-check
     just checks
 
 # 分层测试覆盖量具（债-15）：rlbase/rlgfx/rlscene/rlframe 哪些模块有 tests/ 消费者。
@@ -249,14 +258,20 @@ install-hooks *ARGS="":
 pre-push:
     @python "{{ WORKSPACE }}/tools/hooks/pre-push" --no-stdin origin local-dryrun
 
-# 🔴 **三道门禁一条命令，逐条取退出码**（收尾 / 每组验收用）。为什么要有这条：
+# 🔴 **四道门禁一条命令，逐条取退出码**（收尾 / 每组验收用）。为什么要有这条：
 # `just checks 2>&1 | grep 汇总` 把退出码**吞成 grep 的 0**——管道只返回最后一段的状态，
 # 而"0 警告"那行无论有没有 ERROR 都会被 grep 打到（汇总行本身就在），于是红树看起来是绿的。
 # 2026-10-14 通宵单实测踩过：据此把一条 3-ERROR 的树 commit 了出去（后 amend 修）。
 # 正确姿势要么 `cmd >log 2>&1; echo rc=$?`，要么直接 `just gates`。
+#
+# 第四步 `tools-check`（债-133）= 编 imgqa / meshlet_pack + 跑 `imgqa selftest`。
+# **为什么它必须在门禁里而不是"记得就跑"**：那两个目标都是 EXCLUDE_FROM_ALL，
+# 而 imgqa 的 selftest 一旦异常退出会**连带其后所有测试一起不跑**——实测它坏过 4 个提交，
+# 期间三道门禁全绿。放 pre-push 钩子里不合适（钩子文档明写"慢钩子 = 人人心跳
+# `--no-verify`，别往我身上加东西"），所以进 gates：无改动时实测 ≈0s。
 gates:
-    @echo "[gates] build → test → checks --strict（逐条取退出码，任一红则本条红）"
-    @rc=0; for r in build test "checks --strict"; do \
+    @echo "[gates] build → test → tools-check → checks --strict（逐条取退出码，任一红则本条红）"
+    @rc=0; for r in build test tools-check "checks --strict"; do \
       if just $r >/tmp/rgl_gate.log 2>&1; then echo "  ok   just $r"; \
       else echo "  FAIL just $r —— 日志 /tmp/rgl_gate.log 末 25 行："; tail -25 /tmp/rgl_gate.log; rc=1; fi; \
     done; \

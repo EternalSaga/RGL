@@ -249,9 +249,9 @@ just imgqa selftest      # 闭式算式本体的自检：不启引擎、不读�
 
 缺 `build/rgl/models/blend_sort.glb` 时命令**直接 FAIL 不 SKIP**，并把生成命令打在错误消息里
 （`python3 tools/qa_scenes.py --out build/rgl/models --only blend_sort`）。
-⚠ `just gates` **不编 imgqa** ⟹ 这条判据的编译错误与断言只有 `just build-tools` 听得见，
-而 `just build-tools` 不在任何自动门禁里 → **债-133**（本任务接线时实测：刀1 那次提交起
-`imgqa selftest` 就已异常退出、其后测试一条不跑，而 `just gates` 连编三次全绿）。
+`just gates` 第四步 `tools-check` 会编 imgqa 并跑它的自检（债-133 已结案：本任务接线时实测
+刀1 那次提交起 `imgqa selftest` 就已异常退出、其后测试一条不跑，而当时三道门禁连编三次全绿）。
+但**跑这条命令本身要 GPU**，gates 只保证它编得过、算式自检过，不保证它跑过。
 
 **闭式对拍读数**（1280×720，采样行 y=360）：
 
