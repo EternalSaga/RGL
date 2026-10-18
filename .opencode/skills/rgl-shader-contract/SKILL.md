@@ -11,9 +11,12 @@ description: 修改 Slang 着色器契约与反射管线——just reflect、sca
   构建时编译；运行时按相对路径读，故 CWD 必须是 `build/rgl/`）
 - **反射管线显式触发**：`generated/*.cppm` + `reflection_manifest.txt` 是**已提交产物**，只在改
   契约后 `just reflect` 重生成并随改动提交；构建开头 `reflection_check` 比对输入 SHA1，
-  忘跑 = FATAL 指路。共 **8 条**（types/model/material/lights/scene_forward/meshlet_cull 反射生成 +
-  features/param_semantics 模板生成），Profile `sm_6_6+spirv_1_6` + `spvDescriptorHeapEXT`
-- 6 条 slang 管线走 `reflection_tool slang` 子命令（直接查 slang C API，**不产 JSON 中间层**）：
+  忘跑 = FATAL 指路。共 **11 条**（7 条 slang 反射：types/model/material/lights/scene_forward/
+  meshlet_cull/cull_tables + features/param_semantics 模板生成 + compute_access（一条出两份产物）
+  + compute_push；**条数不在本文件抄死的理由** = 真相源是 `cmake/RglReflection.cmake` 里
+  `add_custom_target(reflect)` 的 COMMENT，加管线的人改的是那里，抄在这里必漂），
+  Profile `sm_6_6+spirv_1_6` + `spvDescriptorHeapEXT`
+- 7 条 slang 管线走 `reflection_tool slang` 子命令（直接查 slang C API，**不产 JSON 中间层**）：
   struct 布局 = 编译器实查真值（逐字段 `offsetof` static_assert），schema 降为提取清单 + 交叉校验
 - 🔴 **compute 着色器的布局契约同样走反射，禁止双源**（用户 2026-10-12 拍板）：新 compute 契约的
   形态 = `shaders/<name>.slang`（struct + `[[vk::push_constant]]` 变量）+ `shaders/<name>_schema.lua`
@@ -46,9 +49,10 @@ description: 修改 Slang 着色器契约与反射管线——just reflect、sca
 |---|---|
 | `shaders/material.slang` | **统一 push constant 契约**：`DrawArgs` 单一真相源 → schema 校验 → `material_types_generated` |
 | `shaders/scene.slang` | **场景级 bindless 契约**：`sceneData`（binding 3）+ `SceneLight`（前向头，**C API 反射生成**，双源已消）+ `readSceneLight`/`readObjectMatrix`/`readObjectMvp`/`readObjectDraw`/`worldPos`/`worldNormal`/`clipPos` |
-| `shaders/env.slang` / `sky.slang` | env 采样契约（binding 4/5）/ 天空盒契约（`invViewProj` 重建射线） |
-| `shaders/lights.slang` | **多灯契约**：`GpuLight` + `readLightCount`/`readGpuLight`；`light.frag` import，forward 不 import |
-| `shaders/model_pbr/model_phong/model_pbr_ibl.frag` | 三条 frag 路线（GGX / Blinn / GGX+简化 IBL），`scene.lua styles` 一行切换 |
+| `shaders/env.slang` / `sky.slang` | env cubemap 的 **binding 4/5 声明**（参数读取面 2026-10-18 起在 `pbr.slang`，本文件不再提供）/ 天穹射线重建（`invViewProj`，light.frag 采 env 当背景） |
+| `shaders/lights.slang` | **多灯契约**：`GpuLight` + `readLightCount`/`readGpuLight`；由 `pbr.slang` import（light.frag 与透明 frag 同吃 pbr，两侧不再各自 import） |
+| `shaders/pbr.slang` | **共享着色核**（2026-10-18 透明混合管线刀0 抽）：GGX 单灯 / 植被 wrap+透射 / IBL 环境光 / 多灯循环 / `EnvParams`+`readEnvParams`。🔴 一个绑定都不声明——env 资源经**函数参数**传入（Slang 支持资源类型作参数且调用方 binding 号原样进 SPV）⟹ `light.frag` 的 9/10 与 `transparent.frag` 的 4/5 不必统一；累加次序是语义（见该文件头） |
+| `shaders/transparent.frag` + `_vegetation/_light/_unlit` | **BLEND 图元的前向着色**（透明段只挂 scene_hdr 一张色附件）：材质从 heap 的 per-object 表读、alpha 出像素、类别走编译期宏；算式全在 `pbr.slang`。路由 = `scene_config::resolvePipelineSpecName`（blend 决定族、风格决定族内哪一支） |
 | `shaders/deferred_geometry.frag` + `light.mesh/frag` | deferred 路线：多 MRT G-buffer 写入（oct 法线）/ 全屏大三角逐灯 GGX + 简化 IBL + skybox 背景合成（天空像素 = position 清 0）；格式由 `kGBufferAttachments` 表定 |
 | `shaders/model_schema.lua` `constants` | 契约常量单一真相源（→ 生成 constexpr）；`HeapSlotGeometryBase` = 用户槽区起点 = 几何段基址 |
 | `rgl/builtin_geometry.cppm` | **内建几何契约**：cube 等程序化几何的上传/注册，与 gltf 同路；`vk_resources` 不认识任何内容 |

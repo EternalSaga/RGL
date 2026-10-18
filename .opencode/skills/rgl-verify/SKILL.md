@@ -11,7 +11,9 @@ description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读
   其他目录启动报 "Log config file not found"
 - **运行模式全配置化，字段清单去读 `configs/*.lua` 本体**（逐字段带注释，是唯一真相源）：
   `runtime.lua`（headless/尺寸/llm_shot）、`diagnostics.lua`（各类诊断门，全可选默认关）、
-  `render_graph.lua`（顶层 `variant` 选渲染路线）、`camera.lua`（机位，含帧驱动 `frame_yaw`）、
+  `render_graph.lua`（**空表 = 内建 deferred 图；出现 `attachments`/`passes` 任一键 = 自定义图**；
+  顶层 `variant` 键与 `RgGraphVariant` 枚举已删，写它 = 启动报错）、
+  `camera.lua`（机位，含帧驱动 `frame_yaw`）、
   `scene.lua`（场景构成）。仅驱动级 env（`VK_DRIVER_FILES` / prime offload）由 `just run-*` 注入。
 - **build 端 configs 副本 = `copy_if_different`（只源更新才覆盖）**——临时改副本调试**不会自动
   复原**，要复原得 `cp configs/*.lua build/rgl/configs/`。这就是"双源"，**一次性跑别碰副本**，
@@ -21,10 +23,18 @@ description: 运行 RGL 程序做 headless 冒烟、llm_debug 截图多模态读
 
 ```bash
 just smoke                                # headless 出一帧，报 errors/warnings + 设备现场
-just smoke --variant deferred             # 换渲染路线
+just smoke --aa taa                       # 换抗锯齿档（off|taa|fsr）；--ssr / --sync 同族
 just shot --name foo --size 1600x900      # 截图 → build/rgl/screenshots/foo.png（读它）
 just smoke --from-build                   # 配置基准 = build 副本现场（默认 = 仓库 configs/）
+just smoke --set 'diagnostics:picking=true'      # 任意配置键注入（可重复）
+just smoke --set 'shadow:mode="pcss"'            # 字符串值**必须带引号**
 ```
+
+`--set` 的两个坑（工具会**出声**，但先知道更省一轮）：① 文件前缀用**裸名**（`shadow` 不是
+`shadow.lua`），白名单 = camera/diagnostics/render_graph/runtime/scene/shadow，不带前缀 = 打
+runtime.lua；② 原值是字符串的键给裸值会被拒（写进 lua 成了未定义全局 = nil = 静默回落默认，
+正是它拦下的形态）。**渲染路线没有开关**：`variant` 键与 `RgGraphVariant` 枚举已删
+（`docs/图变体收敛_plan.md` §4），要自定义图就在 `render_graph.lua` 里写 `attachments`/`passes`。
 
 `tools/smoke.py`（stdlib-only）把一次性配置铺到临时目录并用 **`RGL_CONFIG_DIR`** 注入（引擎契约：
 只覆盖配置目录，资产仍按 CWD 相对）——**不改任何配置副本，因此没有"跑完要复原"的状态**。
