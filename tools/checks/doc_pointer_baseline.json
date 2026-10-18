@@ -1,12 +1,11 @@
 {
   "_comment": "反引号指针棘轮基线（§1.7 判定 ③④：反引号里写成项目路径 / `just 配方` / `imgqa 子命令`却磁盘上不存在或不在真相源里的条数，按文件记）。这些是**存量**——历史台账里写过的已删工具、上游文件、计划中未落地的文件名；只准降不准升：新增一条 = 有人凭记忆写了不存在的指针，处置是改指针，不是来这里登记额度。确实清掉一批后用 `python3 tools/checks/main.py --update-doc-pointer-baseline` 收账。判据与排除形态 → docs/风格检查规则.md §1.7。",
-  "total": 99,
+  "total": 98,
   "files": {
     ".opencode/plans/shader_reflection.md": 4,
     ".opencode/plans/tools-checks-modernize.md": 11,
     "docs/archive/ecs_compliance_review.md": 5,
     "docs/archive/heap_texture_research.md": 1,
-    "docs/archive/light_entity_plan.md": 1,
     "docs/archive/phase2_plan.md": 4,
     "docs/archive/phase3_plan.md": 4,
     "docs/archive/phase4_plan.md": 1,

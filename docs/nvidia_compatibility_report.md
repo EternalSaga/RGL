@@ -288,7 +288,7 @@ headless 与窗口 llm_debug 截图已验证 BIT-IDENTICAL）。
 
 ## 十、参考
 
-- `min_mesh_crash/` 子项目（`516cf5a` 删除，墓碑 `docs/archive/min_mesh_crash_已删除.md`）— 最小复现 + 根因证据链（本调查的权威记录，代码见 git history）
+- `min_mesh_crash/` 子项目（`516cf5a` 删除，墓碑已删 → `git:min_mesh_crash_已删除.md`）— 最小复现 + 根因证据链（本调查的权威记录，代码见 git history）
 - NVIDIA 官方 sample：`/home/robin/mounts/gm7000/program/vk_mini_samples/`
 - `docs/DESCRIPTOR_HEAP_SPEC.md` — descriptor heap 排坑记录
 - Vulkan spec Debugging chapter: https://docs.vulkan.org/spec/latest/chapters/debugging.html

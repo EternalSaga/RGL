@@ -58,7 +58,7 @@
     groupCount = ceil(triangleCount / kTrianglesPerGroup)（ecs.cppm:233-234）
 - `DrawCall.pushData` 是类型擦除 `std::span<const std::byte>`（vkrenderer.cppm:54），
   `drawFrame` 盲执行（:561-567），`pushDataEXT(0, ...)` 的 set 0 被 64B/96B 两种 struct
-  隐式共享（L5，phase2_coupling_review.md:178）。
+  隐式共享（L5，`git:phase2_coupling_review.md`:178）。
 - **cube 不能套统一 group 公式**：cube mesh shader 固定输出 8 顶点/12 三角形
   （cube.mesh.slang:11-26，`if (ti < 12)` 分支不消费 totalTriangles/remaining），
   groupCount=ceil(12/10)=2 时第 2 个 group 会重复读 12 个三角形索引 → 越界/重复输出。
@@ -331,7 +331,7 @@ fresh.calls.push_back(DrawCall{asset.pipelineIndex,
    （pbr 占位 frag、Lua=风格映射、Material 走 push constant 超集而非独立 binding、
    顶点拼接 D5 超计划新增）。
 3. `ecs_compliance_review.md`：H1 注记 + L5 → 已解（批次 4 = Phase 4）；E5.3 完整形态达成注记。
-4. `phase2_coupling_review.md`：L5 行加"已解"注记（历史文档，权威记录归 ecs_compliance_review）。
+4. `git:phase2_coupling_review.md`：L5 行加"已解"注记（历史文档，权威记录归 ecs_compliance_review）。
 5. 总验证（§7 行 5）。
 
 ## 5. 文件变更清单
@@ -362,7 +362,7 @@ fresh.calls.push_back(DrawCall{asset.pipelineIndex,
 | `configs/scene.lua` | 3 | +styles 表 +model_pbr 管线条目 |
 | `vulkan_practice/main.cpp` | 2,3 | ShaderRegistry 构造传参（批 2）；风格派生 → styleMap → addModelEntry（批 3） |
 | `AGENTS.md` | 1,2,3,4 | 每批结束更新对应段落（模块表/已知问题/关键文件） |
-| `docs/next_roadmap.md` / `docs/archive/ecs_compliance_review.md` / `docs/archive/phase2_coupling_review.md` | 4 | 状态/债销账 |
+| `docs/next_roadmap.md` / `docs/archive/ecs_compliance_review.md` / `git:phase2_coupling_review.md` | 4 | 状态/债销账 |
 
 ## 6. 风险与对策
 

@@ -7,7 +7,7 @@
 
 > **范围**：`vulkan_practice` 主项目（Phase 0–2 完成后的现状）。`min_mesh_crash` 为独立最小复现，不在范围。
 > **性质**：问题清单 + 修复方向。2026-08-24 批次 2（draw call 抽象 + system 化）已落地，已决条目见 §处置记录。
-> **与 [phase2_coupling_review.md](phase2_coupling_review.md) 的关系**：耦合审查从"耦合味道"视角诊断；
+> **与 `git:phase2_coupling_review.md` 的关系**：耦合审查从"耦合味道"视角诊断；
 > 本文以 ECS 设计规范为标尺重新组织同一代码库，重点补上耦合审查未覆盖的结构性条目
 > （E1 场景数据散落/构造参数泄漏、E3 system 化缺失、E5 组件设计）。
 > 两份文档交叉引用：耦合审查已列条目（H1/H2/M1…）不重复正文，只在 §修复路线 映射到 ECS 修复路径。
@@ -56,7 +56,7 @@ registry 只在 Phase 2 的 model 路径上生效了一半（entity 注册 + vie
 | [~~L3~~](#l3--renderer-持有未使用的-registry) | Renderer 持有未使用的 `entt::registry*`（死依赖） | Low | **已修复**（2026-08-24 批次 2 顺手） |
 
 > L4（默认 SPV 路径重复）/ L5（set-0 约定）/ L6（ModelMeshAssets 生命周期）为耦合审查条目，
-> 与 ECS 修复路线的关系见 §修复路线 映射表；正文见 [phase2_coupling_review.md](phase2_coupling_review.md)。
+> 与 ECS 修复路线的关系见 §修复路线 映射表；正文见 `git:phase2_coupling_review.md`。
 
 ---
 
@@ -259,7 +259,7 @@ system 间契约靠阅读函数体理解；config 改动的影响面无法从 re
 - ECS 违反：规范 4（底层类对 ECS 模块的依赖无实际用途）。
 - 修复：删构造参数 + 成员 + GMF entt include（`main.cpp:64` 调用点同步）。
 
-> L4 / L5 / L6 见 [phase2_coupling_review.md](phase2_coupling_review.md)；与 ECS 修复路线的关系见下表。
+> L4 / L5 / L6 见 `git:phase2_coupling_review.md`；与 ECS 修复路线的关系见下表。
 
 ---
 
@@ -400,7 +400,7 @@ bounds center=(0.1004, 0, -0.4999) radius=6.25 与 Phase 2 记录（phase2_plan 
 
 **接缝回写**：`AGENTS.md`（模块结构 vk_resources/vk_renderer/scene/camera/ecs/model_importer 行
 + main.cpp 描述 + 关键文件位置 addModelPipeline/renderListSystem/eventSystem + 已知问题）、
-`phase2_coupling_review.md`（L6 标已修复 + 状态更新节）。
+`git:phase2_coupling_review.md`（L6 标已修复 + 状态更新节）。
 
 ### 2026-08-28 重构批次 1-3 落地（纹理/材质/cube 资产化，Phase 3 收尾）
 

@@ -19,7 +19,7 @@
 
 | 项 | 决定 | 备注 |
 |---|---|---|
-| 网格绘制 | **无 task，按三角形分组** | 导入时去索引展开；CPU 用 `drawMeshTasksEXT(ceil(tri/TRI_PER_GROUP),1,1)` 派生 N 个 mesh group；保留 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT`，规避 [min_mesh_crash_已删除.md](min_mesh_crash_已删除.md)（原 `min_mesh_crash/` 子项目）记录的 NVIDIA task 坑 |
+| 网格绘制 | **无 task，按三角形分组** | 导入时去索引展开；CPU 用 `drawMeshTasksEXT(ceil(tri/TRI_PER_GROUP),1,1)` 派生 N 个 mesh group；保留 `VK_SHADER_CREATE_NO_TASK_SHADER_BIT_EXT`，规避 `git:min_mesh_crash_已删除.md`（原 `min_mesh_crash/` 子项目）记录的 NVIDIA task 坑 |
 | 顶点属性 | **position + normal + uv**，**走反射契约** | 本阶段**增强反射工具**使其支持顶点布局（现状只反射 push constant + slot，顶点结构体手写在 `cube.cppm`） |
 | 着色 | **flat unlit baseColor** | 每 primitive 输出其材质 baseColor；alpha 通道忽略（无混合/透明排序，那是 Phase 5） |
 | cube | **并存**（cube + 模型同帧渲染） | 需要**多契约**反射（cube 契约 + model 契约各一套 `.slang`/schema/`.cppm`） |
