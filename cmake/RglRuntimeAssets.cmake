@@ -44,7 +44,7 @@ rgl_copy_files(MODEL_GLB_OUTPUTS models ${MODEL_GLB_SOURCES})
 add_custom_target(copy_models ALL DEPENDS ${MODEL_GLB_OUTPUTS})
 
 # ─── assets/<dir>/*.png → build skybox/<dir>/（Phase 5.5）────────────────────
-# 6 面 cubemap 素材（nightSky/rainbow，面顺序定案见 docs/archive/phase5_5_plan.md）。
+# 6 面 cubemap 素材（nightSky/rainbow，面顺序定案见 git:phase5_5_plan.md）。
 # 新增素材目录需在此加 dir 名 + just config（GLOB 于 configure 时求值）。
 set(SKYBOX_DIRS nightSky rainbow)
 set(SKYBOX_OUTPUTS)

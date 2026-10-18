@@ -291,7 +291,7 @@ export [[nodiscard]] std::expected<ModelTextureIds, Error> uploadModelTextures(
 /**
  * 环境 cubemap 加载（Phase 5.5）：6 个图片文件路径（已按 Vulkan 层序 0-5 排列）→
  * image_codec 解码 RGBA8 + 校验（方形/2 的幂/六面同尺寸）→ uploadCubeMap。面文件顺序权威记录
- * = docs/archive/phase5_5_plan.md 素材定案表（nightSky: 1,3,5,6,2,4；rainbow 方案 B:
+ * = git:phase5_5_plan.md 素材定案表（nightSky: 1,3,5,6,2,4；rainbow 方案 B:
  * ft,bk,up,dn,rt,lf）。
  * @param resources 资源层（VMA 分配器 + env 单例 + sky sampler）
  * @param device 设备层

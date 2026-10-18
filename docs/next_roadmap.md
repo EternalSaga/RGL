@@ -43,7 +43,7 @@ scope guard——低优先级，随改随做。
 ### Phase 0：Shader Reflection（已完成）
 反射管线定型：`tools/`（schema_loader/validator/generator + reflection_tool CLI，inja 模板，
 rllogger）+ `slangc -reflection-json` + `*_schema.lua` 契约 → 生成 `types_generated`。
-shader/vkresources/vkrenderer import 生成模块，硬编码常量清零。细节 → [archive/shader_reflection_plan.md](archive/shader_reflection_plan.md)。
+shader/vkresources/vkrenderer import 生成模块，硬编码常量清零。细节 → `git:shader_reflection_plan.md`。
 
 ### Phase 1：Camera + Input（已完成 2026-08-22）
 `camera.cppm`（trackball/FPS 双模式，统一 yaw/pitch 姿态）+ **`configs/*.lua` sol2 沙箱模式确立**
@@ -55,32 +55,32 @@ tinygltf + `gltf_loader`（去索引展开 + 包围球）+ `model_importer`（�
 ECS 化）+ `scene_config`；第二条反射管线（`model_types_generated`）；前置解耦 = `RenderState`
 动态状态外移 + Renderer 管线表（`PipelineEntry`）；自适应 near/far。**ECS 五规范自此为参照系**
 （合规审查 → [archive/ecs_compliance_review.md](archive/ecs_compliance_review.md)）。
-细节 → [archive/phase2_plan.md](archive/phase2_plan.md)（含 §7 计划外发现）。
+细节 → `git:phase2_plan.md`（含 §7 计划外发现）。
 
 ### Phase 3：纹理管理（已完成 2026-08-28）
 bindless 纹理：`AssetTable`（TextureAsset/MaterialAsset）+ 自由函数上传（`TexturePool` 类未落地——
 main 局部对象 UAF 教训，整体降为自由函数 + `allocSlot` 统一分配）+ **独立 sampler heap**；
 描述符统一步长 = `max(imageDescriptorSize, bufferDescriptorSize)`（三驱动实测：RADV/Intel/NVIDIA
-全 PASS）。细节 → [archive/phase3_plan.md](archive/phase3_plan.md) + [archive/heap_texture_research.md](archive/heap_texture_research.md)。
+全 PASS）。细节 → `git:phase3_plan.md` + [archive/heap_texture_research.md](archive/heap_texture_research.md)。
 
 ### Phase 4：多 Shader + 统一契约（已完成 2026-08-28/30）
 `material.slang` `DrawArgs` 超集（第三条反射管线，scalar 布局）+ `shader_registry` 管线去重
 （392 primitive → 12 条目，按 (规格,顶点 slot,纹理 slot) 组合）+ 分块拼接顶点 buffer +
 `styleMap` 风格映射。遗留 cottage artifact 根因 = 两个自 Phase 2 的越界 bug（uv 步长 /
 triangles 组内索引，Windows/NVIDIA 移植暴露——"非确定性驱动竞态"系误诊，教训见 archive）。
-细节 → [archive/phase4_plan.md](archive/phase4_plan.md)。
+细节 → `git:phase4_plan.md`。
 
 ### Phase 5：透明排序 + 简单光照（已完成 2026-08-31）
 双段 FrameDrawList + 距离² 稳定排序（像素级验收）+ **scene data bindless 基建**
 （`LightDataGpu@0` + 对象矩阵表 + staging ring → `vkCmdCopyBuffer`——全项目首个每帧动态 GPU
 数据通路，Phase 7 shadow/culling 复用）+ 双光照风格（`model_pbr` GGX / `model_phong` Blinn）。
-细节 → [archive/phase5_plan.md](archive/phase5_plan.md)。
+细节 → `git:phase5_plan.md`。
 
 ### Phase 5.5：IBL（简化版）+ 天空盒（已完成 2026-09-01）
 `uploadCubeMap` 6 面直传（RADV linear staging 三坑 → 6 张独立 2D staging + mip blit NEAREST）+
 简化 IBL（`env.slang` binding 4/5，无 prefiltered/BRDF LUT）+ 天空盒（全屏大三角 clip→world 射线）
 + 三段 `[opaque|skybox|transparent]` + `PipelineBindings` mapping 顺序填充修正。
-细节 → [archive/phase5_5_plan.md](archive/phase5_5_plan.md)。
+细节 → `git:phase5_5_plan.md`。
 
 ### Phase 6：Lua 渲染意图（架构升级，已完成 2026-09-03）
 `render_graph` 模块（`RgGraphDesc` → `compileRenderGraph` 校验 + **barrier 自动推导** +
@@ -94,7 +94,7 @@ present/waitStage 派生）；drawFrame 手写布局转换清零、pass 循环�
 
 ## Phase 7：延迟渲染（进行中）
 
-> **实施计划**：[archive/phase7_plan.md](archive/phase7_plan.md)（批次拆解、范围决策 D1–D6、验证矩阵）。
+> **实施计划**：`git:phase7_plan.md`（批次拆解、范围决策 D1–D6、验证矩阵）。
 > **开发日志**（过程/踩坑滚动记录）：[phase7_devlog.md](phase7_devlog.md)。
 > 测试主场景 = `assets/bistro_exterior.glb`（转换管线 `tools/bistro_pack.py`）。
 

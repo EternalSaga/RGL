@@ -227,7 +227,7 @@ system 间契约靠阅读函数体理解；config 改动的影响面无法从 re
 - 违反：同一关系存两份，一致性靠写入方自觉；children vector 在注册后无增删入口。
 - 修复：只保留 child 的 `parent`（单向）；children 查询由 `rg.view<Relationship>` 过滤 parent 派生
   （或 system 缓存）。legacy 的双向结构不继承
-  （phase2_plan §2.2 已核查 entt 3.16 无内置 relationships 头，手写组件形状可自行定义）。
+  （`git:phase2_plan.md` §2.2 已核查 entt 3.16 无内置 relationships 头，手写组件形状可自行定义）。
 
 **E5.3 MaterialRef 名为 Ref 实为值拷贝：**
 
@@ -349,7 +349,7 @@ E5.3 过渡（MaterialRef 改名）仍未做（完整形态归批次 4）。
 **验证**：`cmake --build`（工具链变更自动重建 + 重新生成，generated diff 只多常量）；
 `just run-igpu` 双配置目视——`cube=false`：仅 4 个 glTF 盒（cube DrawCall 不产生，gating 生效）；
 `cube=true`：彩色 cube + 4 盒同帧渲染。日志核对：slot 8-11、
-bounds center=(0.1004, 0, -0.4999) radius=6.25 与 Phase 2 记录（phase2_plan §7.3）一致，无 warn/error。
+bounds center=(0.1004, 0, -0.4999) radius=6.25 与 Phase 2 记录（`git:phase2_plan.md` §7.3）一致，无 warn/error。
 
 **仍 Open**：
 - E1（批次 3，建议与 Phase 3 TexturePool 并案）：资产表 + 生命周期收敛（含 L6）+ 构造参数去耦合（`primitiveCount`）
@@ -450,7 +450,7 @@ grass / transparent+cube / 无模型+cube 四路），启动零 warn/error；附
 
 > 背景：Phase 4（Shader 反射扩展 + 多 Shader 支持）4 批次落地，清偿两条前置债
 >（push constant 归一 + 管线去重）+ 材质字段 + pbr 占位风格 + Lua 风格映射。
-> 详见 `docs/archive/phase4_plan.md`。
+> 详见 `git:phase4_plan.md`。
 
 - ~~H1/L5~~ **已解（Phase 4 批次 1）**：push constant 布局归一——统一 `DrawArgs` 超集
   （scalar 布局 96B，`material_types_generated`）+ `renderListSystem` 单一写入路径
@@ -472,7 +472,7 @@ grass / transparent+cube / 无模型+cube 四路），启动零 warn/error；附
 
 **接缝回写**：`AGENTS.md`（模块结构 vk_resources/vk_renderer/scene/gltf_loader/model_importer
 + texture_pool 行 + main.cpp 描述 + 已知问题 ECS 债节）、`next_roadmap.md`（Phase 3 已完成
-+ 计划-实现偏离注记 + Phase 4 前置债）、`phase3_plan.md`（状态行）、
++ 计划-实现偏离注记 + Phase 4 前置债）、`git:phase3_plan.md`（状态行）、
 `heap_texture_research.md`（§12.7 手段① 标已落地）。
 
 ---

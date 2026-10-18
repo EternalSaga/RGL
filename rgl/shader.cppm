@@ -818,7 +818,7 @@ export class RenderPipeline {
 	 * vkCmdBindSamplerHeapEXT 每帧绑定）。
 	 * 注意：sampler 走独立 sampler heap 而非 pEmbeddedSampler——2026-08-27 spike
 	 * 交叉测试两者三驱动均 PASS（docs/archive/heap_texture_research.md §九），此处维持独立
-	 * sampler heap（docs/archive/phase3_plan.md R1 回退链的既选路径，已验证可用）。
+	 * sampler heap（git:phase3_plan.md R1 回退链的既选路径，已验证可用）。
 	 * hasSceneData=true（Phase 5 批次 2，模型形态）追加 scene data 各**子范围**载体槽
 	 *（binding 表 = ShaderRegistry::fillSceneRegionSlots，本文件不抄；批 N+1 起**没有**
 	 * 全区 binding 3 那一条了）；SPV 未声明的那条被批 M 过滤掉，不再白烘。

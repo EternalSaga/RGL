@@ -555,7 +555,7 @@ export class Resources {
 	 * 创建 sampler heap（Phase 3）：OpTypeSampler 的独立 heap（vkCmdBindSamplerHeapEXT
 	 * 每帧绑定）。背景：pEmbeddedSampler 对 Slang 的 OpTypeImage+OpTypeSampler 分离对
 	 * 未获 RADV 采纳（spec 声称同等适用，实测采样恒 0；spike 只验证了 GLSL 组合
-	 * sampler2D=OpTypeSampledImage），回退链（docs/archive/phase3_plan.md R1）= 真
+	 * sampler2D=OpTypeSampledImage），回退链（git:phase3_plan.md R1）= 真
 	 * sampler heap。容量 = reserved + 固定小裕量（共享一份 sampler 描述符，全模型管线
 	 * 映射指向同一槽）。
 	 * @return VmaDescriptorHeap（步长 = samplerDescriptorSize，运行时查询，见 impl）；

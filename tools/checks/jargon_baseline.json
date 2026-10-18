@@ -1,6 +1,6 @@
 {
   "_comment": "对话黑话棘轮基线（§16：对照表里处置为「换掉」的词在 AGENTS / docs / skills 的出现次数，按 文件×词 记）。这些是**存量**，只准降不准升：新增一条 = 有人用隐喻省掉了一句白话，而这句话的成本改由下一个读它的人付。处置是改写，不是来这里登记额度；确实清掉一批后用 `python3 tools/checks/main.py --update-jargon-baseline` 收账。白话写法 → skill rgl-glossary。",
-  "total": 735,
+  "total": 733,
   "files": {
     ".opencode/skills/rgl-doc-placement/SKILL.md::归宿": 4,
     ".opencode/skills/rgl-doc-placement/SKILL.md::红线": 3,
@@ -27,8 +27,6 @@
     "docs/archive/issue_history.md::归宿": 1,
     "docs/archive/phase10_plan.md::红线": 7,
     "docs/archive/phase10_plan.md::落点": 4,
-    "docs/archive/phase4_plan.md::落点": 1,
-    "docs/archive/phase7_plan.md::落点": 1,
     "docs/archive/静态审查升级路线.md::红线": 1,
     "docs/compute_调研.md::射程": 1,
     "docs/compute_调研.md::红线": 31,

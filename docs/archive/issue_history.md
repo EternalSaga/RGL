@@ -56,7 +56,7 @@ triangles 索引用全局顶点索引（`base=(firstTriangle+ti)*3` 应为组内
 （RADV 对越界 index 做 mod 回绕恰好掩盖，`firstTriangle*3=30·g` 恰为 30 倍数）。
 教训：**"偶发 + 区域固定 + 随构建时序变" = 越界读经典签名**，应第一时间查步长/索引
 （ASan/页保护），别默认"驱动 bug"接受推进。
-**全文**：[phase4_plan.md](phase4_plan.md) 批次 2 定案注记（含 12+ 项排查复盘）。
+**全文**：`git:phase4_plan.md` 批次 2 定案注记（含 12+ 项排查复盘）。
 
 ## 2026-08-30 · ECS 五项已知债全清
 

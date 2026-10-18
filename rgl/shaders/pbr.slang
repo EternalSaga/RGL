@@ -32,7 +32,7 @@ struct EnvParams
 {
     // 环境强度（scene.lua environment.intensity）。**作用点在 GPU 端**：采样后乘（env 颜色只存在于
     // GPU，无法像定向光那样 CPU 预乘进 SceneLight::color）——与定向光 intensity 是同一类调光参数的
-    // 两种落地形态（docs/archive/教程拆解发现_20260902.md ⑤）。
+    // 两种落地形态（git:教程拆解发现_20260902.md ⑤）。
     float intensity;
     float mipRange;   // 可采样 mip 跨度（L−1，roughness→LOD 的满量程）
 };
