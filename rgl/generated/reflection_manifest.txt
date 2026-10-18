@@ -42,7 +42,7 @@ c34f5197d24fe71feeca5da85eab2ddc11ce54e1  rgl/shaders/env.slang
 110ade1692463f7e16bc2c40c4123d54d5dabf2a  rgl/shaders/highlight.frag.slang
 ed9566632545b937e5c2906593fcc25fca9e84bf  rgl/shaders/izb_mask.frag.slang
 176b60e69f1df83c98afe68128742bfe957e5060  rgl/shaders/izb_mask.mesh.slang
-abf45378850c7e134bcc44d7c1796deee33fdc11  rgl/shaders/light.frag.slang
+4935cd4d394380bf231dfa44b77219c282646772  rgl/shaders/light.frag.slang
 84f290013a4639f98be41702dee75f649d971951  rgl/shaders/light.mesh.slang
 2c438777a9045fc848d039f44e218be50dc76cc3  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
@@ -65,7 +65,7 @@ b97658bd3fea6b0a26517c231376803188cb3e81  rgl/shaders/shadow.slang
 1a0db7811d5deaa0dea6a2b6ccbe2dffd910d80b  rgl/shaders/ssr_trace.frag.slang
 24743f1859900c86b7453f93a27aa80de2513d58  rgl/shaders/taa.frag.slang
 2000c2c7fb458942aba83bf5a4f966e6fad84404  rgl/shaders/tonemap.frag.slang
-b513acf017d8d8abda4e54f728ce02e8f990572b  rgl/shaders/transparent.frag.slang
+fd860d75855ce27f4e8be53017b91cae8d3a7c4d  rgl/shaders/transparent.frag.slang
 2aa6108ff547465b145a709578f107461158fa7a  rgl/shaders/transparent_light.frag.slang
 8c2caa6249bc99f17d61504d1f58bdd50b8ace28  rgl/shaders/transparent_unlit.frag.slang
 ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.frag.slang
@@ -93,7 +93,7 @@ c34f5197d24fe71feeca5da85eab2ddc11ce54e1  rgl/shaders/env.slang
 110ade1692463f7e16bc2c40c4123d54d5dabf2a  rgl/shaders/highlight.frag.slang
 ed9566632545b937e5c2906593fcc25fca9e84bf  rgl/shaders/izb_mask.frag.slang
 176b60e69f1df83c98afe68128742bfe957e5060  rgl/shaders/izb_mask.mesh.slang
-abf45378850c7e134bcc44d7c1796deee33fdc11  rgl/shaders/light.frag.slang
+4935cd4d394380bf231dfa44b77219c282646772  rgl/shaders/light.frag.slang
 84f290013a4639f98be41702dee75f649d971951  rgl/shaders/light.mesh.slang
 2c438777a9045fc848d039f44e218be50dc76cc3  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
@@ -116,7 +116,7 @@ b97658bd3fea6b0a26517c231376803188cb3e81  rgl/shaders/shadow.slang
 1a0db7811d5deaa0dea6a2b6ccbe2dffd910d80b  rgl/shaders/ssr_trace.frag.slang
 24743f1859900c86b7453f93a27aa80de2513d58  rgl/shaders/taa.frag.slang
 2000c2c7fb458942aba83bf5a4f966e6fad84404  rgl/shaders/tonemap.frag.slang
-b513acf017d8d8abda4e54f728ce02e8f990572b  rgl/shaders/transparent.frag.slang
+fd860d75855ce27f4e8be53017b91cae8d3a7c4d  rgl/shaders/transparent.frag.slang
 2aa6108ff547465b145a709578f107461158fa7a  rgl/shaders/transparent_light.frag.slang
 8c2caa6249bc99f17d61504d1f58bdd50b8ace28  rgl/shaders/transparent_unlit.frag.slang
 ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.frag.slang
@@ -143,7 +143,7 @@ c34f5197d24fe71feeca5da85eab2ddc11ce54e1  rgl/shaders/env.slang
 110ade1692463f7e16bc2c40c4123d54d5dabf2a  rgl/shaders/highlight.frag.slang
 ed9566632545b937e5c2906593fcc25fca9e84bf  rgl/shaders/izb_mask.frag.slang
 176b60e69f1df83c98afe68128742bfe957e5060  rgl/shaders/izb_mask.mesh.slang
-abf45378850c7e134bcc44d7c1796deee33fdc11  rgl/shaders/light.frag.slang
+4935cd4d394380bf231dfa44b77219c282646772  rgl/shaders/light.frag.slang
 84f290013a4639f98be41702dee75f649d971951  rgl/shaders/light.mesh.slang
 2c438777a9045fc848d039f44e218be50dc76cc3  rgl/shaders/lights.slang
 a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
@@ -167,7 +167,7 @@ b97658bd3fea6b0a26517c231376803188cb3e81  rgl/shaders/shadow.slang
 1a0db7811d5deaa0dea6a2b6ccbe2dffd910d80b  rgl/shaders/ssr_trace.frag.slang
 24743f1859900c86b7453f93a27aa80de2513d58  rgl/shaders/taa.frag.slang
 2000c2c7fb458942aba83bf5a4f966e6fad84404  rgl/shaders/tonemap.frag.slang
-b513acf017d8d8abda4e54f728ce02e8f990572b  rgl/shaders/transparent.frag.slang
+fd860d75855ce27f4e8be53017b91cae8d3a7c4d  rgl/shaders/transparent.frag.slang
 2aa6108ff547465b145a709578f107461158fa7a  rgl/shaders/transparent_light.frag.slang
 8c2caa6249bc99f17d61504d1f58bdd50b8ace28  rgl/shaders/transparent_unlit.frag.slang
 ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.frag.slang

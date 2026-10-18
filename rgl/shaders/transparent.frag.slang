@@ -99,8 +99,9 @@ float4 main(ModelVertexOutput input, bool frontFace : SV_IsFrontFace) : SV_Targe
     color = shadeLights(color, N, V, P, albedo, metallic, roughness, isVeg, shadowFactor, shared);
 
     // 自发光相加（emissiveFactor × emissiveTexture，HDR 域，tonemap 链收）。光源类 ×1/4 = 还原
-    // strength 预乘，**与 light.frag 的 isLamp 分支同值**（暗绿玻璃定案）——透明玻璃与不透明玻璃
-    // 的自发光电平必须一致，否则"换个 alphaMode 就变亮"。
+    // strength 预乘，**与 light.frag 的 isLamp 分支同值**——透明玻璃与不透明玻璃的自发光电平
+    // 必须一致，否则"换个 alphaMode 就变亮"。⚠ 这个"同值"是**照抄现役行为**，不是独立判断：
+    // 该 0.25 当年补偿的 pack 强度已归位成 1.0 ⟹ 净 4 倍压暗，口径待裁 → 债-131（两处一起改）。
     color += od.emissive.rgb * emissiveTexture.Sample(baseColorSampler, input.uv).rgb
         * (isLamp ? 0.25 : 1.0);
     return float4(color, alpha);

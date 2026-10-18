@@ -184,6 +184,9 @@ float4 main(LightInput input) : SV_Target0
     // Phase 8 剩余批次 B：自发光相加（deferred_geometry SV_Target4 写入的第 5 G-buffer 通道，
     // 与已删除的 forward model_pbr_ibl 的 od.emissive.rgb × emissiveTexture 相加项同源；天空分支已提前返回）
     // Phase 8 批次 F：光源类 ×1/4 = 还原 strength 预乘（同已删除的 forward model_light，暗绿玻璃定案）
+    // ⚠ **前提已失效**：pack 的 EMISSIVE_STRENGTH 在 2026-09-29 批 11.0c 归位成 1.0（那次只删了
+    // forward 侧的 ×1/4，没删这里）⟹ 现在没有预乘可还原，这是一笔净 4 倍压暗。口径待裁 → 债-131
+    // （改这里必须连 transparent.frag.slang 同族项一起改，否则透明/不透明玻璃差 4 倍）
     color += emis.rgb * (isLamp ? 0.25 : 1.0);
     return float4(color, 1.0);
 }

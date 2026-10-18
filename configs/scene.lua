@@ -90,6 +90,7 @@ return {
     -- Phase 8 批次 F：材质名连连看规则表（有序，首个命中生效；材质名含 pattern → 风格键）。
     -- 材质名 = glTF 官方元数据（loader 透出 materialName）；bistro 全 132 材质：Foliage_ 前缀
     -- = 植被（含 OPAQUE 花床/枝干），Emissive 含串 = 10 光源，其余落 pbr。
+    -- ⚠ 本表是 light.frag 里 isLamp 分支（×1/4 自发光电平）的**唯一入口**——那 0.25 的口径待裁 → 债-131。
     material_styles = {
         { pattern = "Emissive", style = "light" },
         { pattern = "Foliage", style = "vegetation" },

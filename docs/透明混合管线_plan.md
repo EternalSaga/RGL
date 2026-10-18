@@ -95,6 +95,7 @@
 | 透明面无 velocity 写入 | `velocity.frag` 走深度重建 | 运动透明体 + TAA/FSR 拖影被真实观察到 |
 | SSR 把透明内容当场景色反射；AO 拿背后不透明面的 AO 乘透明像素 | 透明段排在 `light` 后、`ao` 前（§1-1） | 交付场景出现 BLEND 资产（今天 0 个） |
 | 软阴影变体（PCSS / EVSSM / IZB）不覆盖透明 frag ⟹ 透明体只有 CSM 1-tap | `softShadowVariantSpec` 只认 `light.frag*` 前缀 | 与已删 forward 同状态（forward 三个阴影 frag 也从没进变体族）；交付开 PCSS/EVSSM 且场景有 BLEND 时重开 |
+| 透明 frag 的 `isLamp ? 0.25` 是**照抄现役延迟行为**，不是独立判断（该 0.25 本身口径存疑：它当年补偿的 pack 强度早在 2026-09-29 被归位成 1.0） | `transparent.frag.slang` 的 `isLamp` 分支 + `light.frag.slang` 同族项 | **债-131 裁决落地时**——两处必须一起改，只改一处 = 透明/不透明玻璃自发光差 4 倍 |
 
 ## 5. 施工读数
 
