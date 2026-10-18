@@ -10,9 +10,11 @@ import rlstd;
 // `diagnostics.picking` 门开时由 main 装配层调用，往图里追加附件/pass。
 // 契约（为何插在图中间、为何要改前一个 pass 的 storeOp）见 render_graph.cppm 接口注释。
 //
-// 纪律：装饰只认"角色"不认名字——depth 附件名从写它的 pass 反查、场景色附件名从采样它
-// 的 pass 反查，因此内建 deferred 图与自定义图（附件名 scene_hdr / scene_rt 各不相同）
-// 都自动适用，无需为图形态写分支（forward 内建变体已随刀②.2 删除）。
+// 纪律：装饰只认"角色"不认名字——depth 附件名从写它的 pass 反查、场景色附件名从
+// **写 swapchain 且采样它**的那个 pass 反查（🔴 两条必须一起用：deferred 图里"首个采样色附件的
+// pass"是 light，它采的是 G-buffer 不是成片——只写后半句就是 2026-10-18 修掉的那个高亮破口，
+// 见 planHighlightDecoration）。角色判据而非名字，故内建 deferred 图与自定义图（附件名
+// scene_hdr / scene_rt 各不相同）都自动适用，无需为图形态写分支（forward 内建变体已随刀②.2 删除）。
 
 namespace RGL {
 
@@ -67,14 +69,6 @@ std::optional<std::string> sampledColorName(const RgGraphDesc& desc, const RgPas
 	for (const auto& in : pass.inputs)
 		if (in.usage == RgUsage::sampleRead && isColorAttachment(desc, in.attachment))
 			return in.attachment;
-	return std::nullopt;
-}
-
-/** 首个"采样场景色附件"的 pass 下标（高亮 pass 的插入点；无 = nullopt）。 */
-std::optional<size_t> firstColorConsumerIndex(const RgGraphDesc& desc) {
-	for (size_t i = 0; i < desc.passes.size(); ++i)
-		if (sampledColorName(desc, desc.passes[i]))
-			return i;
 	return std::nullopt;
 }
 
@@ -180,15 +174,31 @@ bool graphDecoratedTooLate(const RgGraphDesc& desc) {
  * 插入点与 depth 来源均按角色反查（见本文件头部纪律）；颜色写既有场景色附件（load 保留成片，
  * 高亮 alpha 混合叠加），插图末 = 落在 tonemap 之后、盖不到上屏内容，故必须插在消费 pass 之前。
  *
+ * 🔴 **锚点 = 与 taa / ao_apply / ssr / velocity 同一条共享判据** `swapchainColorConsumerIndex`
+ *（「写 swapchain 且 sampleRead 色附件」）。此前用的是 `firstColorConsumerIndex`
+ *（「首个 sampleRead 色附件」，**不要求写 swapchain**），那是 forward 图的形状——forward 里
+ * 第一个色消费者恰好就是成片消费者。deferred 单路线下它先命中 **light**（`gbuffer_albedo` 是
+ * offscreen，`isColorAttachment` 判 true）⟹ 高亮被插到 light 之前、把边缘光 alpha 混合进
+ * **albedo G-buffer**（还发生在光照之前）。2026-10-18 实测：`tests/test_render_graph.cppm`
+ * 那四条 highlight 用例喂的全是合成图（opaque 写 `scene` / tonemap 采 `scene` = forward 形状），
+ * **真 deferred 图一次都没喂进这个装饰器**，所以破口静默存在。用例已补（组 8 末）。
+ *
+ * 次序契约同链上其他装饰器：`graphDecoratedTooLate` 为真（taa / ao_apply 已在图里）= 本装饰
+ * 插到它们之后 ⟹ 写的是成片而 tonemap 读的是 taa_out ⟹ **高亮静默白画**。正确调用序
+ *（main_impl 先高亮后链）下永不触发，触发即调用序被挪错。
+ *
  * 跨 pass 补丁 = 前一个 depth 写者的 storeOp 改 store（否则自定义图的 transparent 段按
  * "depth 后续无人用"的优化声明 dontCare，高亮读到未定义内容；原 forward 图正是此形态，
  * 已随刀②.2 删除）。
  */
 RgHighlightPlan planHighlightDecoration(const RgGraphDesc& desc) {
 	RgHighlightPlan plan;
-	const auto consumeIdx = firstColorConsumerIndex(desc);
+	if (graphDecoratedTooLate(desc))
+		return plan;  // 装饰太晚（挪错调用序）：不适用，比插错位置好
+	const auto consumeIdx = swapchainColorConsumerIndex(desc);
 	if (!consumeIdx)
-		return plan;  // 图形态不支持（无「采样色附件」的消费 pass = 无成片可叠加）
+		return plan;  // 图形态不支持（无「写 swapchain 且采色」的 pass = 无成片可叠加，
+	                  // 自定义 blit 上屏图正是此形态：transferRead 不是 sampleRead）
 	const auto prior = priorDepthWriter(desc, *consumeIdx);
 	if (!prior)
 		return plan;  // 插入点前无人写 depth = 高亮会糊成一片，判不支持
@@ -243,14 +253,14 @@ bool applyOnePatch(RgGraphDesc& desc, const RgStoreOpPatch& patch) {
  * applyHighlightPlan 定义（契约见 render_graph.cppm 的 `RgHighlightPlan`）。
  *
  * 两道校验都是「图在算计划与落计划之间被人改过」的出声口，任一不过就**拒落且不动 desc**：
- *  1. `insertBefore` 必须仍是本 desc 的首个颜色消费者；
+ *  1. `insertBefore` 必须仍是本 desc 的「写 swapchain 且采色」消费者（与 plan 同一锚点判据）；
  *  2. 每条补丁目标当前值必须 = 申报的 `originalStoreOp`。
  * 静默按过期计划落图 = 产出一张编译得过、语义却错（load 未定义内容）的图。
  */
 bool applyHighlightPlan(RgGraphDesc& desc, const RgHighlightPlan& plan) {
 	if (!plan.applicable)
 		return false;
-	const auto consumeIdx = firstColorConsumerIndex(desc);
+	const auto consumeIdx = swapchainColorConsumerIndex(desc);
 	if (!consumeIdx || desc.passes[*consumeIdx].name != plan.decl.insertBefore)
 		return false;
 	// 补丁先核对再落（先核对全部，避免"改了一半"）

@@ -273,4 +273,16 @@ export constexpr bool isKnownDrawSource(std::string_view s) {
 	return false;
 }
 
+/**
+ * 透明绘制段的段名（`pass.drawSource` 的词表成员 = FrameDrawList 的
+ * `[transparentStart, end)` 那一段，renderListSystem 已按距离² 降序稳定排好）。
+ * 与 `kDeferredLightState` / `kTonemapState` 同因升为具名常量：比较侧
+ *（`graphDrawsTransparentSegment`）与构造侧（`deferredRenderGraphDesc`）都要吃它，
+ * 字面量抄两处迟早漂。
+ */
+export inline constexpr std::string_view kTransparentDrawSource = "transparent";
+// 与词表的绑定：改名 / 从表里删条目 ⟹ **编译不过**，而不是留下一个恒假的静默死判据
+static_assert(isKnownDrawSource(kTransparentDrawSource),
+	"kTransparentDrawSource 必须是 kAllDrawSources 里的段名（改名 = 词表与本常量一起改）");
+
 }  // namespace RGL

@@ -134,7 +134,6 @@
 
 
 ### 刀1（2026-10-18 已落地）：透明段进内建图，出厂图逐位不变 + 透明资产出图
-
 **落地面**：`transparent.frag.slang` 本体 + `_vegetation` / `_light` / `_unlit` 三个 wrapper
 （`#define MATERIAL_CLASS` + `#include`，照 deferred_geometry 那一族）；`deferredRenderGraphDesc`
 插入 `transparent` 段（scene_hdr `load+store`、depth `load+store` 借来只测不写、drawSource 吃
@@ -174,8 +173,46 @@ E 透明段挪到 ao 之后 / F 透明段多挂一张色附件。
    到刀1 之前一直是"3-pass = 四段"。计数属于 `selfCheckStructure` 的断言，不属于样本名 ⟹
    改名 `expectOk("deferred 内建图", …)`（**名字里不带计数**，下次加段就无从可漂）。
 
-**刀2 要接的一条实测症状**：场景含 BLEND 图元**且 `scene.lua` 没有 `environment` 段**
-⟹ 启动硬失败，症状是 VVL `VUID-VkShaderCreateInfoEXT-flags-11292`（透明 frag 声明的 binding 4
-没有 mapping，因为 `Environment::get()` 为空时 `addModelEntry` 不置 `hasEnv`）。
-方向是对的（响亮、起不来），但这条消息对不知情人等于天书 ⟹ 刀2 的启动出声里点名它。
+**刀1 留下的一条实测症状**（刀2 已接，读数见下）：场景含 BLEND 图元**且 `scene.lua` 没有
+`environment` 段** ⟹ 启动硬失败，症状是 VVL `VUID-VkShaderCreateInfoEXT-flags-11292`
+（透明 frag 声明的 binding 4 没有 mapping，因为 `Environment::get()` 为空时 `addModelEntry`
+不置 `hasEnv`）。方向是对的（响亮、起不来），但那条消息对不知情人等于天书。
 
+### 刀2（2026-10-18 已落地）：修 highlight 锚点 + 两条装配期对账
+
+**① highlight 锚点**：`planHighlightDecoration` / `applyHighlightPlan` 改吃链上共享判据
+`swapchainColorConsumerIndex`（「写 swapchain 且 sampleRead 色附件」），`firstColorConsumerIndex`
+随之**删除**（无剩余问者 = 不留死码）；并补上 `graphDecoratedTooLate` 早退（与 taa / velocity
+同一条次序契约：高亮若插到 taa 之后，它写 scene_hdr 而 tonemap 读 taa_out ⟹ 静默白画）。
+
+**② 装配期对账**（`main_scene::validateBlendSupport`，两条任一不过 = 抛）：有 BLEND 图元而
+图里没人画透明段 / 没有 env cubemap。新增图事实谓词 `graphDrawsTransparentSegment`
+（判据 = `pass.drawSource`，**不是** `state`——要问的是"有没有人画那一段"）。
+
+**三条实测教训**：
+
+1. **对账放错时点 = 判据从未跑过**。第一版放在 `assembleBackEnd`（C3），端到端实测**没响**：
+   env 缺失的真实崩溃点在 C1 `bakePipelineEntries` 的 `vkCreateShadersEXT`。挪到
+   `uploadEnvironment` 之后、C1 之前才生效。
+   ⟹ 这类"启动前置检查"的时序不是排版问题，**必须端到端跑一遍确认它会响**（单测打不到 main）。
+2. **判据源受时点约束**：`AssetTable` 的材质记录要到 C2 `registerScene` 才进表，所以 C1 之前的
+   对账只能读 `UploadedAssets` 里的 `GltfPrimitive.alphaModeBlend`（两处字段同源，但只有后者
+   在本函数时点可见）。为此先写的 `AssetTable::hasBlendMaterial()` 连同其用例一并**删掉**——
+   留一个没有问者的 API 就是留一条"同一件事两种问法"的债。
+3. **旧用例拦不住这个破口，是量出来的**：把锚点退化回「首个采色 pass」（= 复现线上行为）之后跑
+   `--test-case="*highlight*"`：**8 条里 7 条全绿**，只有新加的那条红
+   （`insertBefore` 变 `light`、写的附件变 `gbuffer_albedo`、位置错一格——三条同时中）。
+   ⟹ "四条 highlight 用例喂的全是 forward 形状合成图"从推断升级为实测。
+
+**变异对照实测**（每条只跑相关用例以便归因；还原后重跑全量基线复绿）：
+G 锚点退化回「首个采色 pass」→ RED（旧 7 条同时全绿，见上）/ H 谓词读 `state` 而非 `drawSource`
+→ RED / I 删「装饰太晚」早退 → RED。
+⚠ G 的第一版变异（把 `writesSwapchain` 从条件里摘掉）拿到的是**编译失败**而不是判据红
+（`-Wunused-variable`）——正是 skill `rgl-test-discipline` 那条「谓词类变异要保留参数使用」；
+改成 `true || any_of(...)` 才量到判据本身。
+
+**端到端三档读数**（`just smoke`，配置临时改、跑完逐字节还原核对）：
+① BLEND + 无 environment 段 → 退出码 1，消息点名「没有 environment 段」✅
+② BLEND + 自定义图无透明段 → 退出码 1，消息点名 `draws = "transparent"` ✅
+③ 合法 BLEND 场景（transparent.glb + env + 内建图）→ PASS errors=0（**不误伤**）✅
+另：`diagnostics.picking=true`（高亮真落图）VVL 冒烟 PASS errors=0；`just gates` 全绿（577 例）。

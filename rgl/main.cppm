@@ -238,6 +238,15 @@ export void uploadEnvironment(Resources& resources, Environment& env, DeviceCont
 							  const SceneConfig& scene, entt::registry& registry);
 
 /**
+ * BLEND 图元的**装配期对账**（透明混合管线刀2）：有 BLEND 图元而 ① 图里没人画透明段
+ * 或 ② 没有 env cubemap ⟹ **抛**（拒启动），两条的症状与"为什么必须早于 C1"的实测
+ * 全在定义处注释（main_scene.cppm）。
+ * 🔴 调用时序契约 = `uploadEnvironment` 之后、`bakePipelineEntries` **之前**。
+ */
+export void validateBlendSupport(const UploadedAssets& uploaded, const Environment& env,
+	const CompiledRenderGraph& graph);
+
+/**
  * C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry 按
  * (规格,顶点 slot,base/normal/orm/emissive 纹理 slot,sampler slot) 组合去重兜底）。
  * 风格派生：primitive.unlit → "unlit"，否则 "pbr" 再经 scene.lua material_rules pattern

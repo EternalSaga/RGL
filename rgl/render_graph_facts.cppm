@@ -54,6 +54,12 @@ bool graphHasPassState(std::span<const RgPassPlan> passes, RgPassKind kind, std:
 		[&](const RgPassPlan& p) { return p.kind == kind && p.state == state; });
 }
 
+/** 图里是否有 pass 消费透明绘制段（实现；判据为何是 drawSource 而不是 state → 接口注释）。 */
+bool graphDrawsTransparentSegment(std::span<const RgPassPlan> passes) {
+	return std::ranges::any_of(passes,
+		[](const RgPassPlan& p) { return p.drawSource == kTransparentDrawSource; });
+}
+
 /** FSR 色输入优先级链（实现；链的语义与它的历史事故 → render_graph.cppm 接口注释）。
  *  🔴 四档序 = `assembleHdrAoChain` 的 tonemap 色输入链**逐档同序**，两处必须一致；
  *  单测以「四枚附件在/不在的 16 种组合」钉住两者同解（见 tests/test_render_graph 组 10）。 */

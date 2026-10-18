@@ -711,6 +711,23 @@ export bool graphHasPassState(std::span<const RgPassPlan> passes, RgPassKind kin
 	std::string_view state);
 
 /**
+ * 图里是否有 pass **消费绘制段** `"transparent"`（判据 = `pass.drawSource`，不是 state）。
+ *
+ * 为什么按段名而不是按状态名：`state` 是动态状态（渲染期那套 blend/深度写开关），
+ * `drawSource` 才是"这个 pass 画 FrameDrawList 的哪一段"。自定义图完全可以拿
+ * `state = "opaque"` 的状态去画透明段（虽然那会关掉混合）——要问的是"有没有人画它"，
+ * 只有 drawSource 答得了。
+ *
+ * 唯一生产问者 = 装配期的启动对账（`main_scene`：有 BLEND 材质而本判据为假 ⟹ 拒启动）。
+ * 背景：图变体收敛刀②.2 删 forward 后，透明段照旧排序、照旧没人画、照旧不出声，
+ * 交付场景（bistro 0 BLEND）完全看不出来 → `docs/透明混合管线_plan.md` §0。
+ *
+ * @param passes 编译图 pass 序列
+ * @return true = 至少一个 pass 的 drawSource == "transparent"
+ */
+export bool graphDrawsTransparentSegment(std::span<const RgPassPlan> passes);
+
+/**
  * FSR 色输入的角色解析结果（L2）。
  * @see graphFsrColorInput
  */

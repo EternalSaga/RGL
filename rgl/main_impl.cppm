@@ -795,6 +795,9 @@ int main() {
 		if (configs.scene.environment.enabled)
 			uploadEnvironment(vkResources, env, vkDevice, configs.scene, registry);  // 时序契约见定义处注释
 
+		// 透明混合管线刀2：BLEND 图元的装配期对账（两条不过即拒启动）。🔴 **必须在 C1 之前**：
+		// env 缺失时的真实崩溃点就是 C1 的 vkCreateShadersEXT（实测放在 C3 的对账根本没跑到）。
+		validateBlendSupport(assets, env, graphResult.graph);
 		// C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry
 		// 按 (规格,顶点 slot,纹理 slot) 组合去重兜底）
 		bakePipelineEntries(assets, configs.scene, shaderRegistry, vkResources, samplers,

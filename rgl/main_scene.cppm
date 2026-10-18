@@ -175,6 +175,55 @@ std::optional<std::array<uint32_t, 5>> gBufferSlotsAndLightEntry(
 
 }  // namespace
 
+/**
+ * BLEND 图元的**装配期对账**（透明混合管线刀2，docs/透明混合管线_plan.md §1-4）。
+ * 场景里没有 BLEND 图元 ⟹ 本函数**一条判据都不跑**（出厂 bistro = 122 OPAQUE + 10 MASK +
+ * 0 BLEND，零成本零风险）。有 BLEND 而下面两条任一不过 = **拒启动**，不 warn + 继续：
+ *
+ * ① **图里没人消费透明段** ⟹ 整类几何静默不落地，而画面照出。这不是假想的：图变体收敛
+ *    刀②.2 删 forward 之后就是这个状态，一直持续到本管线落地，而交付场景 0 BLEND 让它在
+ *    仓库里静默躺了一天。判据 = 图事实 `graphDrawsTransparentSegment`（按 `pass.drawSource`
+ *    而不是 state——要问的是"有没有人画那一段"）。
+ * ② **没有 env cubemap** ⟹ 透明 frag 声明的 binding 4/5 拿不到 mapping
+ *    （`addModelEntry` 只在 `Environment::get()` 非空时置 `hasEnv`），症状是建 shader 时
+ *    VVL 报 `VUID-VkShaderCreateInfoEXT-flags-11292`——**2026-10-18 实测**（临时注释掉
+ *    scene.lua 的 environment 段 + transparent.glb）确实起不来，方向是对的（响亮），
+ *    但那条消息对不知情人等于天书，所以提前到装配期点名。
+ *
+ * 🔴 **时序契约 = `uploadEnvironment` 之后、`bakePipelineEntries` 之前**（调用点在本仓
+ * main_impl 的 C1 前一行）。这条不是风格：②的崩溃就发生在 C1 烘焙里——本对账第一版放在
+ * `assembleBackEnd`（C3），实测**根本没跑到**就先撞 VUID-11292（2026-10-18）。
+ * 同理判据源只能是 `UploadedAssets` 里的 `GltfPrimitive.alphaModeBlend`，不能是
+ * `AssetTable` 的材质记录——材质要到 C2 `registerScene` 才进表，那时 C1 早烘完了。
+ *
+ * 为什么住装配层而不是 gate_lint：lint 的契约明写「lint 不阻止启动（诊断门不该让程序起不来）」
+ * （`main_impl.cppm::runGateLint` 头注释），而这两条的失败形态正是本仓反复登记的病
+ * ——「配了能力却静默拿到出厂图」，与债-129 S3-C 把六个 warn 出口反转成 throw 同一条裁决。
+ */
+void validateBlendSupport(const UploadedAssets& uploaded, const Environment& env,
+	const CompiledRenderGraph& graph) {
+	const bool anyBlend = std::ranges::any_of(uploaded.models,
+		[](const UploadedModel& um) {
+			return std::ranges::any_of(um.model->primitives,
+				[](const GltfPrimitive& p) { return p.alphaModeBlend; });
+		});
+	if (!anyBlend)
+		return;
+	if (!graphDrawsTransparentSegment(graph.passes))
+		throw std::runtime_error(
+			"场景含 alphaMode=\"BLEND\" 图元，但渲染图里没有任何 pass 的 draws = \"transparent\" —— "
+			"透明图元会被静默丢弃（renderListSystem 照旧排那一段，只是没人画它）。"
+			"修法：内建 deferred 图本来就带 transparent 段（删掉 configs/render_graph.lua 的 "
+			"attachments/passes 两键即回落），自定义图请补一段 "
+			"{ state = \"transparent\", draws = \"transparent\" } 并让它 load scene_hdr。");
+	if (env.get() == nullptr)
+		throw std::runtime_error(
+			"场景含 alphaMode=\"BLEND\" 图元，但 configs/scene.lua 没有 environment 段 —— "
+			"透明前向着色（transparent.frag）要采 env cubemap（binding 4/5），没有 env 资产就烘不出 "
+			"mapping，Vulkan 会在建 shader 时报 VUID-VkShaderCreateInfoEXT-flags-11292。"
+			"修法：给 scene.lua 配 environment 段（hdr 或 dir/faces），或把该资产的材质改成 OPAQUE。");
+}
+
 /** A0 内建 cube + A1 解析/顶点上传（全几何槽先于任何纹理槽）+ A2 纹理上传。
  *  ★0-b2：A1 去重循环里挂簇产物加载（门与惰性边界 → 接口注释 + loadMeshletForModel）。
  *  ★1-a0：加载成功后同处挂簇产物 4 段 GPU 上传（边界与回落口径 → meshlet_geometry）。 */

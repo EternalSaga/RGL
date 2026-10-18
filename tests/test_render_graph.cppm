@@ -1069,6 +1069,73 @@ TEST_CASE("highlight 装饰：采样**深度**的全屏 pass（ao 形态）不�
     CHECK(compileRenderGraph(d).has_value());
 }
 
+TEST_CASE("highlight 装饰喂**真 deferred 图**：锚 = tonemap、写 scene_hdr（不是 albedo G-buffer）") {
+    // 上面四条 highlight 用例喂的全是合成图（opaque 写 scene / tonemap 采 scene = 已删 forward
+    // 图的形状）。真 deferred 图里「首个 sampleRead 色附件」命中的是 **light**（gbuffer_albedo
+    // 是 offscreen ⟹ isColorAttachment 判 true），所以旧锚点会把高亮插到 light 之前、
+    // 把边缘光混合进 albedo G-buffer。本用例 = 那个破口的阳性对照（2026-10-18 刀2 修）。
+    // **变异红线**：把 planHighlightDecoration 的锚点换回「首个采色 pass」（不要求写 swapchain）
+    // → insertBefore 变 "light"、写的附件变 gbuffer_albedo → 本用例两条同时红。
+    RgGraphDesc d = deferredRenderGraphDesc();
+    const auto plan = planHighlightDecoration(d);
+    REQUIRE(plan.applicable);
+    CHECK(plan.decl.pass.state == "highlight");
+    CHECK(plan.decl.insertBefore == "tonemap");
+    REQUIRE(plan.decl.pass.outputs.size() == 2);
+    CHECK(plan.decl.pass.outputs[0].attachment == std::string{kSceneHdrName});
+    CHECK(plan.decl.pass.outputs[0].loadOp == RgLoadOp::load);  // 保留成片，不是清
+    CHECK(plan.decl.pass.outputs[1].attachment == std::string{kDepthName});
+    // 内建图里前驱 depth 写者 = 透明段（刀1 起它排在 tonemap 前且声明 depthWrite），
+    // 它的 storeOp **本来就是 store** ⟹ 不该发 store→store 的空补丁（planHighlightDecoration
+    // 里"只在真的需要改时才发补丁"那条分支的判据）。
+    CHECK(plan.decl.patches.empty());
+    // 落图后：高亮紧贴 tonemap 之前（插图末 = 盖不到上屏内容），且整图仍可编译
+    REQUIRE(applyHighlightPlan(d, plan));
+    REQUIRE(d.passes.size() == 6);
+    CHECK(d.passes[4].name == "highlight");
+    CHECK(d.passes[5].name == "tonemap");
+    INFO(errOf(compileRenderGraph(d)));
+    CHECK(compileRenderGraph(d).has_value());
+    // 反向（链次序契约）：taa 已在图里时本装饰判不适用——高亮若插到 taa 之后，它写 scene_hdr
+    // 而 tonemap 读 taa_out ⟹ 静默白画。变异红线：删掉那句 graphDecoratedTooLate 早退 → 红。
+    RgGraphDesc withTaa = deferredRenderGraphDesc();
+    REQUIRE(decorateTaaPass(withTaa));
+    CHECK_FALSE(planHighlightDecoration(withTaa).applicable);
+}
+
+TEST_CASE("graphDrawsTransparentSegment：判据是 drawSource，不是 state") {
+    // 正例：内建 deferred 图（刀1 起带透明段）
+    const auto g = compileRenderGraph(deferredRenderGraphDesc());
+    REQUIRE(g.has_value());
+    CHECK(graphDrawsTransparentSegment(g->passes));
+    // 反向 1：把透明段的**段名**换掉（state 留着不动）→ 假。这条钉住"没人画那一段"
+    // 真的会被读出来——装配期的拒启动就靠它。
+    RgGraphDesc renamed = deferredRenderGraphDesc();
+    for (auto& p : renamed.passes)
+        if (p.drawSource == "transparent")
+            p.drawSource = "opaque";
+    const auto rg = compileRenderGraph(renamed);
+    REQUIRE(rg.has_value());
+    CHECK_FALSE(graphDrawsTransparentSegment(rg->passes));
+    // 反向 2：state **留着** "transparent"、只把段名挪走 → 仍假。这条钉住判据的轴选对了
+    //（"有没有人画那一段" ≠ "有没有人用那套动态状态"）。变异红线：谓词体内 p.drawSource
+    // 换成 p.state → 本条红（而反向 1 会绿——两条各拦一个方向，缺一条就是半边判据）。
+    RgGraphDesc stateOnly = deferredRenderGraphDesc();
+    bool sawTransparentState = false;
+    for (auto& p : stateOnly.passes)
+        if (p.state == "transparent") {
+            p.drawSource = "shadow";  // 词表内的另一个段名（前缀档），state 原样留
+            sawTransparentState = true;
+        }
+    REQUIRE(sawTransparentState);  // 前提守卫：内建图确实有一格 state = "transparent"
+    const auto rs = compileRenderGraph(stateOnly);
+    REQUIRE(rs.has_value());
+    INFO(errOf(rs));
+    CHECK_FALSE(graphDrawsTransparentSegment(rs->passes));
+    // 空集合守卫：内建图确有 ≥1 个 pass（否则上面 any_of 恒真是假绿）
+    CHECK_FALSE(g->passes.empty());
+}
+
 TEST_CASE("decorateShadowPass：图首插 kActiveShadowCascades 个 pass + 阴影图附件") {
     RgGraphDesc d = minimalGraph();
     const size_t before = d.passes.size();
