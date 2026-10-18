@@ -83,7 +83,7 @@
 | **0** | 抽 `pbr.slang`，`light.frag` 改 import（**搬字不改式**） | `just regress ab` **逐位相同**；红了停 |
 | **1** | 透明 frag 本体 + 四支类别变体 + CMake/spec 注册 + blend 优先路由 + 内建图 transparent 段 + selfCheck 断言 + 测试手术 | `just gates` 绿；`just smoke` 出厂图逐位不变（bistro 0 BLEND ⟹ 空 pass）；`transparent.glb` 出图 |
 | **2** | 两把小刀（highlight 锚点 + BLEND 无人消费出声） | 各带正例 + 反向用例；highlight 用例改喂**真 deferred 图** |
-| **3** | 排序正确性判据：造一个双层 unlit 透明的合成场景，期望像素写成闭式混合式 | 变异对照：`stable_sort` 比较子 `>` → `<` **必须红** |
+| **3** | 排序正确性判据：造一个双层 unlit 透明的合成场景，期望像素写成闭式混合式 （**合成场景已落地**；判据本体还没进任何会跑它的地方 → 债-132，用户拍板「先把这份测试输入造出来，暂不加工具子命令」） | 变异对照：`stable_sort` 比较子 `>` → `<` **必须红**（实测已红，见 §5 刀3） |
 
 ## 4. 已知边界（第一版不做，逐条带触发条件）
 
@@ -217,3 +217,63 @@ G 锚点退化回「首个采色 pass」→ RED（旧 7 条同时全绿，见上
 ② BLEND + 自定义图无透明段 → 退出码 1，消息点名 `draws = "transparent"` ✅
 ③ 合法 BLEND 场景（transparent.glb + env + 内建图）→ PASS errors=0（**不误伤**）✅
 另：`diagnostics.picking=true`（高亮真落图）VVL 冒烟 PASS errors=0；`just gates` 全绿（577 例）。
+
+### 刀3（2026-10-18 已落地）：排序合成场景 `blend_sort`，闭式四区逐字节零误差
+
+**先记一条差点让这份输入白造的事实**（量出来的，不是推断）：透明排序的代理键是 **entity 世界矩阵的
+平移列**（`render_list_impl.cppm` 的 `tf.world[3]`），而 loader 把 `node.translation` 合成进
+`prim.nodeWorld`（`gltf_loader_impl.cppm` 的 `nodeLocalTRS`）⟹ **落位必须靠 node 平移**。
+`tools/qa_scenes.py` 既有七个场景一律「几何烘世界坐标 + node identity」，照那个写法造双层场景
+会得到**所有图元 distanceSq 相等**的序列，而 `stable_sort` 对相等键视为已序 ⟹ 比较子 `>` 与 `<`
+给出**同一个序列**，变异根本不红，而画面还可能因作者顺序恰好正确 = 一条假绿的判据。
+为此 `Piece` 加了 `translation`（默认 `None` = 不写键），并让 harness 在算判据**之前**先断言
+各半透层 distanceSq 互异（退化即拒跑，不靠图去猜）。
+
+**三条设计裁决各自的理由**（都在堵"这份输入其实立不起来、却没有任何东西喊"）：
+
+1. **三层全 unlit**：`transparent.frag` / `light.frag` 的 unlit 分支都是**早退**（不采光照/
+   阴影/env、不加自发光）⟹ 闭式只剩「baseColor + 混合 + 显示链」，不必复刻 BRDF/IBL/阴影，
+   也**绕开债-131** 那个未决的自发光电平（生成器另加一条闸门：BLEND + emissive 直接拒绝生成）。
+2. **颜色只取纯 0/1**：透明段写 RGBA16F，0/1 与 α∈{0.5,0.25} 的混合结果全是 2 的幂的有限和
+   ⟹ half 精度**逐位精确**；不透明侧 albedo 要过 G-buffer 8bit sRGB 往返，而 0/1 是那条往返的
+   **不动点** ⟹ 背景值不必模型化量化。（选 0.5 这类中间值会把量化往返混进判据，红时分不清是谁。）
+3. **四个判据区由几何解析算出**（不在图里找边界）：far-only / overlap / near-only / bg-only。
+   前三个各锚住「显示链 + 单个 α」，于是 overlap 区新增的**唯一未知就是合成次序**。
+
+**怎么重跑**（判据脚本今天还在仓库外，所以这两行就是它全部的入口；债-132 结案时换成 just 入口）：
+
+```bash
+python3 tools/qa_scenes.py --out build/rgl/models --only blend_sort
+just shot --config-base qa/configs/blend_sort --name blend_sort   # 再拿闭式脚本对拍该 PNG
+```
+
+**闭式对拍读数**（1280×720，采样行 y=360）：
+
+| 区 | x | 覆盖层 | 线性 HDR | 闭式字节 | 实测字节 |
+|---|---|---|---|---|---|
+| far_only | 509 | layer_far | (0, 0.25, 0.75) | (0,113,187) | (0,113,187) ✅ |
+| overlap | 633 | far→near | (0.5, 0.125, 0.375) | (162,73,141) | (162,73,141) ✅ |
+| near_only | 778 | layer_near | (0.5, 0, 0.5) | (158,0,159) | (158,0,159) ✅ |
+| bg_only | 1061 | — | (0, 0, 1.0) | (0,0,204) | (0,0,204) ✅ |
+
+**四区全部零误差**（不是 ±1 LSB 容差命中）。显示链是 `tools/imgqa/analytic.cpp` 的 `toBytes`
+（曝光 → Narkowicz ACES → sRGB 编码）的独立转录，转录对不对不靠注释：三个单层区各锚一次。
+
+**变异对照**（`render_list_impl.cppm` 的 `a.distanceSq > b.distanceSq` → `<`，还原后复绿）：
+overlap 实测变 **(142,115,142)** = **正好等于**反序闭式预测，其余三区照旧逐字节命中。
+⟹ 判据不只"会红"，而是**两种次序都预测得中**——这是能拿来当验收的判据，不是一台差分噪声计。
+
+**判别力自检**（harness 先于对拍跑；备选模型与正确模型的最大字节差，阈值 8 LSB，不足即拒跑）：
+反序 = **42**、预乘混合（把非预乘的 SRC_ALPHA 读成 ONE）= **95**。
+⟹ 顺带证了一句：混合方程本身也在这个判据看得见的范围内（near_only 的 (0.5,0,0.5) 与预乘模型的 (1,0,0.5)
+差 95），不必另外造一份输入去验"混合是不是非预乘"。
+
+**生成器侧三条对账的变异读数**（各改一处 `build_scene` 的 manifest 落笔，全 RED）：
+JSON 写了 `alphaMode="BLEND"` 而 manifest 未申报 → 红 / 写了 `KHR_materials_unlit` 而 manifest
+未申报 → 红 / manifest 的 translation 与 node 实际值差 0.5 → 红（第三条措辞点名"node 原点 =
+排序代理"，错一位就是判据量错层）。
+
+**已知边界**：这份输入**只**裁合成次序。它不覆盖透明体的光照/阴影/自发光（全 unlit）、MASK discard、
+velocity、picking、GPU culling 候选（§4 那几条边界一条没被这份输入碰到）。
+判据本体今天住在**仓库外**的一次性 harness（`/tmp/opencode/blend_sort_check.py`）⟹ 不进
+`just gates`，红了没人会看见。判据以后写进哪个文件、以及前置 → **债-132**。

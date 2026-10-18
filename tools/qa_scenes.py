@@ -533,6 +533,16 @@ class Piece:
     metallic: float = 0.0
     roughness: float = 0.5
     emissive: tuple | None = None    # 非 None → emissiveFactor（线性，strength 走默认 1.0）
+    # ── 透明混合管线刀3（docs/透明混合管线_plan.md §3）加的三个字段 ──────────────
+    # 默认值 = 不写任何新键 ⟹ 既有七个场景的 JSON 字节全等（图像基准不破）。
+    alpha: float = 1.0               # baseColorFactor[3]；< 1 才写 alphaMode="BLEND"
+    unlit: bool = False              # True → 写 KHR_materials_unlit（引擎按扩展**存在性**路由）
+    # node 平移。🔴 透明排序判据**必须**用它：renderListSystem 的排序代理是 entity 世界
+    # 矩阵的平移列（tf.world[3]），而 loader 把 node.translation 合成进 prim.nodeWorld
+    # （gltf_loader_impl 的 nodeLocalTRS）⟹ 所有 node 都 identity 时**全部图元 distanceSq
+    # 相等**，stable_sort 视为已序、比较子 > 与 < 给出同一个序列 = 排序判据结构性失效。
+    # 几何仍按"绕自身原点"作者，落位只靠这个平移（aabb 因此是局部量，见 manifest 注）。
+    translation: tuple | None = None
     intent: str = ""                 # 设计意图（进 manifest；shadow_rig 逐物体必填）
     # 朝外性判据分类（2026-09-30 缺陷复盘加；「几何法线·顶点法线 > 0」的一致性断言
     # 只能抓两者不一致，抓不住"绕序与法线一起反向"的错误——故按几何类别补强判据）：
@@ -562,6 +572,16 @@ class Piece:
         if self.emissive is None and ("Emissive" in self.name or "Foliage" in self.name):
             raise ValueError(f"piece {self.name}: name would be style-routed by "
                              f"material_styles pattern; rename it")
+        # 透明混合管线刀3 加的两条构建期闸门（默认值下两条恒不触发 = 既有场景零影响）：
+        if not 0.0 < self.alpha <= 1.0:
+            raise ValueError(f"piece {self.name}: alpha {self.alpha} 不在 (0,1]")
+        if self.translation is not None and len(self.translation) != 3:
+            raise ValueError(f"piece {self.name}: translation 须是 3 个数")
+        # 🔴 自发光电平口径未定案（债-131：光源类 ×1/4 的补偿前提已失效）⟹ 带 emissive 的
+        # BLEND piece 的闭式预测会吃这个未决系数，等于把靶盖在一个待裁的公式上。要用就先裁债。
+        if self.alpha < 1.0 and self.emissive is not None:
+            raise ValueError(f"piece {self.name}: BLEND + emissive 的闭式预测依赖光源类 ×1/4，"
+                             f"而该系数的口径待裁（债-131）——先结案再造这个靶")
         # 纹理面自洽（**阳性锚点**：normal_png 而 uv=None 时引擎 uploadModelTextures 会
         # `if (!prim.hasUv) continue;` 静默回落中性纹理，实验跑完给出假的"normal 无影响"）
         n = len(self.geom.positions)
@@ -1808,6 +1828,75 @@ def scene_ssr_rig_empty() -> Scene:
     return scene_ssr_rig(pillar=False)
 
 
+# ---------------------------------------------------------------------------
+# 场景 8：blend_sort —— 透明排序正确性的靶（透明混合管线刀3）
+# ---------------------------------------------------------------------------
+# 设计要点（每条都在堵一条"靶立不起来却看不出来"的路）：
+#
+# 1. **三层全用 unlit**：unlit 分支在 transparent.frag / light.frag 里都是**早退**
+#    （return float4(albedo, alpha) / return float4(albedo, 1.0)），不采光照、不采阴影、
+#    不采 env、不加自发光 ⟹ 闭式里只剩「baseColor + 混合 + 显示链」三项，不必复刻
+#    BRDF/IBL/阴影，也不必碰债-131 那个未决的自发光电平。
+# 2. **颜色只取 PAL 的纯 0/1 三原色**：① 透明段写 RGBA16F，0/1 与 α∈{0.5,0.25} 的混合结果
+#    全是 2 的幂的有限和 ⟹ half 精度**逐位精确**，闭式与实机之间没有舍入差可争；② 不透明侧
+#    albedo 要过 G-buffer 8bit sRGB 往返，而 0.0/1.0 是这条往返的**不动点**（srgbEncode
+#    两端点原样返回）⟹ 背景值不需要模型化量化。（选 0.5 这类中间值会把"量化往返"混进
+#    判据，红的时候分不清是谁。）
+# 3. **每层一个 node 平移**：排序代理 = entity 世界矩阵平移列，node 全 identity 时所有图元
+#    distanceSq 相等 ⟹ 比较子 > 与 < 给出同一序列 = 靶结构性不红（详见 Piece.translation
+#    的注）。这是本靶唯一真正的新机制，也是它必须先于判据存在的原因。
+# 4. **四个判据区各由几何算出**（harness 侧做投影，不在图里找边界）：far-only / overlap /
+#    near-only / bg-only。前三个各自锚住"α、c、显示链"，于是 overlap 区新增的**唯一未知
+#    就是合成次序** —— 红的时候能一口咬定是排序，而不是"整条链都可疑"。
+BLEND_SORT_CAM = {"position": (0.0, 0.0, 6.0), "target": (0.0, 0.0, 0.0), "fovDegrees": 45.0}
+BLEND_SORT_HALF_TAN = 0.41421356237309503  # tan(22.5°)，与 fovDegrees=45 同源（harness 复算用）
+
+
+def _xy_quad(size: float) -> Geom:
+    """绕自身原点、朝 +Z 的正方形面片（相机在 +Z 正视 ⟹ 前向面 = 正面，透明段剔背面）。"""
+    h = size / 2.0
+    return quad((-h, -h, 0.0), (size, 0.0, 0.0), (0.0, size, 0.0))
+
+
+def scene_blend_sort() -> Scene:
+    s = Scene(
+        name="blend_sort",
+        purpose="透明混合排序正确性的靶：两层 unlit 半透面 + 一层 unlit 背景，"
+                "期望像素由闭式混合式给出，翻转 renderListSystem 的排序比较子必须让它红",
+        honesty="只测**合成次序**这一件事。三层全 unlit ⟹ 不覆盖：透明体的光照/阴影/自发光、"
+                "MASK discard、velocity、picking（透明不入 picking）、GPU culling 候选（透明不入）。"
+                "且 alpha 混合是非预乘 SRC_ALPHA/ONE_MINUS_SRC_ALPHA（rgl/shader.cppm 的 "
+                "colorBlend 分支），换混合方程则本闭式作废。",
+        cameras={"sort": dict(BLEND_SORT_CAM)},
+    )
+    s.pieces.append(Piece(
+        "backdrop", _xy_quad(16.0), PAL["blue"], unlit=True, translation=(0.0, 0.0, -2.0),
+        radial=False, closed=False, roughness=0.9,
+        intent="OPAQUE unlit 背景：给混合提供 dst。z=-2 在最远处，两层都盖在它上面"))
+    s.pieces.append(Piece(
+        "layer_far", _xy_quad(2.0), PAL["green"], unlit=True, alpha=0.25,
+        translation=(-0.4, 0.0, -1.0), radial=False, closed=False, roughness=0.9,
+        intent="BLEND unlit 远层 α=0.25：node 原点 (-0.4,0,-1) ⟹ distanceSq=49.16"))
+    s.pieces.append(Piece(
+        "layer_near", _xy_quad(2.0), PAL["red"], unlit=True, alpha=0.5,
+        translation=(0.4, 0.0, 0.0), radial=False, closed=False, roughness=0.9,
+        intent="BLEND unlit 近层 α=0.5：node 原点 (0.4,0,0) ⟹ distanceSq=36.16（更小=更近）"))
+    # 闭式设计事实（**只记事实，不记结论**）：harness 从这里吃 α / 颜色 / 落位与相机，
+    # 自己算投影与混合式；它不在脚本里抄第二份颜色表，也不在图里找区域边界。
+    s.extra["closedForm"] = {
+        "camera": dict(BLEND_SORT_CAM),
+        "halfTanHalfFov": BLEND_SORT_HALF_TAN,
+        "aspect": [1280, 720],
+        "blend": "non-premultiplied over: out = a*src + (1-a)*dst (rgl/shader.cppm colorBlend)",
+        "regions": ["far_only", "overlap", "near_only", "bg_only"],
+        "orderCorrect": ["layer_far", "layer_near"],
+        "orderFlipped": ["layer_near", "layer_far"],
+        "note": ("期望字节 = 显示链(线性混合值 × exposure)；线性混合值按 orderCorrect 逐层"
+                 "over 合成，orderFlipped 只用于变异对照"),
+    }
+    return s
+
+
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
@@ -1816,6 +1905,7 @@ SCENES = {
     "penumbra_ladder": scene_penumbra_ladder,
     "ssr_rig": scene_ssr_rig,
     "ssr_rig_empty": scene_ssr_rig_empty,
+    "blend_sort": scene_blend_sort,
 }
 
 
@@ -1914,7 +2004,7 @@ class GlbBuilder:
             "pbrMetallicRoughness": {
                 # 三因子全部显式写出（含 metallic/roughness）：不吃 tinygltf / 规范默认值，
                 # manifest 的 color 与 JSON 的 baseColorFactor 才能做精确相等校验。
-                "baseColorFactor": [piece.color[0], piece.color[1], piece.color[2], 1.0],
+                "baseColorFactor": [piece.color[0], piece.color[1], piece.color[2], piece.alpha],
                 "metallicFactor": piece.metallic,
                 "roughnessFactor": piece.roughness,
             },
@@ -1925,6 +2015,14 @@ class GlbBuilder:
             mat["normalTexture"] = {"index": self._add_image(piece.normal_png), "texCoord": 0}
         if piece.emissive is not None:
             mat["emissiveFactor"] = [piece.emissive[0], piece.emissive[1], piece.emissive[2]]
+        # alphaMode 只在**真半透**时写（写 "OPAQUE" 会改既有场景的 JSON 字节）。引擎侧
+        # 判据 = mat.alphaMode == "BLEND" 字符串相等（gltf_loader_impl 的 alphaModeBlend），
+        # 缺键 = 规范默认 "OPAQUE"。
+        if piece.alpha < 1.0:
+            mat["alphaMode"] = "BLEND"
+        if piece.unlit:
+            # 引擎只读**存在性**（extensions.count(...) > 0），空对象即合法（glTF 规范同义）。
+            mat["extensions"] = {"KHR_materials_unlit": {}}
         self.materials.append(mat)
         mat_i = len(self.materials) - 1
         mesh_i = len(self.meshes)
@@ -1938,6 +2036,10 @@ class GlbBuilder:
             }],
         })
         self.nodes.append({"name": piece.name, "mesh": mesh_i})
+        if piece.translation is not None:
+            # 键序 = name, mesh, translation（既有场景不写这个键 = 字节不变）。
+            self.nodes[-1]["translation"] = [piece.translation[0], piece.translation[1],
+                                             piece.translation[2]]
 
     def build(self) -> bytes:
         gltf = {
@@ -2246,8 +2348,28 @@ def validate_glb_bytes(glb: bytes, manifest: dict) -> list[str]:
             continue
         mat = root["materials"][prim["material"]]
         bcf = mat["pbrMetallicRoughness"]["baseColorFactor"]
-        if bcf != [entry["color"][0], entry["color"][1], entry["color"][2], 1.0]:
-            errs.append(f"piece {entry['name']}: baseColorFactor != manifest color")
+        want_alpha = entry.get("alpha", 1.0)
+        if bcf != [entry["color"][0], entry["color"][1], entry["color"][2], want_alpha]:
+            errs.append(f"piece {entry['name']}: baseColorFactor != manifest color/alpha")
+        # ── 透明与 unlit 路由的三方对账（JSON ↔ manifest ↔ 引擎判据口径）──────────
+        # 堵的是三条各自静默的路：① 写了 alphaMode 但 manifest 没说（harness 按 OPAQUE
+        # 预测 → 靶自己骗自己）② manifest 说了但 JSON 没写（引擎走 opaque，透明段零 draw，
+        # 画面"看着对"因为回落路径恰好也像混合）③ unlit 扩展漏写（材质被静默当 PBR 打光，
+        # 正是 2026-10-18 aa-coverage 电平自检抓出的那类 D1 破口）。
+        json_blend = mat.get("alphaMode", "OPAQUE") == "BLEND"
+        if json_blend != (want_alpha < 1.0):
+            errs.append(f"piece {entry['name']}: alphaMode={mat.get('alphaMode')!r} 与 "
+                        f"baseColorFactor.a={want_alpha} 不自洽")
+        if json_blend != (entry.get("alphaMode") == "BLEND"):
+            errs.append(f"piece {entry['name']}: JSON alphaMode 与 manifest alphaMode 不符")
+        json_unlit = "KHR_materials_unlit" in mat.get("extensions", {})
+        if json_unlit != bool(entry.get("unlit")):
+            errs.append(f"piece {entry['name']}: KHR_materials_unlit 存在性与 manifest "
+                        f"unlit 字段不符（存在性 = 引擎路由的唯一判据）")
+        want_tr = entry.get("translation")
+        if node.get("translation") != want_tr:
+            errs.append(f"piece {entry['name']}: node.translation={node.get('translation')} "
+                        f"!= manifest {want_tr}（node 原点 = 透明排序代理，错一位 = 判据量错层）")
         if mat.get("name") != entry["name"]:
             errs.append(f"piece {entry['name']}: material name mismatch")
         # ── 纹理面深校验（manifest 声明了才查；既有五场景声明里没有 → 整段跳过）──────
@@ -2469,6 +2591,13 @@ def build_scene(scene: Scene) -> tuple[bytes, str, dict]:
         "pieces": [],
     }
     manifest.update(scene.extra)
+    # 「nodes identity」这句对带平移的场景是**谎言**，就地改准（既有场景不进这个分支 = 字节不变）。
+    if any(p.translation is not None for p in scene.pieces):
+        manifest["coordinateSystem"] = (
+            "Y-up, meters; piece geometry baked in coords relative to its own node origin, "
+            "placement via node translation (per-piece 'translation'). 🔴 node origin is "
+            "also the renderListSystem transparent sort proxy (tf.world[3]) -- that is why "
+            "a sorting target MUST translate its nodes, not just its vertices")
     total_tris = 0
     for i, p in enumerate(scene.pieces):
         pos = p.geom.positions
@@ -2497,6 +2626,19 @@ def build_scene(scene: Scene) -> tuple[bytes, str, dict]:
             "aabb": {"min": lo, "max": hi},
             "intent": p.intent,
         }
+        # ── 透明/平移事实（默认值不写 = 既有七场景 manifest 字节不变）─────────────
+        # 闭式混合判据要**精确**的 alpha 与 unlit 路由，不能靠"看名字猜"：harness 读这里，
+        # 不读 configs/scene.lua，也不在脚本里再抄一份颜色/alpha（那正是本项目反复踩的
+        # 「访问路径没吃单一来源」）。
+        if p.alpha != 1.0:
+            entry["alpha"] = p.alpha
+            entry["alphaMode"] = "BLEND"
+        if p.unlit:
+            entry["unlit"] = True
+        if p.translation is not None:
+            entry["translation"] = [p.translation[0], p.translation[1], p.translation[2]]
+            # aabb 是**局部**量（顶点没烘平移）；世界落位 = translation。
+            entry["aabbSpace"] = "local (node translation carries placement)"
         # 纹理面事实（只在带 normal map 时写 = 既有五场景 manifest 字节不变）。
         # 这里记的是**量化后**的事实（码字直方图 + 反算 tilt），harness 做闭式预测时
         # 必须用它、而不是用"请求角度"——见 _normal_rows 的量化三条回答第 3 条。
