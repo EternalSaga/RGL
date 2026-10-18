@@ -8,7 +8,8 @@
 //
 // 读写（descriptor heap + shader object，同 mip_gen.comp.slang 配方，binding→heapOffset
 // mapping 见 env_prefilter_impl.cppm；push constant 经 vkCmdPushDataEXT 供给）：
-//   binding 0 = 源 env cubemap（TextureCube，取 mip0 sharp 源：SampleLevel(_, L, 0)，SRO）
+//   binding 0 = 源 env cubemap（TextureCube，**视图起点 = level+1，逐样本 LOD 读盒式 mip 链**，
+//               视图内全部 SRO；起点 > 被写级 ⟹ 读不到自己，见文件头「逐样本 mip」段）
 //   binding 1 = 目标第 level 级（RWTexture2DArray，cube 第 level 级 6 层，GENERAL 写）
 //   binding 2 = 共享 LINEAR sampler（sampler heap，constant-offset，同 mip_gen binding 2）
 // dispatch = (ceil(faceSize/8), ceil(faceSize/8), 6)，z = cube face（0-5 = +X,-X,+Y,-Y,+Z,-Z）。
@@ -23,6 +24,32 @@
 //
 // **roughness→level 映射（与采样端一致）**：roughness = level/(mipLevels−1)（level 0 = sharp
 // 源不生成，1..L−1 生成；采样 lod = roughness·mipRange = roughness·(L−1) 线性插值相邻 mip）。
+//
+// ── 逐样本 mip（2026-10-18 立，湿面白散斑的根因）──
+// 原式每个样本都读 **mip0 锐利源**。交付 env（san_giuseppe_bridge_4k）最亮纹素 82637、中值
+// 0.266 = **30 万:1 动态范围**，而太阳只占约 110/8.4M 个纹素 ⟹ 256 样本命中它的概率 ≈ 1e-2
+// /纹素：绝大多数纹素估出 0，极少数估出 82637/256 ≈ 323。预滤波图因此不是「太阳的模糊像」
+// 而是**孤立单纹素尖峰**（CPU 独立复刻本估计器实测：r=0.122 有 12/24576 个纹素超邻域 751 倍，
+// r=0.35 有 65 个）。渲染端湿石 roughness 0.05–0.35 逐像素反射方向扫过这些尖峰 ⟹ 交付图白散斑
+//（判据 speck：湿石窗 30、全图 360；env 强度归零 ⟹ 4）。归因全文 → docs/还债总账.md 债-138。
+//
+// 修法 = Karis《Moving Frostbite to PBR》/ GPU Gems 3 §20.4 的 **filtered importance sampling**：
+// 每个样本按**它自己覆盖的立体角**去读源图对应模糊级，而不是全读 mip0。样本立体角 = 1/(N·pdf)，
+// pdf = D_GGX(NoH)/4（V=N ⟹ H→L 的 Jacobian 就是 1/4，与 Khronos glTF-IBL-Sampler 同式）；
+// 与一个源纹素立体角（= 4π/(6·W²)）之比开 log2 即 mip 级。它同时做两件事：① 把单样本的取值
+// 上限从「太阳峰值」压到「样本足迹内的盒平均」；② 让相邻输出纹素读到**相邻**足迹 ⟹ 太阳的高光
+// 从孤立点恢复成连续一片。CPU 同口径验证：r=0.122 孤立尖峰 12 → **0**、最坏孤立比 751 → **2.6**；
+// r=0.35 65 → **0**、641 → **1.1**。
+//
+// 🔴 **源视图看不到被写的那一级**（结构性防自引用，不靠 shader 里钳位）：C++ 侧把 src 视图的
+// baseMip 定为 level+1（末两级见 env_prefilter_impl.cppm），本 shader 因此**读不到 mip0，也
+// 读不到正在写的 level**。这不是省事——逐样本 LOD 的落点在 level=9..11 会掉到 level±1 内，
+// 若视图能看到自身，就是同一 dispatch 内读写同一纹素（UB，且 VVL 只会报布局不匹配）。
+// 代价 = 最锐的样本也只能从 level+1 读起；由公式实测各 level 的 LOD 下界 = 3.2/7.8/9.2/9.5/
+// 9.9/10.1（level 1/5/8/9/10/11），除末两级外恒 > level+1 ⟹ **钳位只在 roughness ≥ 0.82 的
+// 最后两级生效**，而那两级每面只有 2×2 / 1×1 纹素。
+// 前提：源图 level ≥1 必须是**盒式降采样链**（本图 level ≥1 原为 UNDEFINED，现由上传路径的
+// LINEAR blit 链先填，见 texture_upload_cubemap.cppm::recordGgxMipChain）。
 
 [[vk::binding(0, 0)]]
 TextureCube<float4> srcEnv;
@@ -33,9 +60,11 @@ SamplerState srcSampler;
 
 struct EnvPrefilterPush
 {
-    uint level;      // 目标 mip 级（1..mipLevels−1）
-    uint mipLevels;  // 总级数（roughness = level/(mipLevels−1)）
-    uint faceSize;   // 目标级面边长（= max(1, mip0Size >> level)，C++/shader 同式）
+    uint level;        // 目标 mip 级（1..mipLevels−1）
+    uint mipLevels;    // 总级数（roughness = level/(mipLevels−1)）
+    uint faceSize;     // 目标级面边长（= max(1, mip0Size >> level)，C++/shader 同式）
+    uint srcFaceSize;  // 源 mip0 面边长（逐样本 LOD 的「一个源纹素立体角」归一化，见文件头）
+    uint srcBaseMip;   // 源视图起始 mip（= level+1，末两级特殊化；视图看不到本 level ⟹ 结构上读不到自身）
 };
 [[vk::push_constant]] EnvPrefilterPush push;
 
@@ -105,6 +134,16 @@ void main(uint3 gid : SV_DispatchThreadID)
 
     float3 sum = float3(0.0, 0.0, 0.0);
     float weight = 0.0;
+    // 逐样本 LOD 常数项（推导见文件头）：lod = 0.5·log2(6·W²/(N·pdf))，pdf = D_GGX/4。
+    // a2 = roughness⁴ = α²，与 importanceSampleGGX 内的 a2 同值（两处必须一致，否则样本
+    // 分布与它的 pdf 对不上，LOD 就选错）。
+    const float r2 = roughness * roughness;
+    const float a2 = r2 * r2;
+    const float sixWSq = 6.0 * float(push.srcFaceSize) * float(push.srcFaceSize);
+    // 源视图只覆盖 [srcBaseMip, mipLevels)，故 LOD 先减 baseMip 再钳到视图内（视图外的级
+    // 硬件也会钳，这里显式写出来是为了让「读不到什么」在本文件可读）
+    const float srcBase = float(push.srcBaseMip);
+    const float srcMaxLod = float(push.mipLevels - push.srcBaseMip) - 1.0;
     for (uint i = 0u; i < SAMPLE_COUNT; ++i)
     {
         float2 Xi = hammersley(i, SAMPLE_COUNT);
@@ -113,7 +152,14 @@ void main(uint3 gid : SV_DispatchThreadID)
         float NoL = dot(N, L);
         if (NoL > 0.0)
         {
-            sum += srcEnv.SampleLevel(srcSampler, L, 0.0).rgb * NoL;  // 只读 mip0 sharp 源
+            // Heitz D_GGX（与上面样本分布同一 a2）
+            float NoH = max(dot(N, H), 0.0);
+            float d = NoH * NoH * (a2 - 1.0) + 1.0;
+            float D = a2 / (kPi * d * d);
+            float pdf = max(D * 0.25, 1e-20);
+            float lod = clamp(0.5 * log2(sixWSq / (float(SAMPLE_COUNT) * pdf)) - srcBase,
+                0.0, srcMaxLod);
+            sum += srcEnv.SampleLevel(srcSampler, L, lod).rgb * NoL;
             weight += NoL;
         }
     }

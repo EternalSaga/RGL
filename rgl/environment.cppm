@@ -59,7 +59,9 @@ export class Environment {
 	 * Phase 5.5 sky/env sampler：linear mipmap（mipmapMode=LINEAR + maxLod=mipLevels−1），
 	 * 槽号经台账申报（归属者 "sampler.skyEnv"）。
 	 *
-	 * ⚠ 本 sampler 的 **maxLod = mipLevels−1 是 GGX 预滤波 mip 链唯一的入口**。2026-10-04
+	 * ⚠ 本 sampler 的 **maxLod = mipLevels−1 是渲染端读 GGX 预滤波 mip 链的唯一入口**（2026-10-18
+	 * 措辞改准：链上另有第二个读者 = env_prefilter 自己，它经**共享** sampler（maxLod=20）按逐样本
+	 * LOD 读盒式链，不走本 sampler；见 env_prefilter.comp.slang 文件头）。2026-10-04
 	 * 之前它与 AO 的 point sampler 各自算出同一个 `reservedSlots + 1`，被后写的 maxLod=0
 	 * 覆写 ⟹ 所有 roughness 都在采样 mip0，`env.mipRange` 扫 0..20 画面逐字节不变。
 	 * 护栏 = `Resources::claimSamplerSlot`（不同归属者结构上不可能同槽）。

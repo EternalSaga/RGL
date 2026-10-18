@@ -149,15 +149,16 @@ void fillCubeStagings(RGL::DeviceContext& device, CubeImages& images,
 	}
 }
 
-/** 录制上传段：6 张 staging→SRC + cube→DST 批量 barrier（GGX 只覆盖 mip0，level ≥1 留
- * UNDEFINED 待预滤波）→ per-face copy 进 cube mip0。
+/** 录制上传段：6 张 staging→SRC + cube→DST 批量 barrier（**全 mip 一起进 TRANSFER_DST**：
+ * GGX 分支也要，因为它的 mip 链现在先由 LINEAR blit 盒式链填，blit 目标级必须已在 DST；
+ * 旧写法只覆盖 mip0 并把 level ≥1 留 UNDEFINED，那是"预滤波只读 mip0"时代的产物）
+ * → per-face copy 进 cube mip0。
  * @param cmd 录制中的命令缓冲
  * @param images 资源束
  * @param size 面边长
- * @param fmt 格式（ggxPrefilter 决定 DST barrier level 覆盖）
- * @param mipLevels 全级数（非 GGX 时 DST barrier 覆盖全部 mip） */
+ * @param mipLevels 全级数 */
 void recordCubeBarriersAndCopies(vk::raii::CommandBuffer& cmd, CubeImages& images,
-	uint32_t size, const CubeFormat& fmt, uint32_t mipLevels) {
+	uint32_t size, uint32_t mipLevels) {
 	std::vector<vk::ImageMemoryBarrier2> uploadBarriers;
 	uploadBarriers.reserve(7);
 	for (uint32_t face = 0; face < 6; ++face)
@@ -171,7 +172,7 @@ void recordCubeBarriersAndCopies(vk::raii::CommandBuffer& cmd, CubeImages& image
 		vk::ImageAspectFlagBits::eColor,
 		vk::PipelineStageFlagBits2::eBottomOfPipe, vk::PipelineStageFlagBits2::eTransfer,
 		vk::AccessFlagBits2::eMemoryWrite, vk::AccessFlagBits2::eTransferWrite,
-		0, fmt.ggxPrefilter ? 1u : mipLevels, 0, 6));  // GGX：只覆盖 mip0（level ≥1 留 UNDEFINED 待预滤波）
+		0, mipLevels, 0, 6));  // 全 mip（见函数头：GGX 分支的盒式 blit 链也要 DST）
 	VkDependencyInfo toDstDep{};
 	toDstDep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
 	toDstDep.imageMemoryBarrierCount = static_cast<uint32_t>(uploadBarriers.size());
@@ -188,9 +189,23 @@ void recordCubeBarriersAndCopies(vk::raii::CommandBuffer& cmd, CubeImages& image
 	}
 }
 
-/** GGX 预滤波 mip 链（16F HDR env，Phase 8 ④b）：mip0 TRANSFER_DST→SHADER_READ_ONLY barrier
- * → ensureEnvPrefilterReady → recordPrefilter（逐级 UNDEFINED→GENERAL→dispatch→SRO，返回后全级
- * 已 SRO、无需 blit 收尾 barrier）；任一失败 = Error（调用方据此不 submit）。
+/** 盒式 mip 链（定义在本函数之后，GGX 分支要先它一步，故前置声明；见 recordMipBlitChainCube）。 */
+void recordMipBlitChainCube(vk::raii::CommandBuffer& cmd, CubeImages& images, uint32_t size,
+	uint32_t mipLevels, VkFilter mipFilter);
+
+/** GGX 预滤波 mip 链（16F HDR env）：**先盒式、后 GGX** 两段。
+ *
+ * ① 盒式 mip 链 = 复用 8-bit 路径的 `recordMipBlitChainCube`（LINEAR 滤镜，逐 level 6 面 blit），
+ *    末尾把全级留在 SHADER_READ_ONLY。它喂的是 GGX 的**逐样本 LOD 源**——GGX 每个样本按自己
+ *    覆盖的立体角读对应模糊级（方差控制，见 env_prefilter.comp.slang 文件头），没有这条链
+ *    就没有可读的级。
+ * ② GGX 段 = ensureEnvPrefilterReady → recordPrefilter（逐级 SRO→GENERAL→dispatch→SRO）。
+ *
+ * 🔴 盒式链**不能省、也不能换成 NEAREST**：NEAREST 的 mip 链 = 隔行点抽样零滤波（债-137 整条
+ * UNORM compute mip 链就坏在这里），逐样本 LOD 会读到"看着有 mip、其实每级都是上一级的抽取"，
+ * 火点一条不剩地留在图里，而画面没有任何报错。能力不满足 LINEAR blit 时**失败**（见
+ * checkGgxBlitLinearSupport），不静默降级。
+ *
  * @param cmd 录制中的命令缓冲
  * @param images cube 目标图
  * @param fmt 格式（GGX 用 format 传 recordPrefilter）
@@ -201,16 +216,9 @@ void recordCubeBarriersAndCopies(vk::raii::CommandBuffer& cmd, CubeImages& image
 std::expected<void, Error> recordGgxMipChain(RGL::Environment& env,
 	vk::raii::CommandBuffer& cmd, CubeImages& images, const CubeFormat& fmt, uint32_t size,
 	uint32_t mipLevels, const char* name) {
-	// 16F HDR env（Phase 8 ④b）：mip 链走 heap compute GGX importance-sample 预滤波（替代
-	// LINEAR blit box 平均）。先 mip0：TRANSFER_DST → SHADER_READ_ONLY（compute 采样源
-	// SampleLevel(_,L,0)，SampleLevel lod=0 恒取 mip0）；level ≥1 留 UNDEFINED（初始上传
-	// barrier 只覆盖 mip0），recordPrefilter 逐级 UNDEFINED→GENERAL→dispatch(fs/8,fs/8,6)
-	// →SHADER_READ_ONLY，返回后全级已 SRO（渲染端最终布局），无需下方 blit 收尾 barrier。
-	emitSingleBarrier(*cmd, RGL::createImageBarrier(*images.image, vk::ImageLayout::eTransferDstOptimal,
-		vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageAspectFlagBits::eColor,
-		vk::PipelineStageFlagBits2::eTransfer, vk::PipelineStageFlagBits2::eComputeShader,
-		vk::AccessFlagBits2::eTransferWrite, vk::AccessFlagBits2::eShaderSampledRead,
-		0, 1, 0, 6));
+	// ① 盒式 mip 链（全级 TRANSFER_DST 由 recordCubeBarriersAndCopies 备好，末尾统一 →SRO）
+	recordMipBlitChainCube(cmd, images, size, mipLevels, VK_FILTER_LINEAR);
+	// ② GGX 逐样本 LOD 预滤波（读 ① 的链，逐级覆写 level 1..L−1）
 	// 备齐 env-prefilter heap 基础设施（幂等增量；prefilter 辅助槽走运行时段）
 	if (auto ready = env.ensurePrefilterReady(mipLevels); !ready)
 		return std::unexpected(std::move(ready).error());
@@ -220,8 +228,33 @@ std::expected<void, Error> recordGgxMipChain(RGL::Environment& env,
 	return {};
 }
 
-/** 非预滤波 mip 链（8-bit）：逐 level 先 DST→SRC 再 6 面 blit 到 level i（同图不同 subresource
- * 不重叠，spec 允许；滤镜 = fmt.mipFilter）→ 全级 →SHADER_READ_ONLY（level 0..L−2 停 SRC、末级停 DST）。
+/** GGX 分支的设备前置：目标格式必须能 LINEAR blit（盒式 mip 链的前提，理由见 recordGgxMipChain）。
+ * 缺能力 = **Error**，不降级成 NEAREST——NEAREST 链会让逐样本 LOD 静默失效（火点全留、无报错）。
+ * @param device 设备层
+ * @param format 目标格式（RGBA16_SFLOAT）
+ * @return 成功 = void；能力缺失 = Error */
+std::expected<void, Error> checkGgxBlitLinearSupport(RGL::DeviceContext& device, vk::Format format) {
+	const auto feats = device.getPhysicalDevice().getFormatProperties(format).optimalTilingFeatures;
+	constexpr auto Need = vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst
+		| vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
+	if ((feats & Need) != Need)
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("cubemap GGX: {} 缺 LINEAR blit 所需能力（BLIT_SRC|BLIT_DST|"
+				"SAMPLED_IMAGE_FILTER_LINEAR，盒式 mip 链前提）——降级 NEAREST 会让逐样本 LOD "
+				"静默失效（火点全留、无报错），故直接失败",
+				vk::to_string(format))});
+	return {};
+}
+
+/** 盒式 mip 链：逐 level 先 DST→SRC 再 6 面 blit 到 level i（同图不同 subresource 不重叠，spec
+ * 允许；滤镜 = mipFilter）→ 全级 →SHADER_READ_ONLY（level 0..L−2 停 SRC、末级停 DST）。
+ *
+ * 两条路径共用（滤镜不同、后续用途不同）：
+ *   - 8-bit PNG env：`fmt.mipFilter`（sRGB 只能 NEAREST，VUID-vkCmdBlitImage-filter-00239），
+ *     链本身就是交付物。
+ *   - 16F HDR env：**LINEAR**，链是 GGX 预滤波的**逐样本 LOD 源**（recordGgxMipChain ①），
+ *     随后被 GGX 逐级覆写。这里 NEAREST 不是"稍差"而是"整条方差控制静默失效"，故由
+ *     checkGgxBlitLinearSupport 把能力不足变成失败。
  *
  * @parallel_group mip_blit_chain —— 与 `recordMipBlitChain2d` **刻意不合并**：布局状态机相反
  * （本函数整条链留在 TRANSFER、末尾一次性转 SRO、源级从 TRANSFER_DST 起；2D 版每级在
@@ -231,7 +264,7 @@ std::expected<void, Error> recordGgxMipChain(RGL::Environment& env,
  * @param images cube 目标图
  * @param size 面边长
  * @param mipLevels 全级数
- * @param mipFilter blit 滤镜（sRGB 8-bit 只能 NEAREST，VUID-vkCmdBlitImage-filter-00239） */
+ * @param mipFilter blit 滤镜（见上） */
 void recordMipBlitChainCube(vk::raii::CommandBuffer& cmd, CubeImages& images, uint32_t size,
 	uint32_t mipLevels, VkFilter mipFilter) {
 	// mip 链（8-bit / 非预滤波）：level i−1 先 DST→SRC，再 6 面 blit 到 level i（同图不同
@@ -297,10 +330,13 @@ std::expected<void, Error> recordCubeUpload(RGL::Environment& env, RGL::DeviceCo
 	auto cmd = std::move(cmdAlloc[0]);
 	cmd.begin(vk::CommandBufferBeginInfo{});
 
-	recordCubeBarriersAndCopies(cmd, images, size, fmt, mipLevels);
+	recordCubeBarriersAndCopies(cmd, images, size, mipLevels);
 
 	if (fmt.ggxPrefilter) {
-		// GGX 预滤波 mip 链：失败则不 submit（保持原 early-return 语义）
+		// GGX 预滤波 mip 链：先校验 LINEAR blit 能力（盒式源链的前提，缺 = 直接失败不降级），
+		// 再录链；失败则不 submit（保持原 early-return 语义）
+		if (auto chk = checkGgxBlitLinearSupport(device, fmt.format); !chk)
+			return std::unexpected(std::move(chk).error());
 		if (auto r = recordGgxMipChain(env, cmd, images, fmt, size, mipLevels, name); !r)
 			return std::unexpected(std::move(r).error());
 	} else {

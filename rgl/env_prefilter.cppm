@@ -18,13 +18,17 @@ namespace RGL {
 // constant-offset，vkWriteResourceDescriptorsEXT 写 image 描述符 + bindResourceHeapEXT +
 // bindShadersEXT + dispatch + per-dispatch dst 布局屏障）。
 //
-// 与 mip_gen 的两处本质差异：
+// 与 mip_gen 的三处本质差异：
 //   - **dst = cube 的第 level 级**（`VK_IMAGE_VIEW_TYPE_2D_ARRAY` 覆盖 6 层，RWTexture2DArray，
-//     dispatch (ceil(faceSize/8), ceil(faceSize/8), 6)，z=face），非 2D 单图；src = 同一 cube 的
-//     mip0 sharp 源（`VK_IMAGE_VIEW_TYPE_CUBE` 覆盖 mip0 六层，采样 SampleLevel(_, L, 0)）。
-//   - **每 level 只读 mip0**（非链式读 level−1），故各 level 相互独立、无链式布局依赖；
-//     mip0 在 recordPrefilter 前由调用方迁到 SHADER_READ_ONLY，dst 各级 UNDEFINED/
-//     TRANSFER_DST→GENERAL（compute 写）→SHADER_READ_ONLY（渲染端最终态）。
+//     dispatch (ceil(faceSize/8), ceil(faceSize/8), 6)，z=face），非 2D 单图。
+//   - **src = 同一 cube 的 [srcBaseMip, L) 段**（`VK_IMAGE_VIEW_TYPE_CUBE`，逐样本 LOD 读盒式
+//     mip 链）。🔴 baseMip **恒 > level** ⟹ 视图结构上看不到正在写的那一级：这不是优化，是
+//     把「同一 dispatch 内读写同一纹素」变成写不出来的形态（逐样本 LOD 的落点在 level ≥ 9
+//     会掉进 level±1，靠 shader 钳位迟早漂）。理由全文 → env_prefilter.comp.slang 文件头。
+//   - **各 level 仍相互独立**（读的是更糊的级，不是本 level），但**布局有链**：调用方必须先把
+//     level 1..L−1 填成盒式降采样链并留在 SHADER_READ_ONLY（texture_upload_cubemap 的
+//     recordGgxMipChain 用 LINEAR blit 链做这件事），本模块再逐级
+//     SHADER_READ_ONLY→GENERAL（compute 写）→SHADER_READ_ONLY（渲染端最终态）。
 // 全走 descriptor heap，零 descriptor pool / set layout / pipeline layout / pipeline。
 //
 // **生命周期**：owner = Environment 成员（启动期一次性，env 16F 上传时喂 level，先于 device 析构）。
@@ -32,7 +36,7 @@ namespace RGL {
 // 持本类型成员，无环；heap 引用经 init 注入）。per-level 视图 create info 存成员 deque
 // （不 realloc → pView 指针稳定，活过提交 + fence wait——驱动可延迟解析）。
 
-// EnvPrefilterPush（env_prefilter.comp.slang 的 push constant，12B / 3×u32 scalar 布局）**不进本
+// EnvPrefilterPush（env_prefilter.comp.slang 的 push constant，20B / 5×u32 scalar 布局）**不进本
 // 接口 unit**：它现在是 compute-push 反射管线的产物（generated/compute_push_types_generated.cppm），
 // 只被 `env_prefilter:impl` import，接口因此不拖生成物的 GMF 宏面（glm / cstddef）——先例 =
 // evssm_shadow.cppm。本模块外部零消费者（唯一使用点在 impl 的 push data 包装里），故不再导出。
@@ -98,20 +102,21 @@ export class EnvPrefilter {
 
 	/**
 	 * 把 GGX 预滤波链（level 1..mipLevels−1，每级一个 dispatch (ceil(fs/8),ceil(fs/8),6)）录进
-	 * cmd——调用点 = cubemap 上传 CB（16F/ggxPrefilter 分支，**mip0 已 copy 完并先行迁到
-	 * SHADER_READ_ONLY**，本方法续录后由调用方统一 end + submit + fence）。
+	 * cmd——调用点 = cubemap 上传 CB（16F/ggxPrefilter 分支，**全级已由调用方的盒式 blit 链填好
+	 * 并留在 SHADER_READ_ONLY**，本方法续录后由调用方统一 end + submit + fence）。
 	 * **前置**：Environment::ensurePrefilterReady(mipLevels) 已把 level shader/槽建齐（本方法
-	 * 不分配槽，只用 level 1..mipLevels−1）。
-	 * 录制序：先把各 level 的 src（cube mip0 sampled SRO）/dst（2DArray 第 level 级 storage
-	 * GENERAL）image 描述符一次性写进各自固定槽（同 submission 内各 level 独立槽、互不覆盖）
-	 * → 一次 heap host barrier（eHost→heap read）→ 一次 bind resource/sampler heap → 逐 level
-	 * { dst 第 level 级 →GENERAL（从调用方遗留布局）→ bindShadersEXT（该 level shader object）
-	 * → pushDataEXT（12B EnvPrefilterPush + @20 的 heap push index 0）→ dispatch → dst 第 level
-	 * 级 GENERAL→SHADER_READ_ONLY }。本方法把当级视图 create info 写进 per-level 稳定链（活过
-	 * 提交 + fence wait）。
+	 * 不分配槽，只用 level 1..mipLevels−1）；且 level 1..L−1 已是**盒式降采样链**（逐样本 LOD
+	 * 读的就是它，见 env_prefilter.comp.slang 文件头）。
+	 * 录制序：先把各 level 的 src（cube [srcBaseMip, L) sampled SRO，srcBaseMip > level ⟹ 视图
+	 * 看不到本 level）/dst（2DArray 第 level 级 storage GENERAL）image 描述符一次性写进各自固定
+	 * 槽（同 submission 内各 level 独立槽、互不覆盖）→ 一次 heap host barrier（eHost→heap read）
+	 * → 一次 bind resource/sampler heap → 逐 level { 第 level 级 SRO→GENERAL（compute 写；
+	 * srcAccess 带 SampledRead = 对本级在**更早 dispatch** 里作为源被读的 WAR 依赖）
+	 * → bindShadersEXT（该 level shader object）→ pushDataEXT（20B EnvPrefilterPush + @20 的
+	 * heap push index 0）→ dispatch → 第 level 级 GENERAL→SHADER_READ_ONLY }。本方法把当级视图
+	 * create info 写进 per-level 稳定链（活过提交 + fence wait）。
 	 * @param cmd 目标命令缓冲（录制中；bindResourceHeapEXT，非 descriptor set——坑 9 互斥）
-	 * @param cubeImage 目标 cube 图（mip0 已在 SHADER_READ_ONLY；level 1..L−1 待预滤波；
-	 *   创建时须含 eStorage usage）
+	 * @param cubeImage 目标 cube 图（全级已在 SHADER_READ_ONLY；创建时须含 eStorage usage）
 	 * @param format 目标图格式（RGBA16_SFLOAT——本 compute 只处理 float，不处理 sRGB）
 	 * @param faceSize mip0 面边长（目标级 fs = max(1, faceSize >> level)）
 	 * @param mipLevels 总 mip 级数（1 = 无需生成，直接返回成功）
@@ -126,16 +131,20 @@ export class EnvPrefilter {
 	/** per-level 描述符写入链的稳定存储（deque 元素地址不随 push_back 迁移——v341 契约：
 	 * ImageDescriptorInfoEXT::pView 指 ImageViewCreateInfo 值，非 VkImageView 句柄）。 */
 	struct DescChain {
-		vk::ImageViewCreateInfo viewCreate{};      // per-level 视图描述（cube mip0 / 2DArray 第 level 级）
+		vk::ImageViewCreateInfo viewCreate{};      // per-level 视图描述（src = cube [srcBaseMip,L) / dst = 2DArray 第 level 级）
 		vk::ImageDescriptorInfoEXT imageDesc{};     // pView = &viewCreate，layout = SRO / GENERAL
 		vk::ResourceDescriptorInfoEXT resourceDesc{};  // type = Sampled / Storage，data.pImage = &imageDesc
 		vk::HostAddressRangeEXT dst{};             // 描述符写入目标 slot 范围（getSlotCpuAddress 解析）
 	};
 
-	/** 往 resource heap 的某 level 链写一个 image 描述符（sampled cube=SRO / storage 2DArray=GENERAL）。 */
+	/** 往 resource heap 的某 level 链写一个 image 描述符（sampled cube=SRO / storage 2DArray=GENERAL）。
+	 * @param baseMip 视图起始 mip
+	 * @param levelCount 视图 mip 跨度（src 用 >1 才能按逐样本 LOD 读到别的级；
+	 *   🔴 写死 1 会让逐样本 LOD **静默失效**——恒等于读那唯一一级，画面看不出不对） */
 	[[nodiscard]] std::expected<void, Error> writeImageDesc(DescChain& chain, uint32_t slot,
 		VkImage image, vk::Format format, vk::ImageViewType viewType, uint32_t baseMip,
-		uint32_t baseLayer, uint32_t layerCount, vk::DescriptorType type, vk::ImageLayout layout);
+		uint32_t levelCount, uint32_t baseLayer, uint32_t layerCount, vk::DescriptorType type,
+		vk::ImageLayout layout);
 
 	vk::raii::Device& device;  // 设备引用（非拥有；初始化列表首位）
 	std::vector<uint32_t> code;  // env_prefilter.comp.spv 码流（构造期加载，逐 level 建 shader object 复用）

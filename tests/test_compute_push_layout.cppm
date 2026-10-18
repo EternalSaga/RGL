@@ -94,11 +94,15 @@ TEST_CASE("八枚 compute push struct：sizeof 与逐字段 offsetof（期望值
 	CHECK(offsetof(CullPush, sequenceCount) == 96);
 	CHECK(sizeof(glm::vec4) * 6 == 96);  // planes 的宽度 = 期望偏移的唯一算式
 
-	// ── env_prefilter.comp.slang `struct EnvPrefilterPush { uint level; uint mipLevels; uint faceSize; }` ──
-	CHECK(sizeof(EnvPrefilterPush) == 12);
+	// ── env_prefilter.comp.slang `struct EnvPrefilterPush { uint level; uint mipLevels; uint
+	// faceSize; uint srcFaceSize; uint srcBaseMip; }`（5×u32 scalar 布局 = 20B；后两枚 2026-10-18
+	// 随逐样本 LOD 加入，期望值按 shader 字段序逐个 +4 手算，不是抄生成物）──
+	CHECK(sizeof(EnvPrefilterPush) == 20);
 	CHECK(offsetof(EnvPrefilterPush, level) == 0);
 	CHECK(offsetof(EnvPrefilterPush, mipLevels) == 4);
 	CHECK(offsetof(EnvPrefilterPush, faceSize) == 8);
+	CHECK(offsetof(EnvPrefilterPush, srcFaceSize) == 12);
+	CHECK(offsetof(EnvPrefilterPush, srcBaseMip) == 16);
 
 	// ── evssm_downsample.comp.slang `struct EvssmDownPush { uint level; uint cols; uint baseTileTexels; }` ──
 	CHECK(sizeof(EvssmDownPush) == 12);

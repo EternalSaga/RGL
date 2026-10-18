@@ -21,7 +21,7 @@ e9fd016660fbc17933e695bfb8503fdf1496d78b  rgl/shaders/cull_tables.slang
 e2988b049852b816a531b82d53ffcd7d91e6d0a1  rgl/shaders/cull_tables_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
-eaba0a5499a2469c14e9fec46a359222c497cbe2  rgl/shaders/env_prefilter.comp.slang
+ce17319eb66bd75ca05148668035be124ec0eba7  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
 f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
@@ -50,7 +50,7 @@ d8bc6ab1df5c304f916c4158f0617ff2c58b0838  rgl/shaders/meshlet.mesh.slang
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 80fd0588817451286b00bb9dbeaed1db0800f39d  rgl/shaders/model.mesh.slang
 109b471b7e2d56b03acdb887deae8c3f377b647a  rgl/shaders/model.slang
-0744e35838f1e645ec73c8b047f0a3ce9fcdc254  rgl/shaders/normalmap.slang
+2e32e07500f87266c0d3425e5bef199898f469c2  rgl/shaders/normalmap.slang
 c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
 012287f1deff4848565d2b7289b3abb03a510e8e  rgl/shaders/scene.slang
@@ -72,7 +72,7 @@ ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.fra
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
 cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
-eaba0a5499a2469c14e9fec46a359222c497cbe2  rgl/shaders/env_prefilter.comp.slang
+ce17319eb66bd75ca05148668035be124ec0eba7  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
 f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
@@ -101,7 +101,7 @@ d8bc6ab1df5c304f916c4158f0617ff2c58b0838  rgl/shaders/meshlet.mesh.slang
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 80fd0588817451286b00bb9dbeaed1db0800f39d  rgl/shaders/model.mesh.slang
 109b471b7e2d56b03acdb887deae8c3f377b647a  rgl/shaders/model.slang
-0744e35838f1e645ec73c8b047f0a3ce9fcdc254  rgl/shaders/normalmap.slang
+2e32e07500f87266c0d3425e5bef199898f469c2  rgl/shaders/normalmap.slang
 c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
 012287f1deff4848565d2b7289b3abb03a510e8e  rgl/shaders/scene.slang
@@ -123,7 +123,7 @@ ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.fra
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
 cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
-eaba0a5499a2469c14e9fec46a359222c497cbe2  rgl/shaders/env_prefilter.comp.slang
+ce17319eb66bd75ca05148668035be124ec0eba7  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
 f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
@@ -152,7 +152,7 @@ b4e1ba49e66440300ecb1edb896f74f534571df2  rgl/shaders/meshlet_cull.comp.slang
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 80fd0588817451286b00bb9dbeaed1db0800f39d  rgl/shaders/model.mesh.slang
 109b471b7e2d56b03acdb887deae8c3f377b647a  rgl/shaders/model.slang
-0744e35838f1e645ec73c8b047f0a3ce9fcdc254  rgl/shaders/normalmap.slang
+2e32e07500f87266c0d3425e5bef199898f469c2  rgl/shaders/normalmap.slang
 c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
 012287f1deff4848565d2b7289b3abb03a510e8e  rgl/shaders/scene.slang

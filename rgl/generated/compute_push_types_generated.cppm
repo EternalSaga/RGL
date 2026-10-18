@@ -19,10 +19,14 @@ namespace RGL {
         uint32_t level;
         uint32_t mipLevels;
         uint32_t faceSize;
+        uint32_t srcFaceSize;
+        uint32_t srcBaseMip;
     };
-    static_assert(sizeof(EnvPrefilterPush) == 12, "Size of C++ struct EnvPrefilterPush does not match shader reflection!");
+    static_assert(sizeof(EnvPrefilterPush) == 20, "Size of C++ struct EnvPrefilterPush does not match shader reflection!");
     static_assert(offsetof(EnvPrefilterPush, mipLevels) == 4, "Field EnvPrefilterPush.mipLevels offset does not match shader reflection (scalar layout drift!)");
     static_assert(offsetof(EnvPrefilterPush, faceSize) == 8, "Field EnvPrefilterPush.faceSize offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(EnvPrefilterPush, srcFaceSize) == 12, "Field EnvPrefilterPush.srcFaceSize offset does not match shader reflection (scalar layout drift!)");
+    static_assert(offsetof(EnvPrefilterPush, srcBaseMip) == 16, "Field EnvPrefilterPush.srcBaseMip offset does not match shader reflection (scalar layout drift!)");
 
     export struct EvssmDownPush {
         uint32_t level;
