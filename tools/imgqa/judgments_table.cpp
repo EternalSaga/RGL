@@ -38,8 +38,27 @@ const std::vector<JudgmentInfo>& foundationJudgments()
             {"AGENTS.md 测量纪律：单实例串行（并行双实例曾污染帧率测量）"},},
         {"probe-pixel", JudgmentFamily::Foundation,
             "±2 LSB：ACES 多项式 float64 转录 vs 着色器 float32 + 8bit 量化取整"
-            "（沿用 12.2d-c 实机对拍实测）；再大就该当失败看待，不能靠放宽阈值混过去。",
+            "（沿用 12.2d-c 实机对拍实测）；再大就该当失败看待，不能靠放宽阈值混过去。"
+            "2026-10-18 重立：吃的是 **G-buffer 量化往返后**的着色输入（deferred 链），"
+            "量化本身由锚①② 独立钉，本锚只兜光照 + tonemap 尾段。",
             {"闭式解探针实测零误差（批 12.2d-c，analytic_ref.py 时代）"},},
+        {"probe-gbuffer-albedo", JudgmentFamily::Foundation,
+            "±1 LSB：期望 = 存储字节本身（round(srgbEncode·255)，硬件 sRGB store 同为化就近），"
+            "留 1 档的余量只有 shader float32 输入 vs 预测 float64、平局取整模式（RNE vs "
+            "half-up）两处。Δ>1 = G-buffer 编码契约变了（格式表 / 写侧 / 回读转换），"
+            "与光照无关——这条锚的判据对象就是 pass 间附件本身。",
+            {"2026-10-18 探针重立变异对照：deferred_geometry.frag.slang 的 albedo 写侧临时 ×0.5"
+             " → 本锚红（Δ=67，直接点名写侧失效）而 metalrough 锚绿 = 分段隔离有效；还原即双绿"
+             "（读数 → qa/log/imgqa_calls.jsonl 同日三条）"},},
+        {"probe-gbuffer-metalrough", JudgmentFamily::Foundation,
+            "±1 LSB：容差整格预留给**平局带**——探针默认 rough=0.9 的 ×255 = 229.5，闭式"
+            "（含 float32 输入建模，乘回去仍舍回 229.5，half-up → 230）给不出引擎 float32 "
+            "乘法链（factor×ORM、normalFiltering 的 sqrt 往返）在平局两侧的落点方向；2026-10-18 "
+            "首跑实测引擎存 229（Δ1，稳定复现）。非平局输入 Δ0。失效形态都远大于 1：写侧串道 "
+            "Δ=229、通道错认 Δ~255、格式换档 Δ 数十。",
+            {"2026-10-18 探针重立变异对照：deferred_geometry.frag.slang 的 metalrough 写侧"
+             "临时 g↔b 串道 → 本锚红（Δ=230）而 albedo 锚绿 = 分段归因成立；还原即双绿"
+             "（读数 → qa/log/imgqa_calls.jsonl 同日三条）"},},
         {"shadow-swim", JudgmentFamily::Foundation,
             "0 位移 + 失配 ≤ max(20, 共同格/200)：静态几何 + 静态太阳 ⟹ 影场是世界不变量，"
             "任何机位依赖都是 bug（5a-7 三件套的端到端复验）。2cm 格分辨率对用户报的"

@@ -27,7 +27,13 @@
 -- Phase 8 批次 ①：HDR 累加链——opaque/skybox/transparent 渲入 scene_hdr
 --（rgba16_sfloat offscreen RT），tonemap pass（drawLight）ACES 上屏 swapchain。
 return {
-    variant = "forward",   -- "forward" | "deferred"
+    -- 2026-10-18 探针重立（docs/图变体收敛_plan.md §6.1-1）：本靶从 forward 切 **deferred**。
+    -- 闭式解探针 = 分段双锚：gbuffer_albedo/metalrough 编码锚（期望 = 存储字节，纯编码闭式）
+    -- + 最终像素锚（着色输入先过 8bit 量化往返，见 tools/imgqa/analytic.cpp roundTrip8*）。
+    -- 光照式两路逐字相同（light.frag shadeLight ≡ model_pbr_ibl shadeDirect），tonemap 尾段
+    -- 共用同一个 tonemapPass() ⟹ 闭式模型只补量化往返。本目录同时是 imgqa 合成 profile 的
+    -- 模板（engine_profile.cpp）⟹ 这一行把全部合成判据命令的默认路线一起带到 deferred。
+    variant = "deferred",   -- "forward" | "deferred"
     attachments = {
         { name = "swapchain", kind = "swapchain" },
         { name = "depth", kind = "depth" },

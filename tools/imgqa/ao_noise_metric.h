@@ -95,7 +95,7 @@ struct FrameDiff {
  */
 struct Ctx {
     std::string glb;        ///< 靶模型（合成场景，见文件头「为什么必须程序化靶」）
-    std::string variant;    ///< 渲染路线，空 = forward
+    std::string variant;    ///< 渲染路线，空 = 模板默认（deferred）
     std::string camera;     ///< 机位名（只进表头；机位本体已解析进 cam）
     Manifest man;           ///< piece 表 + 机位表（区域归因的期望色度出处）
     Engine::Camera cam;     ///< = man.cameras[camera]

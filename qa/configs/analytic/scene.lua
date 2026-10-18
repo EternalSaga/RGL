@@ -3,21 +3,30 @@
 -- 配套参考实现 = imgqa probe（把 shadeDirect + ACES + 硬件 sRGB 独立复刻一遍，作为
 -- 交叉校验的第二实现；12.3b 起接替已删除的 tools/analytic_ref.py）。跑法：
 --   ./build/tools/imgqa/imgqa probe   （--light 覆写会连引擎配置一起改，见 cmdProbe）
--- 实测（本机 RADV，2026-09-30）：**逐字节零误差**命中——退化光向 (0,0,-1) 下
+-- 实测（本机 RADV，2026-09-30，forward 时代）：**逐字节零误差**命中——退化光向 (0,0,-1) 下
 -- 屏幕中心 = (113,56,249)，40° 倾斜光下 = (88,43,244)。
+-- 2026-10-18 起本靶走 **deferred**（探针重立双锚，docs/图变体收敛_plan.md §6.1-1）：
+-- 着色输入过 G-buffer 8bit 量化，期望字节与 forward 时代差在 ±1 LSB 量级（重立实测见
+-- probe 输出与判据台账）。
 -- 刻意用 **40° 倾斜光**而不是垂直光：垂直光下 N≡V≡L 使 D/F/G 退化成常数，
 -- 判据虽好算但弱；倾斜后 NdotL=0.766、H≠N，BRDF 三项全展开，判别力更强。
 -- 期望 L（指向光源）= -direction = (-0.642788, 0, 0.766044)。
---   environment.intensity = 0  → IBL 漫反射 + 镜面两路同时归零（shader 里统一乘）
---   environment.skybox = false → 无背景贡献（屏幕中心本来也被墙挡住，双保险）
+--   environment.intensity = 0  → IBL 漫反射 + 镜面两路同时归零（shader 里统一乘；
+--                                deferred 的 light.frag env 分支同样 ×env.intensity）
+--   environment.skybox = false → 无背景贡献（屏幕中心本来也被墙挡住，双保险。⚠ deferred
+--                                不读本标志——天穹内联在 light.frag、只门控 env.mipRange>0——
+--                                对 deferred 它不是门，靠的是墙挡满画面）
 --   light.ambient = 0          → 平环境光项归零
---   ao.strength = 0            → lerp(1,ao,0) 位级 = 1.0（BIT-IDENTICAL 旁路）
+--   ao.strength = 0            → lerp(1,ao,0) 位级 = 1.0（BIT-IDENTICAL 旁路；AO 施加住在
+--                                两路共用的 tonemap pass）
 --   exposure = 1.0             → ACES 前的线性倍率取中性
---   diagnostics.shadowPass = false → 阴影因子恒 1
+--   shadow.lua mode = "none"    → 阴影因子恒 1（批 N6b 起阴影键住 shadow.lua）
 -- 剩下的只有：color = lightColor × NdotL × (albedo/π + GGX_spec)
 return {
     -- 显式钉住交付风格（缺表回落 model_pbr = 非交付路径——12.3b 查实：探针此前一直
-    -- 测的是非交付 frag；12.3b 调试中曾被 git checkout 误毁，此为恢复重钉）
+    -- 测的是非交付 frag；12.3b 调试中曾被 git checkout 误毁，此为恢复重钉）。
+    -- ⚠ 2026-10-18 切 deferred 后本键**不被消费**（deferred 走 deferred_styles，缺表回落
+    -- deferred_geometry）；留着只为 forward 还在的窗口期可回切对照，随 forward 一起删。
     styles = { unlit = "model", pbr = "model_pbr_ibl" },
     entities = {
         { type = "model", file = "models/cornell_box.glb" },

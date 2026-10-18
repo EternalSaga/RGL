@@ -184,7 +184,7 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool ba
     const std::string root = projectRoot() + "/build";
     std::printf("逐杆覆盖率对拍：%d×%d  px/m = %.2f  variant=%s  warm=%d  feedback=%.3f  "
         "base_space=%s  input_kernel=%g\n\n",
-        kViewW, kViewH, pxPerMeter(kCamZ), variant.empty() ? "forward" : variant.c_str(), warm,
+        kViewW, kViewH, pxPerMeter(kCamZ), variant.empty() ? "deferred" : variant.c_str(), warm,
         feedback, baseSpace ? "开" : "关", kernel);
 
     // 两态各采一帧：TAA 关 = 被测量（无 AA 时应当量化失真），TAA 开 = 判据对象。
@@ -301,7 +301,7 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool ba
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
     logCall("aa-coverage",
-        {{"variant", variant.empty() ? "forward" : variant}, {"warm", std::to_string(warm)},
+        {{"variant", variant.empty() ? "deferred" : variant}, {"warm", std::to_string(warm)},
             {"white_luma", d3(on.whiteLuma)}, {"err_off", d3(eOff)}, {"err_on", d3(eOn)},
             {"err_jitter0", d3(eJ0)},
             {"halo", d3(mean(on) - mean(off) - wantGain)}},

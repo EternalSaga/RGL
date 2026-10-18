@@ -90,6 +90,20 @@ struct Vec3 {
 /// 线性 HDR → 屏幕字节（曝光 → ACES → sRGB → 8bit）。这是「该是多少」的最终答案。
 [[nodiscard]] std::array<int, 3> toBytes(Vec3 linear, double exposure = 1.0);
 
+// ── G-buffer 8bit 量化往返（deferred 路线，2026-10-18 探针重立，docs/图变体收敛_plan.md §6.1-1）──
+// deferred 的着色输入过两张 8bit 通道（gbuffer_contract.cppm：albedo = rgba8_srgb、
+// metalrough = rgba8_unorm .r=metal .g=rough），最终像素闭式必须吃**往返后**的值；
+// 法线 rg16_snorm 在探针场景（轴对齐 N）往返精确无损，不建模。
+// 期望**存储字节**（gbuffer 附件锚用，dump_gbuf 直出 = 原字节无 gamma）：
+//   albedo 字节 = encode8Srgb(a)；metal/rough 字节 = round(v·255)。
+
+/// 硬件 sRGB store 的落盘字节：round(srgbEncode(v)·255)。
+[[nodiscard]] int encode8Srgb(double linear);
+/// rgba8_srgb 往返：着色器采回的值 = decode8(encode8(v))。
+[[nodiscard]] double roundTrip8Srgb(double linear);
+/// rgba8_unorm 往返：着色器采回的值 = round(v·255)/255。
+[[nodiscard]] double roundTrip8Unorm(double v);
+
 /// 观测域亮度：字节 → sRGB 解码 → Rec.709 加权。**观测与预测必须用同一个函数**，
 /// 这样"比较域"在代码里只有一个出处（文件头硬约束第 3 条）。
 [[nodiscard]] double observedLuma(const std::array<int, 3>& byte);
@@ -209,7 +223,7 @@ struct ProfileOpts {
     /// ⚠ 交付配置路径**不吃**它：那条路径整份替换 shadow.lua = 把交付调参抄第二份（会漂），
     /// 走 `overrideShadowRoute` 的逐键覆写。
     std::string shadowLuaOverride;
-    std::string variant;                   // "" = 模板默认（forward）；"deferred" 等 = 拷贝后重写 variant 行
+    std::string variant;                   // "" = 模板默认（deferred，2026-10-18 探针重立随模板切换）；显式给值 = 拷贝后重写 variant 行
     /// 抗锯齿选路（批 14.6：引擎 `runtime.lua` 的 `aa` 三态键）。Off = **不写键** = 出厂态。
     /// 原 `taa` 布尔（scene.lua `taa.enabled`）与 `fsrUpscaler` 布尔（`fsr_upscaler`）都收进
     /// 这一个槽位——「谁做抗锯齿」不存在同时命中两条的写法，臂表因此**写不出**非法组合
@@ -423,7 +437,11 @@ public:
     [[nodiscard]] double paramValue(const std::string& page, const std::string& label);
 
     /// 拍一张。attachment=nullptr = 后缓冲；否则具名附件（"object_id"）。返回 PNG 绝对路径。
-    [[nodiscard]] std::string shot(const std::string& tag, const char* attachment = nullptr);
+    /// gbuf ≥ 0 = 诊断直读 G-buffer 契约通道（kGBufferAttachments 下标，dump_gbuf 同路，
+    /// 线性原字节无 gamma）；与 attachment 互斥（服务端 400）。写盘名由引擎定
+    /// （screenshots/gbuffer_N.png），**响应回的是真实路径**，调用侧别自己拼。
+    [[nodiscard]] std::string shot(const std::string& tag, const char* attachment = nullptr,
+        int gbuf = -1);
 
     /// 引擎装配态的帧计数（`GET /` 回显的 `frame`，纯观测；每帧在帧首钩子里 +1）。
     /// 为什么读 `GET /` 而不是 `GET /state`：两者回显同一个计数器，而 `/state` 每次调用都
@@ -769,9 +787,11 @@ int cmdIzb(const std::string& glb, const std::string& camera);
 /// 影场世界不变量（同场景两机位、静态太阳 ⟹ 影场必须跟着世界走）：机位平移 `dx` 后重投影比影场，
 /// 零位移失配 = 地板，搜索到的最优平移 = 世界位移的证据。定义在 `rig_shadow_field.cpp`。
 int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool izb, bool evssm);
-/// 闭式解探针（12.3b 接替 analytic_ref.py --probe）：跑 qa/configs/analytic 固定配置
-/// （llm_debug 截图模式，**非** RPC——那份配置本身是契约，六门逐项关掉写在注释里），
-/// 对指定像素出「该是多少 vs 实际是多少」。l = 指向光源方向（不是 direction）。
+/// 闭式解探针（12.3b 接替 analytic_ref.py --probe；2026-10-18 重立到 deferred 双锚）：
+/// 消费 qa/configs/analytic 冻结配置（六门逐项关掉写在注释里），**RPC 模式单启动三拍**
+/// （后缓冲 + gbuf 通道 0/3；副本只改回读管线键 rpc/llm_debug，渲染门一个不碰），
+/// 出三条判据：gbuffer_albedo 编码锚、gbuffer_metalrough 编码锚、最终像素闭式锚。
+/// @param l 指向光源方向（不是 scene.lua 的 direction）。
 int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double roughness,
     double metallic, Vec3 l, double intensity, int tol, bool lightOverride = false);
 
@@ -781,7 +801,7 @@ int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double rou
 /// 采集走 `/shotburst`（连续 N 帧）——用 `/shot` 逐张拍不出任何结论。
 /// @param pairs 相邻帧对数（shots = pairs + 1；内部向上对齐到抖动周期 16 的整数倍）
 /// @param warm 每次采集前的预热帧数（TAA 历史收敛，feedback=0.12 ⇒ ≈19 帧）
-/// @param variant 渲染路线（默认 forward）
+/// @param variant 渲染路线（默认 = 模板 deferred）
 /// @param baseSpace 批 13.2 `taa.base_space`（true = 输出在**基空间**）。⚠ 门开态下
 ///                S1（只抖不滤）的逐帧差不再由游动主导 ⟹ **S1/S2 比值失去原口径**，
 ///                两态都要跑才能解释数字（见 temporal.cpp 头注释「基空间口径」段）。
@@ -797,7 +817,7 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 /// 的完整理由 → `temporal_residual.h` 头注释。
 /// @param periods 抖动周期数（≥2 的偶数；连拍 = periods×16 帧，两半同列 = 同绝对相位）
 /// @param warmMult 热身倍数：每组 warm = ⌈warmMult / feedback⌉ 向上对齐到周期（EMA 判据 6/α）
-/// @param variant 渲染路线（默认 forward）
+/// @param variant 渲染路线（默认 = 模板 deferred）
 /// @param slowFeedback 单调性轴的低端 α（默认 0.002 = 等效窗 ≈500 帧 ≫ 抖动周期 16）
 /// @param baseSpace 批 13.2 门 `taa.base_space`（true = 输出在**基空间**）。本命令用它做
 ///                **归因**：门关读数 = 整幅游动 + 闪烁，门开读数 ≈ 只剩闪烁。
@@ -983,7 +1003,7 @@ int cmdTemporalTailStep(const std::string& camera, double stepDist, int burst, i
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。
 /// 与采集时序无关（这是它优于逐帧差的地方）。
-/// @param variant 渲染路线（默认 forward）
+/// @param variant 渲染路线（默认 = 模板 deferred）
 /// @param warm    预热帧数（feedback=0.88 的时间常数 ≈8.3 帧，预热不足会把初始黑历史
 ///                的残差算成覆盖率——判收敛必须靠调这个参数做对照，见 plan §7 第 10 条）
 /// @param feedback scene.lua `taa.feedback`（默认 0.12）。**消融用**：=1 时输出 = 本帧
@@ -1035,7 +1055,7 @@ int cmdAoNoise(const std::string& glb, const std::string& camera, const std::str
 /// 引入的帧间差」与「游动」分开）。
 /// @param pairs 相邻帧对数（内部向上对齐到抖动周期 16 的整数倍）
 /// @param warm  预热帧数（历史收敛）
-/// @param variant 渲染路线（默认 forward）
+/// @param variant 渲染路线（默认 = 模板 deferred）
 int cmdTaaSwim(int pairs, int warm, const std::string& variant);
 
 // ═══════════════════════════════════════════ 软影滤波轴量具（批 N6d 步 0）

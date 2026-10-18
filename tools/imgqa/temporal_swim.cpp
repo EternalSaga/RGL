@@ -637,7 +637,7 @@ int cmdTaaSwim(int pairs, int warm, const std::string& variant)
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
     logCall("taa-swim", {{"pairs", std::to_string(nPairs)}, {"warm", std::to_string(nWarm)},
-               {"variant", variant.empty() ? "forward" : variant},
+               {"variant", variant.empty() ? "deferred" : variant},
                {"T0_consec", d6(g.t0.consecDiff)}, {"T1_consec", d6(g.t1.consecDiff)},
                {"T2_consec", d6(g.t2.consecDiff)}, {"T3_consec", d6(g.t3.consecDiff)},
                {"T4_consec", d6(g.t4.consecDiff)},

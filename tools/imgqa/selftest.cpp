@@ -253,8 +253,10 @@ void testJudgmentFamilies(Checker& c)
     // judgments_table_ssr.cpp。
     // 62 → 63：★0.5-b1 的 `diffblock` 一条（U(r) 恰 0 = 差异处处够薄没有整块），见
     // judgments_table_block.cpp。
+    // 63 → 65：探针重立到 deferred 的两条 G-buffer 编码锚（`probe-gbuffer-albedo` /
+    // `probe-gbuffer-metalrough`，2026-10-18 图变体收敛刀①，docs/图变体收敛_plan.md §6.1-1）。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 63（族拆分最容易掉条目）", all.size() == 63, std::to_string(all.size()));
+    c.chk("判据总数 == 65（族拆分最容易掉条目）", all.size() == 65, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {

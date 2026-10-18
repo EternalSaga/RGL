@@ -631,7 +631,7 @@ int cmdAoNoise(const std::string& glb, const std::string& camera, const std::str
 
     std::printf("AO 噪声量测（同进程 A/B）  靶=%s  机位=%s  variant=%s  strength=%.3f  契约区排除半径=%d px\n",
         ctx.glb.c_str(), ctx.camera.c_str(),
-        ctx.variant.empty() ? "forward" : ctx.variant.c_str(), ctx.strength, ctx.radius);
+        ctx.variant.empty() ? "deferred" : ctx.variant.c_str(), ctx.strength, ctx.radius);
     std::printf("尺寸 %dx%d  光照 env=0 ambient=0 shadow=off（底图零高频 = 判据前提）\n", kAoSize[0],
         kAoSize[1]);
     std::printf("产物目录 %s\n\n", ctx.outDir.c_str());

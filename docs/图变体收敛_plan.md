@@ -99,10 +99,10 @@
 env.intensity / ambient / ao / exposure / shadow / wet 六道门 deferred 下同样成立；
 `skybox=false` 失效但对探针像素不承重（墙挡满画面，配置注释自称"双保险"）。
 
-**三套 forward 冻结靶的核验**：`analytic` 头注**没写任何必须 forward 的理由**（`:31` 是裸选择）；
+**三套 forward 冻结配置目录的核验**：`analytic` 头注**没写任何必须 forward 的理由**（`:31` 是裸选择）；
 `nm_rig` 的 forward 锁**已被它自己的 `camera.lua:6-11` 判为不需要**（俯角 25° 地平线出画，注释明写
 "deferred 路线可用"）；`env_band` 的锁仍成立（3° 掠射上半屏是天穹，`skybox=false` 只在 forward 生效
-——该标志真实读取点 `render_list_impl.cppm:756`，靶注释里的行号已漂）。nm_rig / env_band
+——该标志真实读取点 `render_list_impl.cppm:756`，该目录配置注释里的行号已漂）。nm_rig / env_band
 **没有任何自动化消费者**（全仓 grep 只有 analytic 与 ssr_rig 被引用）。
 
 ### 6.1 三枚裁决（2026-10-18 用户拍板）
@@ -114,7 +114,7 @@ env.intensity / ambient / ao / exposure / shadow / wet 六道门 deferred 下同
    **G-buffer 锚是 forward 下不可能存在的判据** ⟹ 删 forward 不是失去无基线判据，是把它变深、变多。
 2. **文件写图保留，换触发**：`variant` 键**整个消失**（§4 裁决：没有消费者的真相源）；
    新触发 = 文件里有 `attachments`/`passes` 键 → 解析自定义图，否则 → 内建 deferred。
-   ⚠ 连带：出厂 `configs/render_graph.lua` 与 qa 靶的 attachments/passes 块（forward 图的逐字副本）
+   ⚠ 连带：出厂 `configs/render_graph.lua` 与 qa 配置目录的 attachments/passes 块（forward 图的逐字副本）
    **必须随刀删除**，否则新触发下它们会变成"自定义 forward 图"静默生效。
    ⚠ 对级联的修正：**③④ 不执行**——自定义图仍可达 ⟹ C 类锚点 nullopt 分支保留、
    `deferredLight` 图事实**不恒真**（自定义图可以没有 light pass）；消失的只有 variant 枚举本体
@@ -122,12 +122,14 @@ env.intensity / ambient / ao / exposure / shadow / wet 六道门 deferred 下同
 3. **env_band 归档冻结**（实验已结案、零消费者，随 forward 删，git 沉淀现场）；
    **nm_rig 切 deferred 保留**（按其自身 camera.lua 的判定）。
 
-### 6.2 级联新增一条（§5 表漏账）
+### 6.2 级联新增一条（§5 表漏账）→ 2026-10-18 施工改判
 
-**`skybox` 标志整条死路**：`SceneEnv.skybox` 只门控 skybox DrawCall（`render_list_impl.cppm:755-760`），
-而执行该 DrawCall 的 `drawSource="skybox"` pass 只存在于 forward 与 offscreen 图。①+② 之后
-`skybox` 配置键、`addSkyEntry`、`skyboxPipeline`、`skyboxStart` 段装配、skybox.frag/mesh 全部失去
-消费者——比 §5 ② 写的"6 frag + 12 CMake 目标"更深一层（装配层代码与配置键也在账上）。
+**`skybox` 标志**：它只门控 skybox DrawCall（`render_list_impl.cppm:755-760`），执行该 DrawCall 的
+pass 只存在于 forward 与（已删的）offscreen 图。初判"随 forward 一起删"——**施工实测改判**：
+deferred 的天穹对应物是 `env.intensity` 总闸（light.frag sky 分支 2026-10-18 起门控
+`mipRange>0 && intensity>0`；intensity 不乘天穹亮度、但 =0 连天穹一起关——imgqa temporal
+抑制比被"关不掉的天穹"污染实测抓出，与 unlit 破口同批修复）。
+② 删的是 **forward draw 侧的那枚标志**；"env 开不开"这一轴由 intensity 独立表达，deferred 已具备。
 
 ## 7. 施工序（2026-10-18 定稿）
 
@@ -137,9 +139,27 @@ env.intensity / ambient / ao / exposure / shadow / wet 六道门 deferred 下同
 3. **探针重立**（§6.1-1，刀② 的硬前置）：`Engine::shot` 补 `gbuf` 参数 → probe 切 RPC 模式
    单启动三拍（后缓冲 + 通道 0/3）→ 闭式补量化往返 → 模板切 deferred。
    验收 = `just analytic` 双锚绿 + 变异对照（临时改 `deferred_geometry` 写入，确认 gbuffer 锚红）。
-4. **刀②**：删 forward + variant 枚举 + 换触发（§6.1-2）+ skybox 死路（§6.2）+ qa 靶处置（§6.1-3）。
+4. **刀②**：删 forward + variant 枚举 + 换触发（§6.1-2）+ skybox 死路（§6.2）+ qa 配置目录处置（§6.1-3）。
    逐刀独立验收：逐位锚 + `just gates`。
 
 ## 8. 待决
 
 （两枚原待决已于 2026-10-18 拍板关闭：文件写图 → 保留换触发；探针代价 → 做，形态 = 分段双锚。读数见 §6.1。）
+
+## 9. 施工读数（2026-10-18）
+
+1. **刀① 已落地**（offscreen 变体删除，`--variant offscreen` 被 CLI 拒；blit 机制保留）。
+2. **探针重立已落地**（§6.1-1 双锚）：`Engine::shot` 补 `gbuf` 参数（服务端本就有
+   `/shot {gbuf:N}`）；probe 切 RPC 单启动三拍（副本只改 rpc/llm_debug 两枚回读键，渲染门不碰）。
+   首跑三锚全绿：锚③ (88,43,244) 与 forward 时代历史实测**逐字节相同**；
+   锚② Δ1 = rough 0.9×255=229.5 平局带（引擎 float32 链落 229，容差理由已登记判据表）。
+   **变异对照两次**（albedo 写侧 ×0.5 → 锚①红 Δ67/锚②绿；metalrough g↔b → 锚②红 Δ230/锚①绿）
+   = 分段归因成立，判据有牙（读数 → `qa/log/imgqa_calls.jsonl`）。
+3. **模板切 deferred 抓出两个引擎静默破口**（均已修，见 git log）：unlit 材质在 deferred
+   被当 PBR 打光（= 交付缺陷：KHR_materials_unlit glb 在出厂配置下就错）；deferred 天穹
+   关不掉（§6.2 改判）。**这条印证了 §6 盘点的方向**——"删 forward"的价值不只是少维护面，
+   是把 forward 掩盖着的 deferred 缺口逼出来。
+4. 合成 profile 判据迁移验收：aa-coverage / temporal / temporal-residual / faces / switch /
+   attribution 在 deferred 下全绿（temporal 抑制比 3.52× vs forward 同靶 3.51×）。
+5. **刀② 未动工**（下一步）。刀② 连带清单在 §5/§6.1/§6.2 之外新增一条：
+   `environment.skybox` 配置键随 forward draw 侧一起删（deferred 的对应表达 = intensity）。

@@ -298,7 +298,7 @@ void logTargetRun(const std::vector<Run>& runs, bool hasSlow, int periods, doubl
     const Run& R2 = runs[2];
     const Run& R3 = runs[3];
     logCall("temporal-residual", {{"periods", std::to_string(periods)},
-               {"warmMult", d4(warmMult)}, {"variant", variant.empty() ? "forward" : variant},
+               {"warmMult", d4(warmMult)}, {"variant", variant.empty() ? "deferred" : variant},
                {"tau", d6(tau)}, {"white", d6(R2.whiteLuma)},
                {"R0_swing", d6(R0.stat.meanSwing)}, {"R1_swing", d6(R1.stat.meanSwing)},
                {"R2_swing", d6(R2.stat.meanSwing)}, {"R3_swing", d6(R3.stat.meanSwing)},

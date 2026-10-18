@@ -384,11 +384,15 @@ double Engine::paramValue(const std::string& page, const std::string& label)
         + " page=" + (page.empty() ? "<全页>" : page) + "（label 真相源 = 引擎生成的参数语义表）");
 }
 
-std::string Engine::shot(const std::string& tag, const char* attachment)
+std::string Engine::shot(const std::string& tag, const char* attachment, int gbuf)
 {
     json body{{"file", "screenshots/imgqa_" + tag + ".png"}};
     if (attachment)
         body["attachment"] = attachment;
+    // 诊断直读 G-buffer 通道（dump_gbuf 同路，线性原字节）。写盘名由引擎硬编码
+    // （gbuffer_N.png，见 writeCapturePng），file 键会被忽略——响应回真实路径，下面照它读。
+    if (gbuf >= 0)
+        body["gbuf"] = gbuf;
     auto res = impl_->http->Post("/shot", body.dump(), "application/json");
     if (!res)
         throw std::runtime_error("POST /shot 无响应");

@@ -259,7 +259,7 @@ int runWindowSweep(const std::string& root, int periods, double warmMult,
     //  分界 = 本 commit，跨分界按标签查数要知道这里换过名）。键 `floor` 同步 → `longFeedback`。
     logCall("temporal-residual-window",
         {{"periods", std::to_string(periods)}, {"warmMult", d4(warmMult)},
-            {"variant", variant.empty() ? "forward" : variant},
+            {"variant", variant.empty() ? "deferred" : variant},
             {"longFeedback", d4(longFeedback)}, {"baseSpace", baseSpace ? "1" : "0"},
             {"tau", d6(tau)}, {"B2_swing", d6(B2.stat.meanSwing)},
             {"B3_swing", d6(B3.stat.meanSwing)}, {"B3_p999", d6(B3.stat.p999Swing)},

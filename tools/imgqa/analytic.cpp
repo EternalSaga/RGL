@@ -116,6 +116,27 @@ std::array<int, 3> toBytes(Vec3 linear, double exposure)
     return {f(mapped.x), f(mapped.y), f(mapped.z)};
 }
 
+// ── G-buffer 8bit 量化往返（deferred 探针；契约格式见 rgl/gbuffer_contract.cppm）──
+
+int encode8Srgb(double linear)
+{
+    return static_cast<int>(std::lround(srgbEncode(linear) * 255.0));
+}
+
+double roundTrip8Srgb(double linear)
+{
+    return srgbDecode(encode8Srgb(linear) / 255.0);
+}
+
+double roundTrip8Unorm(double v)
+{
+    // 先落 float32 再 ×255（引擎材质系数是 float32）。⚠ 平局带输入（0.9×255=229.5）
+    // 模型给不出落点方向：float32(0.9)×255 又舍回 229.5，而 shader 侧乘法链
+    //（factor×ORM、normalFiltering 的 sqrt 往返）实测落在平局下方 → 存 229。
+    // 这一格的不确定由 gbuffer 锚的容差 1 吸收（理由登记 → judgments_table）。
+    return std::lround(static_cast<float>(v) * 255.0f) / 255.0;
+}
+
 double observedLuma(const std::array<int, 3>& byte)
 {
     // Rec.709 权重在**解完 sRGB 的线性域**求和——观测像素与预测字节走同一条路，

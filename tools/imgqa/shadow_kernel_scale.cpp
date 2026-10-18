@@ -305,7 +305,7 @@ cv::Mat captureArm(const Arm& a, const LadderTarget& t, const std::string& profi
     // `entities[].file = "models/<glb>"`，引擎不补后缀）。给 stem 会得到
     // `GltfLoadFailed: Failed to read file: models/penumbra_ladder`（实测）。
     o.glb = std::string(kGlbStem) + ".glb";
-    o.variant = "deferred";  // 交付路线；analytic 模板默认 forward
+    o.variant = "deferred";  // 交付路线（显式钉住；模板默认 2026-10-18 起也是 deferred）
     o.picking = false;       // 本判据的区域来自几何（世界米扫描线），不消费 object_id
     o.shadowLuaOverride = a.shadowLua;
     o.hasCamera = true;  // 机位写进 camera.lua = 从第 1 帧生效（不是 RPC 补写）

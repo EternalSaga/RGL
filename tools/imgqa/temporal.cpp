@@ -271,7 +271,7 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace)
     const std::string root = projectRoot() + "/build";
     std::printf("细线靶时域锚点：%d×%d  静止机位  预热 %d 帧  帧对 %d  variant=%s  "
         "base_space=%s\n\n",
-        kSize[0], kSize[1], warm, pairs, variant.empty() ? "forward" : variant.c_str(),
+        kSize[0], kSize[1], warm, pairs, variant.empty() ? "deferred" : variant.c_str(),
         baseSpace ? "开（输出在基空间）" : "关（输出在抖动空间）");
 
     // ── 采集矩阵（S = 静止机位；三组全是静止机位）────────────────────────────
@@ -350,7 +350,7 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace)
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
     logCall("temporal", {{"pairs", std::to_string(pairs)}, {"warm", std::to_string(warm)},
-               {"variant", variant.empty() ? "forward" : variant},
+               {"variant", variant.empty() ? "deferred" : variant},
                {"S0_off_stay", d6(S0.stat.meanAbsDiff)},
                {"S1_fb1_stay", d6(S1.stat.meanAbsDiff)},
                {"S2_fb12_stay", d6(S2.stat.meanAbsDiff)},

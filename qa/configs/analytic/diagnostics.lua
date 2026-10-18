@@ -17,7 +17,8 @@ return {
     config_reload = false,
     shader_reload = false,
     picking = false,        -- 不加 picking/highlight pass（图逐位同基线形态）
-    rpc = false,            -- llm_debug 截图足够，不需要 RPC
+    rpc = false,            -- 冻结目录保持关；imgqa probe 复制副本后改写此键走 RPC 单启动
+                            -- 三拍（后缓冲 + gbuf 通道 0/3，2026-10-18 重立，见 probe.cpp 头注）
     -- 阴影键已迁出（批 N6b）→ 同目录 shadow.lua 的 mode = "none"（= 关键 1：
     -- sampleShadow1Tap 恒 1.0，无遮挡）。旧键 shadow_pass 在本文件出现即启动失败。
     -- 键名坑的教训原样保留：这里曾写 camelCase 的 shadowPass，解析器不认 → 静默回落
