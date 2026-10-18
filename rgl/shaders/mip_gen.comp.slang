@@ -8,11 +8,18 @@
 //（recordMipBlitChain2d，同上传 CB，字节保真 + 双线性降采样）。计划文档"先 LINEAR blit
 // 过渡"即此路径。
 //
-// **降采样公式（单 tap LINEAR = 4-tap box）**：dst 像素 (x,y) 对应 src 的 2×2 texel 块
-// (2x,2y)/(2x+1,2y)/(2x,2y+1)/(2x+1,2y+1)，块中心 texel 坐标 = (2x+0.5, 2y+0.5)，归一化
-// uv = ((x+0.25)/dstW, (y+0.25)/dstH)。硬件双线性在该点恰好取 2×2 texel 各 25%
-//（CLAMP_TO_EDGE 越界钳制为标准边缘近似）——一次 SampleLevel(srcMip) 即精确 box，
-// 无需显式 4 tap。
+// **降采样公式（单 tap LINEAR = 4-tap box）**：dst 像素 (x,y) 覆盖 src 的 2×2 texel 块
+// (2x,2y)/(2x+1,2y)/(2x,2y+1)/(2x+1,2y+1)。该块在 src **边坐标**下跨 [2x, 2x+2)，中心
+// = 2x+1，即 texel 2x 与 2x+1 的**分界线**（不是任何纹素的中心），归一化
+// uv = (2x+1)/srcW = **((x+0.5)/dstW, (y+0.5)/dstH)**。硬件双线性在该点恰好取 2×2 texel
+// 各 25%——一次 SampleLevel(srcMip) 即精确 box，无需显式 4 tap。
+// 🔴 **偏移量是 0.5，不是 0.25**（2026-10-18 债-137 定案）。原式 `(x+0.25)/dstW` 落到 src 边
+// 坐标 2x+0.5 = **texel 2x 的正中心** ⟹ 双线性权重 1/0/0/0 = **点抽样** ⟹ 整条链零滤波
+//（每级都是上一级的隔行抽取），缩小面逐像素读到相距 2^N 的孤立纹素 ⟹ 平面墙/广场白散斑
+//（正是本模块立项要消除的东西，却因这个常数从未生效）。sRGB 走 blit 链不受影响 ⟹ 症状是
+//「albedo 干净、normal 碎」，极易误诊成材质/光照问题（确实被误诊过一次 → normalmap.slang
+// 末尾 2026-10-05 那两轮 specular-AA 实验）。判据：砖墙窗口成片亮点 86 → 2，法线相邻夹角
+// p95 24.3° → 7.9°，而后者与**独立盒平均参考实现**算出的 ≈8° 对上（不是"调糊了"）。
 //
 // **布局契约（MipGenPush，12B scalar 布局；C++ mip_gen.cppm 同名 struct static_assert
 // 12B，任一侧漂移编译失败——CullPush 先例）**：
@@ -42,7 +49,8 @@ void main(uint2 gid : SV_DispatchThreadID)
     {
         return;
     }
-    // 2×2 块中心采样点（见文件头公式）：单 tap LINEAR = 精确 box
-    float2 uv = (float2(gid) + 0.25f) / float2(push.dstWidth, push.dstHeight);
+    // 2×2 块中心采样点（见文件头公式）：单 tap LINEAR = 精确 box。0.5 = 块中心落在 texel
+    // 分界线上；写成 0.25 会退化成点抽样（债-137）
+    float2 uv = (float2(gid) + 0.5f) / float2(push.dstWidth, push.dstHeight);
     dstTex.Store(gid, srcTex.SampleLevel(linearSampler, uv, (float)push.srcMip));
 }

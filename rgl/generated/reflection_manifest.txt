@@ -27,7 +27,7 @@ f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
 effbf005ee0fddf5ea1f3ef0be3e952ed6fc4413  rgl/shaders/izb_prime.comp.slang
 b4e1ba49e66440300ecb1edb896f74f534571df2  rgl/shaders/meshlet_cull.comp.slang
-a03fe5c9df22cbb8ff877ea5502796a085d280bf  rgl/shaders/mip_gen.comp.slang
+563d9705e6adc8d3f706a33ff837d675bd76cd41  rgl/shaders/mip_gen.comp.slang
 74fb34e9dd1c2f86a128fed7f9ee909ae450f9f8  rgl/shaders/stream_fanout.comp.slang
 335ef5666633ccd9be129876cc1ef884623a26f5  rgl/shaders/ao.frag.slang
 3cd739507582e10ccf96c9a7dadc21875e1f376f  rgl/shaders/ao_apply.frag.slang
@@ -78,7 +78,7 @@ f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
 effbf005ee0fddf5ea1f3ef0be3e952ed6fc4413  rgl/shaders/izb_prime.comp.slang
 b4e1ba49e66440300ecb1edb896f74f534571df2  rgl/shaders/meshlet_cull.comp.slang
-a03fe5c9df22cbb8ff877ea5502796a085d280bf  rgl/shaders/mip_gen.comp.slang
+563d9705e6adc8d3f706a33ff837d675bd76cd41  rgl/shaders/mip_gen.comp.slang
 74fb34e9dd1c2f86a128fed7f9ee909ae450f9f8  rgl/shaders/stream_fanout.comp.slang
 335ef5666633ccd9be129876cc1ef884623a26f5  rgl/shaders/ao.frag.slang
 3cd739507582e10ccf96c9a7dadc21875e1f376f  rgl/shaders/ao_apply.frag.slang
@@ -128,7 +128,7 @@ b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slan
 f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
 effbf005ee0fddf5ea1f3ef0be3e952ed6fc4413  rgl/shaders/izb_prime.comp.slang
-a03fe5c9df22cbb8ff877ea5502796a085d280bf  rgl/shaders/mip_gen.comp.slang
+563d9705e6adc8d3f706a33ff837d675bd76cd41  rgl/shaders/mip_gen.comp.slang
 74fb34e9dd1c2f86a128fed7f9ee909ae450f9f8  rgl/shaders/stream_fanout.comp.slang
 335ef5666633ccd9be129876cc1ef884623a26f5  rgl/shaders/ao.frag.slang
 3cd739507582e10ccf96c9a7dadc21875e1f376f  rgl/shaders/ao_apply.frag.slang
