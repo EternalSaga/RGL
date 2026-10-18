@@ -115,6 +115,8 @@ set(RGL_TEST_SOURCES
     test_izb_create.cppm             # gpu 套件 11.3-1c：IZB grid-of-lists 原子创建 + early-Z priming
     test_izb_mask.cppm               # gpu 套件 11.3-1d：光空间保守光栅 × IZB 走链 mask 判定
     test_izb_engine_contract.cppm    # gpu 套件 11.3 补账：引擎真 SPV 的 ndc 口径/字节偏移/guard 契约
+    test_mip_gen_chain.cppm          # gpu 套件 债-137：引擎真 mip_gen.comp.spv 的降采样采样点（0.5 而非 0.25）
+                                     # —— 棋盘/水平梯度/垂直梯度三条（后两条是对称对，只改对一轴必红）
     test_mdi_drawindex.cppm          # gpu 套件 MDI 门：DrawIndex 语义 × stride16 × 零计数不跳号（docs/mdi_plan.md §6）
     test_mdi_task_probe.cppm         # gpu 套件 ★M-2 task 路机制探针：DrawIndex 只在 task 入口 + payload 通路自证 + 守卫 mesh 毒化检测器（docs/mdi_plan.md §19.12）
     test_meshlet_geometry.cppm       # gpu 套件 ★1-a0：簇产物 4 段 GPU 上传的设备级逐字节回读校验
