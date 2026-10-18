@@ -267,7 +267,7 @@ export struct SceneFrameData {
  * 把"谁生产它"这条从名字里抹掉）；而**布局**必须单源于 `cull.comp.slang`（100B：@0 planes[6]
  * float4 | @96 sequenceCount u32，scalar layout 无尾 pad ≤ maxPushDataSize 256B）。别名同时
  * 满足两者——原先这里是手写镜像 struct + 一条 sizeof assert，即布局的第二份真相源，已删；
- * 布局与字段偏移现由第 10 条反射管线的生成物自带 assert 担保。
+ * 布局与字段偏移现由 compute push 反射（`rgl_reflect_compute_push`）的生成物自带 assert 担保。
  *
  * 🔴 **前提：生成物没有任何默认成员初始化器**（手写版的 `planes[6]{}` / `sequenceCount = 0`
  * 随镜像一起删，且**不能加回去**——生成物是产物，加初始化器 = C++ 侧偷偷改契约）。而

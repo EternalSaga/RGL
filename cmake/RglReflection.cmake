@@ -141,7 +141,7 @@ endfunction()
 
 # reflect：显式重建全部反射产物（工具由 add_dependencies 先建；管线无条件重跑）。
 add_custom_target(reflect
-    COMMENT "重跑 11 条反射管线（7 条 slangc reflection + features + param_semantics + compute_access（一条出两份产物：JSON 方向表 + binding 名接口表 .cppm）+ compute_push）")
+    COMMENT "重跑反射管线（条数与构成不在这里抄：本文件下方的 rgl_reflect_slang / _compute_access / _compute_push 调用就是清单，加一条不必回来改这句话）")
 add_dependencies(reflect reflection_tool)
 
 # types 管线

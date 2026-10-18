@@ -179,9 +179,11 @@ imgqa *ARGS="":
     {{ BUILD }}/tools/imgqa/imgqa {{ ARGS }}
 
 
-# 重跑 10 条反射管线（改动 shaders/*.slang / *_schema.lua / tools/templates /
-# features_config.json / param_semantics.json 后必须执行；产物 rgl/generated/ 已入版本控制需随
-# 改动一并提交，否则 reflection_check 守卫会拦构建）
+# 重跑反射管线（**条数不在这里抄**——本行曾写「10 条」而 cmake 那处写「11 条」，同一件事两份
+# 副本漂了一个数，没人发现；清单的唯一真相源 = 本文件下方 rgl_reflect_* 调用）。
+# 改动 shaders/*.slang / *_schema.lua / tools/templates / features_config.json /
+# param_semantics.json 后必须执行；产物 rgl/generated/ 已入版本控制需随改动一并提交，
+# 否则 reflection_check 守卫会拦构建）
 reflect:
     @cmake --build {{ BUILD }} --target reflect
 
