@@ -1,6 +1,7 @@
 # 透明混合管线（deferred 单路线下的 BLEND 落地）
 
-> **状态：现行·进行中**（2026-10-18 立项并同日开工）。
+> **状态：现行·四刀全落地**（2026-10-18 立项并同日开工，刀0–刀3 见 §5）。本文剩余 = **§4 的已知
+> 边界**（其中两条已升成台账条目，行内标注），不是"还有刀没挥"。
 > 上游：`docs/archive/图变体收敛_plan.md` §9-6 的保留清单——那一笔「transparent 段与词表条目 ✓（自定义图可消费）」
 > 就是本文要还的账：段还在，消费者没了。
 
@@ -91,11 +92,15 @@
 |---|---|---|
 | 透明不入 GPU culling 候选 | `render_list_impl.cppm`（`candidate = !mat.alphaModeBlend`）+ `main_scene.cppm` C3 同守卫 | 透明图元数量大到 CPU 逐条录制成为 `just cpu` 可见项 |
 | 透明不是阴影投影体 | `collectShadowCasters` 排 blend | 需要「玻璃投影」这类语义时（物理上多半该半透，不是不投） |
-| picking / object_id 不含透明 | `replayClonedPass` 只重放 opaque 段 | imgqa 的可见集判据在带透明场景上出现系统性归属错 |
-| 透明面无 velocity 写入 | `velocity.frag` 走深度重建 | 运动透明体 + TAA/FSR 拖影被真实观察到 |
-| SSR 把透明内容当场景色反射；AO 拿背后不透明面的 AO 乘透明像素 | 透明段排在 `light` 后、`ao` 前（§1-1） | 交付场景出现 BLEND 资产（今天 0 个） |
-| 软阴影变体（PCSS / EVSSM / IZB）不覆盖透明 frag ⟹ 透明体只有 CSM 1-tap | `softShadowVariantSpec` 只认 `light.frag*` 前缀 | 与已删 forward 同状态（forward 三个阴影 frag 也从没进变体族）；交付开 PCSS/EVSSM 且场景有 BLEND 时重开 |
-| 透明 frag 的 `isLamp ? 0.25` 是**照抄现役延迟行为**，不是独立判断（该 0.25 本身口径存疑：它当年补偿的 pack 强度早在 2026-09-29 被归位成 1.0） | `transparent.frag.slang` 的 `isLamp` 分支 + `light.frag.slang` 同族项 | **债-131 裁决落地时**——两处必须一起改，只改一处 = 透明/不透明玻璃自发光差 4 倍 |
+| picking / object_id 不含透明 ⟹ **透明物体点不中、选中也高亮不出来**。这不是"调试工具有偏差"，是功能缺失：picking pass 的段名写死 `opaque`，克隆重放也只取 opaque 段 ⟹ blend 图元在该段里一条都没有，高亮对透明材质**静默零 draw** | `decoratePickingPass` 的 `drawSource = "opaque"` + `Renderer::replayClonedPass` 的 `segmentSpan("opaque", …)` | 任何人要点选/高亮一个透明物体（含 imgqa 可见集判据在带透明场景上归属错）。两条同一个修法：给透明段配一条克隆条目 + picking 的段名可选 |
+| 透明面在**时域滤波下借的是背景的位移**：`taa.frag` 的重投影读 `depthTex`，而透明段不写深度 ⟹ 透明像素的历史按"它背后那面不透明墙"的深度与位移取。**静止玻璃 + 纯平移机位同样错**，不需要透明体自己动 | `taa.frag` 的 `depthTex.Load` 重投影 + `state_kit` 的 `transparentState.depthWrite = false`；`velocity.frag` 同源（也走深度重建） | 带 BLEND 资产开 `aa = taa`（出厂场景 0 BLEND ⟹ 从未观察到）。重开时**先测静止透明体 + 平移机位**的拖影量，别只测运动透明体——后者只是前者的特例 |
+| 透明面对 SSR 是**两件事**，别并成一句：① 射线行进走深度图 ⟹ 透明面**既不产生也不遮挡反射**（射线穿过去）；② 命中点的颜色里已混进透明层（透明段排在 `light` 后、写同一张 `scene_hdr`）⟹ 反射颜色被污染。AO 与②同形：拿背后不透明面的 AO 乘透明像素 | `ssr_trace.frag` 的 `depthTex.Load`；段序见 §1-1 | 交付场景出现 BLEND 资产（今天 0 个）。①②修法不同，别一起还。②的现成抓手 = `scene_hdr` 的 alpha 通道：blend 的 alpha 方程是 `ONE/ZERO`（`applyDynamicState`）⟹ 它存的正是"最近那层透明的 alpha"，而 `ao_apply` 原样透传、`tonemap` 只取 `.rgb` ⟹ **一路传到屏幕没人吃** |
+| 软阴影变体（PCSS / EVSSM / IZB）不覆盖透明 frag ⟹ 透明体只有 CSM 1-tap。**它只是"形态不同源"这一类里的一个实例**：刀0 抽 `pbr.slang` 只解决了**算式**重复，没解决**消费形态**重复（材质来源 = per-object 表 vs G-buffer、类别传递 = 编译期宏 vs `emissive.a` 通道、湿面调制不参与、阴影档数）⟹ 以后每给 `light.frag` 加一档，都要人**想起来**问"透明侧跟不跟"，而没有任何工具会问 | `softShadowVariantSpec` 只认 `light.frag*` 前缀；差异清单在 `transparent.frag.slang` 头注释（**是一份清单，不是一道检查**） | 交付开 PCSS/EVSSM 且场景有 BLEND 时重开。"想起来"这件事本身 → **债-136** |
+| 透明 frag 的 `isLamp ? 0.25` 是**照抄现役延迟行为**，不是独立判断（该 0.25 本身口径存疑：它当年补偿的 pack 强度早在 2026-09-29 被归位成 1.0） | `transparent.frag.slang` 的 `isLamp` 分支 + `light.frag.slang` 同族项 | **债-131 裁决落地时**——两处必须一起改，只改一处 = 透明/不透明玻璃差 4 倍。⚠ "两处一起"目前**没有断言守着** |
+| 与不透明面**严格共面**的透明面会被整块剔掉：透明段只改 depthWrite / colorBlend / cullMode，深度比较吃 `RenderState` 的默认 `eLess` ⟹ 共面 = 相等 = 拒。水面对齐地形、玻璃贴平墙 = 看不见 | `state_kit` ctor（未设 `depthCompareOp`）+ `shader.cppm::RenderState` 默认值；picking / highlight 当年正是踩了这条才显式写 `eLessOrEqual` | 真实资产出现共面透明。⚠ **照 picking 那样换比较子不是正解**（`eLessOrEqual` 会让透明层与它自己混合），正解是 depth bias——`applyDynamicState` 已把 `setDepthBias` 做成动态状态，机制上通，缺的是"给谁开、开多少"的实测 |
+| 「剔背面 ⟹ 每像素单层」只对**单面封闭网格**成立。loader 是用**复制背面三角形**实现 `doubleSided` 的 ⟹ 一个 `doubleSided=true` 的封闭盒子，除近墙外还留一份远墙的正面副本 = 混两层，正是剔背面要防的那个症状；而 cull 是**按段**的全局状态，按材质调不了 | `state_kit` 的 `transparentState.cullMode = eBack` + `gltf_loader_impl.cppm::duplicateForDoubleSided` | 资产里出现 doubleSided 的 BLEND 封闭网格。修法有先例：`Renderer::executeMeshletOverlay` 已示范"在一小段 draw 前后 set / restore 动态状态"，而 `setCullMode` 本就是动态状态 |
+| 场景含 BLEND 图元**必须有 `environment` 段**，否则装配期抛（刀2 的 `validateBlendSupport`）。这条约束是**装配层的不对称**，不是渲染需要：`addLightEntry` 在 env 缺失时给 binding 9/10 填**占位槽 0**（shader 端 `mipRange=0` 不采样 = 黑天回落），而 `addModelEntry` 在 env 缺失时**干脆不登记** binding 4/5，`transparent.frag` 经 `env.slang` 无条件声明 binding 4 ⟹ 建 shader 失败 | `shader_registry_impl.cppm` 的 `addModelEntry` / `addLightEntry` 两处 env 分支；`main_scene.cppm::validateBlendSupport` | 想在不挂 env 的场景里画透明。修法 = 照 `addLightEntry` 给模型条目补占位槽（几行），补完**同时删掉** `validateBlendSupport` 的 env 那条——留着 = 供一条本可以不存在的前置检查 |
+| 透明段的**常驻像素覆盖 = 零**：出厂场景 0 BLEND ⟹ 每天跑的 `just smoke` / `just regress` 里透明段是一个**空 pass**；唯一常驻的透明检查 `just imgqa blend-sort` 是全 unlit + aa 关 + 无阴影 + 无法线贴图，且要 GPU、不在 `just gates` 里。四支类别变体里 pbr / vegetation / light 三支在"有人会自动跑到"这个意义上零像素覆盖。刀1 验收用的 `transparent.glb` **没有进 `qa/configs/` 任何一份冻结配置** ⟹ 那次"透明资产真出图"是一次性手工读数，现在没有任何命令能重放它 | `qa/configs/` 只有 `blend_sort` 一份透明输入；`Justfile` 的 `gates` / `tools-check`（只编 imgqa + 跑 selftest）；`tools/qa_scenes.py::scene_blend_sort` | 已在做透明改动时立刻需要 → **债-134** |
 
 ## 5. 施工读数
 
