@@ -136,18 +136,21 @@ bool hasUnknownKeyWarn(const std::string& delta, std::string_view prefix, std::s
 // scene_config
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("scene_config：缺文件回落默认（warn 不报错）——默认 = 11 管线 + 4 styles + 空 entities") {
+TEST_CASE("scene_config：缺文件回落默认（warn 不报错）——默认 = 12 管线 + 4 styles + 空 entities") {
 	// 缺文件路径：temp 目录下不存在的名
 	std::string missing = (std::filesystem::temp_directory_path() / "rgl_cfg_no_such_scene.lua").string();
 	auto r = loadSceneConfig(missing);
 	REQUIRE(r.has_value());
-	// 默认画像（defaultSceneConfig，scene_config_impl.cppm:62-86）。
+	// 默认画像（defaultSceneConfig，scene_config_impl.cppm:62-91）。
 	// **实际行为**：缺文件路径**不经 parseEntities**，entities 保持**空**——
 	// 与"存在但空的 lua"不同（下一条），这个不对称是既有语义，钉住防"顺手统一"。
-	CHECK(r->pipelines.size() == 11);
+	CHECK(r->pipelines.size() == 12);
 	CHECK(r->styleMap.size() == 4);
 	CHECK(r->materialRules.size() == 2);
-	CHECK(r->deferredStyleMap.size() == 2);
+	CHECK(r->deferredStyleMap.size() == 3);
+	// unlit 2026-10-18 起**必须在榜**（.at 缺键即抛 = 断言）：KHR_materials_unlit 材质
+	// 回落 deferred_geometry 被静默打光 = D1 破口本体（探针重立实测抓出）。
+	CHECK(r->deferredStyleMap.at("unlit") == "deferred_geometry_unlit");
 	CHECK(r->entities.empty());
 	CHECK(r->spin == true);
 	CHECK(r->showCube == true);
@@ -167,7 +170,7 @@ TEST_CASE("scene_config：空表 return {} → 各字段 = 默认值，且 entit
 	expectNear(r->exposure, 1.0, 0.0, 1e-6);
 	expectNear(r->aoStrength, 0.0, 0.0, 1e-6);
 	// 管线/styles = 默认集（parsePipelines 缺段不覆盖）
-	CHECK(r->pipelines.size() == 11);
+	CHECK(r->pipelines.size() == 12);
 	CHECK(r->styleMap.size() == 4);
 	CHECK(r->styleMap.at("pbr") == "model_pbr");
 	// **实际行为**（parseEntities 缺段合成，scene_config_impl.cppm:138-144）：

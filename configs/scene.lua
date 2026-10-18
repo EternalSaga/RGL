@@ -107,6 +107,11 @@ return {
             frag = "generated_shaders/deferred_geometry_light.frag.spv",
         },
         {
+            name = "deferred_geometry_unlit",
+            mesh = "generated_shaders/model.mesh.spv",  -- class 3 → emissive.a：unlit 本色（KHR_materials_unlit，对齐 forward model.frag；2026-10-18 补 D1 破口）
+            frag = "generated_shaders/deferred_geometry_unlit.frag.spv",
+        },
+        {
             name = "skybox",
             mesh = "generated_shaders/skybox.mesh.spv",  -- Phase 5.5 批次 4：全屏大三角采 env cubemap
             frag = "generated_shaders/skybox.frag.spv",
@@ -130,9 +135,12 @@ return {
         { pattern = "Emissive", style = "light" },
         { pattern = "Foliage", style = "vegetation" },
     },
-    -- Phase 8 批次 F：风格→deferred 路线规格名（未列风格回落 deferred_geometry 本体）；
-    -- 变体把类别写进 G-buffer emissive.a，light pass 分支复刻 forward 专属视觉
+    -- Phase 8 批次 F：风格→deferred 路线规格名（未列风格回落 deferred_geometry 本体；
+    -- 变体把类别写进 G-buffer emissive.a，light pass 分支复刻 forward 专属视觉。
+    -- ⚠ unlit 2026-10-18 起**必须在榜**：KHR_materials_unlit 材质回落 deferred_geometry
+    --   = 被静默当 PBR 打光（D1 破口，aa-coverage 电平自检实测抓出，见类 3 变体头注）
     deferred_styles = {
+        unlit = "deferred_geometry_unlit",
         vegetation = "deferred_geometry_vegetation",
         light = "deferred_geometry_light",
     },

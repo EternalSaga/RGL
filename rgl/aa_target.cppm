@@ -237,7 +237,8 @@ GltfModel toGltfModel(const TargetShape& shape) {
 		prim.bounds = boundsOf(prim.vertices);
 		prim.baseColor = color;
 		prim.materialIndex = matIndex;
-		prim.unlit = true;  // 走 scene.lua styles.unlit → model.frag（baseColor × 白纹理）
+		prim.unlit = true;  // forward 走 styles.unlit → model.frag；deferred 走
+		                    // deferred_styles.unlit → deferred_geometry_unlit（class 3，本色直出）
 		prim.doubleSided = true;
 		prim.metallic = 0.0f;
 		prim.roughness = 1.0f;

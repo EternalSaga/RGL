@@ -49,6 +49,7 @@ rgl_shader(deferred_geometry.frag DEFERRED_GEOM_FRAG_SPV model material scene no
 # DEPS 含本体——改本体必触发两变体重编译）
 rgl_shader(deferred_geometry_vegetation.frag DEFERRED_GEOM_VEG_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
 rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
+rgl_shader(deferred_geometry_unlit.frag DEFERRED_GEOM_UNLIT_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
 # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）
 rgl_shader(light.mesh LIGHT_MESH_SPV)
 rgl_shader(light.frag LIGHT_FRAG_SPV scene lights sky shadow)

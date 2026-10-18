@@ -14,7 +14,7 @@ import shadow;   // Phase 11 批 11.2：级联阴影采样（binding 12/13，与
 //      相同：diffuse=最高 mip 全环境平均、specular=反射向量+roughness→LOD、Schlick-F
 //      能量补偿）；mipRange=0（无环境）回落常 ambient（旧行为，BIT 兼容）。
 //   ② skybox 背景合成——天空像素（G-buffer position 清 0 = 无几何）重建世界射线采 env
-//      cubemap（与 forward skybox.frag 同式，免 resolution）；mipRange=0 = 黑天。
+//      cubemap（与 forward skybox.frag 同式，免 resolution）；mipRange=0 或 intensity=0 = 黑天。
 //
 // 绑定：（批 N+1 起 3 号位**空出**——sceneData 全区读已退役）；4=albedo(RGBA8_SRGB)；
 //      5=normal(RG16_SNORM oct)；
@@ -171,7 +171,15 @@ float4 main(LightInput input) : SV_Target0
     float4 emis = emissiveTex.Sample(gbufferSampler, uv);
     const float materialClass = emis.a;
     const bool isVeg = materialClass > 0.5 && materialClass < 1.5;
-    const bool isLamp = materialClass > 1.5;
+    const bool isLamp = materialClass > 1.5 && materialClass < 2.5;
+    // class 3（2026-10-18）：unlit = baseColor 原样出像素（glTF KHR_materials_unlit），
+    // 对齐 forward model.frag：无光照、无自发光相加、无阴影。此前 deferred 没有 unlit 路
+    //（deferred_styles 缺该风格 → 静默回落 deferred_geometry 被当 PBR 打光 = D1 破口，
+    // 探针重立时由 aa-coverage 电平自检抓出，docs/图变体收敛_plan.md）。早退在 env 采样前
+    // 安全：SampleLevel 显式 LOD 不取偏导（上方 ② 的"现行理由"），sky 分支本就同款早退。
+    const bool isUnlit = materialClass > 2.5;
+    if (isUnlit)
+        return float4(albedo, 1.0);
     if (isVeg || isLamp)
         metallic = 0.0;
 
@@ -207,7 +215,15 @@ float4 main(LightInput input) : SV_Target0
     float3 envSky = envMapL.SampleLevel(envSamplerL, dir, 0.0).rgb;
     if (dot(P, P) < 1e-10)
     {
-        if (env.mipRange > 0.0)
+        // 天穹在场 = env 资产已卷积（mipRange>0）**且 env 总闸开**（intensity>0）。
+        // ⚠ 2026-10-18 加读 intensity（探针重立定案）：本分支此前只门控 mipRange ⟹
+        // 「intensity=0 关环境」在 deferred 上**永远不归零**天穹（forward 由 skybox 标志
+        // 关天穹，该标志是 forward draw 侧 knob，随 forward 一起删）——imgqa 合成 profile
+        // 的 temporal 抑制比 / aa-coverage 电平被逐相位变化的天穹污染实测抓出。
+        // 语义定案：intensity **不乘**天穹亮度（它是 env 总闸 + IBL 标定系数，不是显示增益），
+        // 但 =0 时天穹与 IBL 一起关（本引擎里没人要「IBL 全关只剩天穹」的组合；
+        // 反向论证 = 本行改动前 deferred 连「env 全关」都表达不了）。
+        if (env.mipRange > 0.0 && env.intensity > 0.0)
             return float4(envSky, 1.0);
         return float4(0.0, 0.0, 0.0, 1.0);  // 无环境 = 黑天（旧行为：清 0 G-buffer 光照亦黑）
     }

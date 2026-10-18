@@ -58,7 +58,7 @@ void readBool(sol::table table, const char* key, bool& into) {
 		into = *v;
 }
 
-/** defaultSceneConfig 定义（接口注释见 scene_config.cppm）：六条内建 pipeline + styles {unlit,pbr} + spin。 */
+/** defaultSceneConfig 定义（接口注释见 scene_config.cppm）：内建管线集 + styles {unlit,pbr} + spin。 */
 SceneConfig defaultSceneConfig() {
 	SceneConfig cfg;
 	cfg.pipelines = {
@@ -74,12 +74,17 @@ SceneConfig defaultSceneConfig() {
 			"generated_shaders/deferred_geometry_vegetation.frag.spv"},
 		{"deferred_geometry_light", "generated_shaders/model.mesh.spv",
 			"generated_shaders/deferred_geometry_light.frag.spv"},
+		{"deferred_geometry_unlit", "generated_shaders/model.mesh.spv",
+			"generated_shaders/deferred_geometry_unlit.frag.spv"},
 		{"skybox", "generated_shaders/skybox.mesh.spv", "generated_shaders/skybox.frag.spv"},
 	};
 	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"},
 		{"vegetation", "model_vegetation"}, {"light", "model_light"}};
 	cfg.materialRules = {{"Emissive", "light"}, {"Foliage", "vegetation"}};
-	cfg.deferredStyleMap = {{"vegetation", "deferred_geometry_vegetation"},
+	// unlit 必须上榜（2026-10-18）：缺表回落 deferred_geometry = KHR_materials_unlit
+	// 材质被静默打光（D1 破口本体，见 deferred_geometry_unlit.frag.slang 头注）。
+	cfg.deferredStyleMap = {{"unlit", "deferred_geometry_unlit"},
+		{"vegetation", "deferred_geometry_vegetation"},
 		{"light", "deferred_geometry_light"}};
 	cfg.spin = true;
 	return cfg;

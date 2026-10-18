@@ -479,7 +479,7 @@ void writeSyntheticRenderGraphLua(const std::string& outDir, const ProfileOpts& 
     // swapchain 附件 → 启动失败，实测踩过）。
     fs::copy_file(profileTemplate() + "/render_graph.lua", outDir + "/render_graph.lua",
         fs::copy_options::overwrite_existing);
-    // variant 重写（izb 判据要 deferred；模板默认 forward）：只动 variant 行的字符串值
+    // variant 重写（izb 判据要 deferred；模板默认 2026-10-18 起已是 deferred）：只动 variant 行的字符串值
 
     if (o.variant.empty())
     return;
@@ -605,16 +605,21 @@ void writeSyntheticSceneLua(const std::string& outDir, const ProfileOpts& o)
         "\"model_vegetation\", light = \"model_light\" },\n"
         "    material_styles = { { pattern = \"Emissive\", style = \"light\" },\n"
         "      { pattern = \"Foliage\", style = \"vegetation\" } },\n"
-        "    deferred_styles = { vegetation = \"deferred_geometry_vegetation\",\n"
+        "    deferred_styles = { unlit = \"deferred_geometry_unlit\",\n"
+        "      vegetation = \"deferred_geometry_vegetation\",\n"
         "      light = \"deferred_geometry_light\" },\n";
     writeFile(outDir + "/scene.lua",
         "return {\n" + entities
           + styles
-        // 环境（intensity / skybox 由 ProfileOpts 给；env 文件与交付配置同一张 .hdr）
-          + "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n"
-        "      intensity = "
+        // 环境（intensity / skybox 由 ProfileOpts 给；env 文件与交付配置同一张 .hdr）。
+        // ⚠ 资产**恒发**：styles 表引用 model_pbr_ibl，而引擎启动守卫拒「env 未启用 +
+        //   pbr_ibl」（env 描述符未映射 = 未定义采样，实测报错文案如此）——整段省略走不通。
+        //   deferred 天穹不读 skybox 标志（forward draw 侧 knob，随 forward 一起删）的污染
+        //   问题在引擎侧修：light.frag 天穹分支门控 `intensity > 0`（env 总闸语义，
+        //   2026-10-18 探针重立定案，docs/图变体收敛_plan.md §6.2）。
+          + "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n      intensity = "
             + std::to_string(o.envIntensity) + ", skybox = " + lb(o.skybox) + " },\n"
-          "    light = { direction = { "
+          + "    light = { direction = { "
             + j3(o.lightDir) + " }, color = { 1.0, 1.0, 1.0 },\n      intensity = "
             + std::to_string(o.lightIntensity) + ", ambient = { " + j3(o.ambient) + " } },\n"
             + "    spin = false, cube = false, exposure = " + std::to_string(o.exposure)

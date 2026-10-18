@@ -729,6 +729,12 @@ export class ShaderRegistry {
 				"generated_shaders/deferred_geometry_light.frag.spv"};
 			return &defaultDeferredGeomLight;
 		}
+		if (std::strcmp(name, "deferred_geometry_unlit") == 0) {
+			static const RGL::PipelineSpec defaultDeferredGeomUnlit{
+				"deferred_geometry_unlit", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry_unlit.frag.spv"};
+			return &defaultDeferredGeomUnlit;
+		}
 		if (const RGL::PipelineSpec* light = RGL::findLightSpec(name))
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
