@@ -17,7 +17,7 @@ import asset_table;
 
 namespace RGL {
 
-// addModelEntry/addSkyEntry/addCubeEntry/loadShaderEffect 定义（2026-09-02 编译提速
+// addModelEntry/addCubeEntry/loadShaderEffect 定义（2026-09-02 编译提速
 // A 方案）：SPV 加载 + 管线创建函数体移出接口 TU；本单元是叶子边。
 
 	void ShaderRegistry::fillSceneRegionSlots(RGL::PipelineBindings& b) {
@@ -212,7 +212,7 @@ namespace RGL {
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
 		// binding 0/1 顶点段：meshlet mesh 不声明 modelVertexBuffer（读簇顶点池 @17）⟹
-		// 批 M 过滤把这两条滤掉（不声明 = 不烘，skybox/light 条目同）；slotVertex 传
+		// 批 M 过滤把这两条滤掉（不声明 = 不烘，light 条目同）；slotVertex 传
 		// 纹理槽号只为占个合法值，不被任何 stage 消费。
 		b.slotVertex = textureSlot;
 		b.slotIndex = textureSlot;
@@ -274,39 +274,6 @@ namespace RGL {
 		assets.bindMeshletPipeline(assetId, entryIdx);
 	}
 
-	uint32_t ShaderRegistry::addSkyEntry() {
-		if (auto idx = pipelineIndex("skybox"))
-			return *idx;
-		const RGL::PipelineSpec* spec = findSpec("skybox");
-		if (!spec)
-			throw std::runtime_error("pipeline spec not found: skybox");
-		const auto* envAsset = env.get();
-		if (!envAsset)
-			throw std::runtime_error("skybox entry requires env cubemap uploaded");
-		RGL::PipelineBindings b{};
-		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
-		b.slotVertex = 0;
-		b.slotIndex = 1;
-		sceneData.ensure();
-		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
-		//（恒带上，SPV 未声明的那条由批 M 过滤自动裁掉——C++ 侧不登记谁用）
-		b.hasSceneData = true;
-		b.hasEnv = true;
-		b.slotEnv = envAsset->heapSlot;
-		b.envSamplerHeapOffset =
-			env.ensureSkySampler(envAsset->mipLevels) * res.getSamplerHeap().getDescriptorSize();
-		auto entry = PipelineEntry{.name = "skybox",
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
-				"skybox"),
-			.spec = *spec, .bindings = b};
-		const uint32_t index = static_cast<uint32_t>(entries.size());
-		indexByName[entry.name] = index;
-		entries.push_back(std::move(entry));
-		if (auto* logger = RLLogger::getInstance())
-			logger->debug("pipeline entry: skybox (env slot {}) → 下标 {}", b.slotEnv, index);
-		return index;
-	}
-
 	uint32_t ShaderRegistry::addLightEntry(uint32_t albedoSlot, uint32_t normalSlot,
 			uint32_t positionSlot, uint32_t metalRoughSlot, uint32_t emissiveSlot,
 			uint32_t samplerSlot, uint32_t shadowMapSlot, uint32_t shadowSamplerSlot,
@@ -323,7 +290,7 @@ namespace RGL {
 		const uint32_t descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		RGL::PipelineBindings b{};
 		b.descriptorSize = descriptorSize;
-		b.slotVertex = 0;   // binding 0/1 占位槽号（light mesh 不声明 = 批 M 过滤不烘，skybox 同）
+		b.slotVertex = 0;   // binding 0/1 占位槽号（light mesh 不声明 = 批 M 过滤不烘）
 		b.slotIndex = 1;
 		sceneData.ensure();  // 幂等创建 scene data buffer + 各子范围槽（批 N+1 起无返回槽号）
 		fillSceneRegionSlots(b);  // scene data 子范围载体（binding 表以该函数为准，别在此抄）
@@ -354,8 +321,8 @@ namespace RGL {
 			b.extra.push_back({.binding = 10, .sampler = true, .samplerHeapOffset = 0});
 		}
 		b.extra.push_back({.binding = 11, .sampler = false, .heapSlot = emissiveSlot});
-		// Phase 11 批 11.2：阴影图 12 + 专用 sampler 13（与 forward 模型条目**同号** →
-		// shadow.slang 才能作为两条光照路共用的契约，否则同一份采样代码要复制两份）。
+		// Phase 11 批 11.2：阴影图 12 + 专用 sampler 13（binding 号与 shadow.slang 的声明
+		// 成对；原「与 forward 模型条目同号 = 两条光照路共用一份采样代码」的理由已随刀②.2 失效）。
 		b.extra.push_back({.binding = 12, .sampler = false, .heapSlot = shadowMapSlot});
 		b.extra.push_back({.binding = 13, .sampler = true,
 			.samplerHeapOffset = static_cast<vk::DeviceSize>(shadowSamplerSlot)
@@ -535,9 +502,9 @@ void ShaderRegistry::bindPipelineToAsset(const char* name, uint32_t assetId) {
  * "两门同开"这个组合根本表达不出来，也就没有谁给谁让位）。两档都不开时原样返回
  * = 原版 SPV 红线构造性保证，同 addLightEntry 的 1e 模式——运行时 flag 分支会被 slang
  * fp 重排坑穿，2026-10-02 实测教训）。
- * 阴影消费 frag 恰 4 文件（rgl_shader_defined 声明面同源）；"light.frag" 前缀同时覆盖
- * light.frag 与 light.frag_IZB_CONSUME.spv，后者插后缀 = ..._IZB_CONSUME_EVSSM_SOFT.spv
- * = rgl_shader_defined2 命名。
+ * 阴影消费 frag = light.frag 一族（rgl_shader_defined 声明面同源；forward 三个消费 frag
+ * 已随刀②.2 删除）；"light.frag" 前缀同时覆盖 light.frag 与 light.frag_IZB_CONSUME.spv，
+ * 后者插后缀 = ..._IZB_CONSUME_EVSSM_SOFT.spv = rgl_shader_defined2 命名。
  */
 const RGL::PipelineSpec* ShaderRegistry::softShadowVariantSpec(const RGL::PipelineSpec* base) const {
 	if (!base)
@@ -548,8 +515,7 @@ const RGL::PipelineSpec* ShaderRegistry::softShadowVariantSpec(const RGL::Pipeli
 	const std::string_view path{base->fragSpv};
 	const auto slash = path.find_last_of("/\\");
 	const std::string_view file = slash == std::string_view::npos ? path : path.substr(slash + 1);
-	static constexpr std::array<std::string_view, 4> kShadowConsumers{
-		"model_pbr_ibl.frag", "model_vegetation.frag", "model_light.frag", "light.frag"};
+	static constexpr std::array<std::string_view, 1> kShadowConsumers{"light.frag"};
 	bool consumer = false;
 	for (const auto prefix : kShadowConsumers)
 		consumer = consumer || file.starts_with(prefix);

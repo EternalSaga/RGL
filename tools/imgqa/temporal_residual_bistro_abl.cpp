@@ -335,7 +335,7 @@ int runBistroSweep(int periods, double warmMult, const std::string& camera, doub
     bool diagBsOff, bool reject, const ClipArm& arm)
 {
     std::printf("bistro 真实场景时域残差（债-48，**只出数不判**）：交付配置 configs/ 原样"
-                "（deferred + env/skybox/IBL/AO/shadow 全开 + base_space=交付默认 true）\n"
+                "（deferred + env/IBL/AO/shadow 全开 + base_space=交付默认 true）\n"
                 "  %d×%d  静止机位  折叠 (2,%d,H,W)  周期数 %d  短窗档 α=0.12  长窗档 α=%s\n"
                 "  区域 = **全帧**（交付 picking=false 无 objectID，打开 = 改图形态；与 aa_target 的"
                 "数不可直接比，算子/域/τ 定义相同）\n",

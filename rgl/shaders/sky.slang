@@ -1,4 +1,6 @@
-// 天空盒契约（Phase 5.5 批次 4）：全屏大三角 + clip→world 射线重建
+// 天穹契约（Phase 5.5 批次 4 的 skybox 契约中存活的那半边）：clip→world 射线重建
+// （原全屏大三角 mesh skybox.mesh.slang 已随刀②.2 删除，本模块现消费者 = light.frag /
+//  ao.frag / velocity.frag / shadow.slang 选级）
 //
 // 数据通道 = 头区类型化 UBO（binding 22，`SceneHeaderBlock::skyInvVP`，迁移批 S-5；
 // Phase 5 bindless 原则：每帧变化的数据一律进 descriptor heap，不扩 DrawArgs）

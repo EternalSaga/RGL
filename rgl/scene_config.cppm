@@ -33,7 +33,9 @@ export struct PipelineSpec {
  * **Vulkan 层序** 0-5 = (+X,−X,+Y,−Y,+Z,−Z) 排列（素材面顺序定案表 =
  * docs/archive/phase5_5_plan.md 素材定案；nightSky 层序 1,3,5,6,2,4 / rainbow 方案 B
  * ft,bk,up,dn,rt,lf），完整路径 = dir + "/" + faces[i]。intensity 进 scene data
- * @48（env.slang readEnvParams）；skybox = 背景天穹开关（批次 4 消费）。
+ * @48（env.slang readEnvParams）；原 skybox 背景天穹开关已随 forward 绘制机制删除
+ * （2026-10-18 刀②.2，docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物 = intensity
+ * 总闸，light.frag sky 分支门控 mipRange>0 && intensity>0）。
  *
  * Phase 8 批次 ②b：`hdr` 非空 = 走 Radiance .hdr 环境路径（image_codec::decodeHdr →
  * CPU 等距柱状→cubemap 重投影 → RGBA16F 上传），**优先于** dir/faces 六面 PNG 路径；
@@ -45,7 +47,6 @@ export struct EnvironmentConfig {
 	std::string dir;
 	std::array<std::string, 6> faces;
 	float intensity = 1.0f;
-	bool skybox = true;
 	std::string hdr;      // Phase 8 ②b：.hdr 环境路径（非空优先于 faces）
 	uint32_t hdrSize = 2048;  // 重投影面边长（2 的幂）
 };
@@ -74,9 +75,10 @@ export struct SceneConfig {
 	std::string modelPath;                 // 旧单模型字段（entities 缺省时的兼容合成源，空 = 无模型）
 	std::vector<SceneEntityDesc> entities; // Phase 6 批次 5：entity 列表（非空 = 权威场景构成）
 	std::vector<PipelineSpec> pipelines;   // pipeline 规格列表
-	std::map<std::string, std::string> styleMap;  // Phase 4 批次 3：风格名→管线规格名
+	// 原 styleMap（Phase 4 批次 3：风格名→forward 管线规格名）已随刀②.2 删除——
+	// forward 规格与 styles 配置键同刀消失（docs/图变体收敛_plan.md §5）。
 	// Phase 8 批次 F：材质名连连看规则表（有序，首个命中生效）——材质名含 pattern → 风格键。
-	// forward 经 styleMap、deferred 经 deferredStyleMap 落到各自规格名；空 = 全走 pbr。
+	// 风格键经 deferredStyleMap 落规格名；空 = 全走 pbr。
 	std::vector<std::pair<std::string, std::string>> materialRules;
 	std::map<std::string, std::string> deferredStyleMap;  // 风格名→deferred 规格名（缺省风格 = deferred_geometry）
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
@@ -175,10 +177,12 @@ export struct SceneKeyTrace {
 export std::vector<std::string> sceneConfigKnownKeys();
 
 /**
- * 默认配置：cube + model + model_pbr + model_phong（+model_pbr_ibl + skybox）
- * 六条内建 pipeline（SPV 路径与构建产物对应），无模型，开启旋转。
- * 默认 styles：unlit→model / pbr→model_pbr（Phase 4 批次 3，styles 表可选回落；
- * Phase 5 批次 3：改 pbr = "model_phong" 即切基础 Phong 路线，零 C++ 改动）。
+ * 默认配置：cube + deferred_geometry×4（本体/vegetation/light/unlit）五条内建
+ * pipeline（SPV 路径与构建产物对应），无模型，开启旋转。
+ * 默认 deferred_styles：unlit/vegetation/light → 对应 deferred 规格（缺表风格回落
+ * deferred_geometry 本体）。原 forward 规格（model/model_pbr/model_phong/model_pbr_ibl/
+ * model_vegetation/model_light）、skybox 规格与 styles 表已随刀②.2 删除
+ * （docs/图变体收敛_plan.md §5）。
  * @return 默认 SceneConfig（值）
  */
 export SceneConfig defaultSceneConfig();

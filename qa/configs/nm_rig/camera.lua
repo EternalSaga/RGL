@@ -1,5 +1,6 @@
 -- nm_rig 机位：离地 1 m、**俯角 25°**、垂直 fov 45°。三个数与 tools/qa_scenes.py 的
--- NM_CAM_H / NM_PITCH_DEG / NM_FOV_V 以及 env_band_hdr.py 的带子仰角**同源**。
+-- NM_CAM_H / NM_PITCH_DEG / NM_FOV_V 以及窄带 env 的带子仰角**同源**（env 生成脚本
+-- env_band_hdr.py 已随刀②.2 归档，git history 可查）。
 --
 -- ## 为什么是 25° 而不是 env_band 的掠射 3°
 --

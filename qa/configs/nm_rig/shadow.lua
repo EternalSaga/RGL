@@ -7,8 +7,8 @@
 -- bistro 上阴影确有贡献——但那是**直射光开着**的场景；本 rig 直射光已归零，混淆源移除。
 --
 -- ⚠ 为什么两件事都得写：mode="none" 关图集与采样（旧 shadow_pass），izb=false 关 IZB 与
---   其 frag 变体（旧 izb_shadow）。本目录 render_graph.lua 是 **forward** 图而 IZB 只接
---   deferred light pass ⟹ izb 开着会撞 gate_lint 启动期 error；且 N6a 起 izb 的代码默认
+--   其 frag 变体（旧 izb_shadow）。本目录走内建 deferred 图（刀② 起；原锁 forward 时
+--   izb 开着会撞 gate_lint「非 deferred 图」那条启动期 error）；且 N6a 起 izb 的代码默认
 --   是 true，"没写"不等于"关"。
 --
 -- ⚠ 缺 shadow.lua 不是"没阴影"而是**回落交付形态 = 有影**（整目录 --config 用法下这是

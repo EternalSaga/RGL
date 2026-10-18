@@ -27,14 +27,14 @@ namespace RGL::imgqa {
 //
 // 为什么必须有这条（一句话版）：合成靶 aa_target 是 LDR 黑白细杆，交付档 `frac>64LSB` 本来就是
 // 0，症状幅度比 bistro 的 HDR 高亮细线低一个量级 ⟹「meanSwing 降 7.2×」推不出「门框缝隙没了」。
-// 本变体在**交付配置**（deferred + env/skybox/IBL/AO/shadow 全开）+ **用户报障机位**上重测
+// 本变体在**交付配置**（deferred + env/IBL/AO/shadow 全开）+ **用户报障机位**上重测
 // 短窗 vs 长窗（两档显式 `feedback`，历史：长窗档曾由 `static_boost` 给出，批 13.14b 已删）
 // 的绝对残差，并顺带出债-47：`phaseAverageLuma` 梯度能量比
 // 的**线性域**读数（`docs/phase13_plan.md` §1.5 的 0.671 是显示空间旧账，本处只出数、改判由
 // 主 agent 记账，本工具不动那份文档）。
 //
 // 与 aa_target profile 的三处口径差异（每处都是被迫的，读数字前必读）：
-//   ① 配置 = `deliveryConfigDir` 模式（红线 4：合成副本不覆盖 env/skybox 路径，bistro 的 HDR
+//   ① 配置 = `deliveryConfigDir` 模式（红线 4：合成副本不覆盖 env 路径，bistro 的 HDR
 //      高亮细线正是本症状的激励源）。路线 = 交付配置自己写的 deferred；`base_space` **钉真**
 //      ——引擎默认 true（`scene_config.cppm::SceneConfig::taaBaseSpace`，批 13.5 起 = 交付态），
 //      而 `ProfileOpts::taaBaseSpace` 默认 false 是批 13.2 的旧口径且 `rewriteTaaBlock` 会

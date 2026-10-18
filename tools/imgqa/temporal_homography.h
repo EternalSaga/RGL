@@ -35,8 +35,9 @@ namespace RGL::imgqa {
  *                 （守卫红 ⟹ 只报 Indeterminate、**rc≠0**，不出判决）
  * @param envIntensity / aoStrength  A/B 侧（负数 = 不覆写 = 交付配置原样）。
  *        `env.intensity=0` 关几何体 IBL、`ao.strength=0` 关 AO，两者都是 IEEE 精确旁路。
- *        ⚠ `env.intensity=0` **不影响天穹背景**（skybox 与 light 的 envSky 分支不乘它），
- *          所以背景会原样亮着 —— 输出里必须回显这条，否则读者会把"背景还在"读成"IBL 没关掉"。
+ *        ⚠ 天穹口径（2026-10-18 起）：light.frag sky 分支门控 `mipRange>0 && intensity>0`，
+ *          `env.intensity=0` 连天穹一起关（原 skybox 标志与 forward skybox pass 已删）——
+ *          输出里仍回显 env/ao 的 A/B 口径，别让读者拿交付画面解释这组数。
  */
 int cmdTemporalHomography(const std::string& target, double sweepPxPerFrame, int frames,
     const std::string& outPrefix, bool bands = false, double envIntensity = -1.0,

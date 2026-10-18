@@ -67,36 +67,6 @@ return {
             frag = "generated_shaders/cube.frag.spv",
         },
         {
-            name = "model",
-            mesh = "generated_shaders/model.mesh.spv",
-            frag = "generated_shaders/model.frag.spv",
-        },
-        {
-            name = "model_pbr",
-            mesh = "generated_shaders/model.mesh.spv",  -- mesh 复用 model.mesh.spv（Phase 4 批次 3）
-            frag = "generated_shaders/model_pbr.frag.spv",
-        },
-        {
-            name = "model_phong",
-            mesh = "generated_shaders/model.mesh.spv",  -- Phase 5 批次 3：基础 Phong 路线，同 mesh
-            frag = "generated_shaders/model_phong.frag.spv",
-        },
-        {
-            name = "model_pbr_ibl",
-            mesh = "generated_shaders/model.mesh.spv",  -- Phase 5.5：PBR + IBL 环境光照，同 mesh
-            frag = "generated_shaders/model_pbr_ibl.frag.spv",
-        },
-        {
-            name = "model_vegetation",
-            mesh = "generated_shaders/model.mesh.spv",  -- Phase 8 植被：PBR + 背光透射 SSS，同 mesh，forward-only
-            frag = "generated_shaders/model_vegetation.frag.spv",
-        },
-        {
-            name = "model_light",
-            mesh = "generated_shaders/model.mesh.spv",  -- Phase 8 光源本色：emission 主导 + 去金属镜面，同 mesh，forward-only
-            frag = "generated_shaders/model_light.frag.spv",
-        },
-        {
             name = "deferred_geometry_vegetation",
             mesh = "generated_shaders/model.mesh.spv",  -- Phase 8 批次 F：植被 deferred 几何变体（class 1 → emissive.a）
             frag = "generated_shaders/deferred_geometry_vegetation.frag.spv",
@@ -108,25 +78,14 @@ return {
         },
         {
             name = "deferred_geometry_unlit",
-            mesh = "generated_shaders/model.mesh.spv",  -- class 3 → emissive.a：unlit 本色（KHR_materials_unlit，对齐 forward model.frag；2026-10-18 补 D1 破口）
+            mesh = "generated_shaders/model.mesh.spv",  -- class 3 → emissive.a：unlit 本色（KHR_materials_unlit；2026-10-18 补 D1 破口）
             frag = "generated_shaders/deferred_geometry_unlit.frag.spv",
         },
-        {
-            name = "skybox",
-            mesh = "generated_shaders/skybox.mesh.spv",  -- Phase 5.5 批次 4：全屏大三角采 env cubemap
-            frag = "generated_shaders/skybox.frag.spv",
-        },
     },
-
-    -- Phase 4 批次 3：风格名→管线规格名映射（loader 输出 unlit 字段派生风格，缺失回落默认）
-    -- Phase 5 批次 3：pbr 改 "model_phong" 即切基础 Phong 路线（两条光照并存）
-    -- Phase 5.5：pbr 改 "model_pbr_ibl" = IBL 环境光照路线（须配 environment，否则启动契约报错）
-    styles = {
-        unlit = "model",
-        pbr = "model_pbr_ibl",
-        vegetation = "model_vegetation",  -- Phase 8：植被 → 背光透射 SSS
-        light = "model_light",            -- Phase 8：光源 → 本色（去金属镜面）
-    },
+    -- forward 规格（model/model_pbr/model_phong/model_pbr_ibl/model_vegetation/model_light）、
+    -- skybox 规格与 styles 表已随图变体收敛刀②.2 删除（docs/图变体收敛_plan.md §5）。
+    -- 本段非空 = 整表覆盖 C++ 默认集；deferred_geometry 本体经 findSpec 的 C++ 回落词表
+    -- 命中，不必在此列出。
 
     -- Phase 8 批次 F：材质名连连看规则表（有序，首个命中生效；材质名含 pattern → 风格键）。
     -- 材质名 = glTF 官方元数据（loader 透出 materialName）；bistro 全 132 材质：Foliage_ 前缀
@@ -136,7 +95,8 @@ return {
         { pattern = "Foliage", style = "vegetation" },
     },
     -- Phase 8 批次 F：风格→deferred 路线规格名（未列风格回落 deferred_geometry 本体；
-    -- 变体把类别写进 G-buffer emissive.a，light pass 分支复刻 forward 专属视觉。
+    -- 变体把类别写进 G-buffer emissive.a，light pass 按类分支——当年对齐的是 forward 专属
+    -- 视觉（历史对偶，forward 已随刀②.2 删除）。
     -- ⚠ unlit 2026-10-18 起**必须在榜**：KHR_materials_unlit 材质回落 deferred_geometry
     --   = 被静默当 PBR 打光（D1 破口，aa-coverage 电平自检实测抓出，见类 3 变体头注）
     deferred_styles = {
@@ -147,7 +107,8 @@ return {
 
     -- Phase 5.5 环境 cubemap（缺段 = 不启用）。faces 按 Vulkan 层序 0-5 = (+X,−X,+Y,−Y,+Z,−Z)
     -- 排列，素材面顺序定案表见 docs/archive/phase5_5_plan.md（rainbow 方案 B：ft,bk,up,dn,rt,lf；
-    -- nightSky 层序 = 1,3,5,6,2,4）。intensity 进 scene data @48；skybox = 背景天穹（批次 4）。
+    -- nightSky 层序 = 1,3,5,6,2,4）。intensity 进 scene data @48（deferred 的天穹总闸 =
+    -- intensity，=0 连天穹一起关；原 skybox 背景天穹开关已随刀②.2 删除）。
     -- Phase 8 批次 ②b：hdr 非空 = 优先走 Radiance .hdr 环境（CPU 等距柱状→RGBA16F cubemap
     -- 重投影，官方 Bistro 素材 san_giuseppe_bridge）；素材 gitignore，文件缺失自动告警回落
     -- faces PNG 路径。hdr_size = 重投影面边长（2 的幂，默认 2048）。
@@ -166,7 +127,6 @@ return {
                               -- 只有受光的 0.2%（线性域）——墙面 albedo 浅灰 150 却渲成 p50=13，
                               -- 即"楼房背光面过暗"的根因。户外散射光合理带 0.03~0.10，
                               -- 1.0 实测 0.037，1.3 起过曝。IBL 通路本身无故障（env 响应单调线性）。
-        skybox = true,
     },
 
     -- Phase 5 批次 2：定向光（全字段可选回落 scene.cppm Light 默认值；世界空间）

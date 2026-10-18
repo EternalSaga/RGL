@@ -52,9 +52,8 @@ export struct RenderListState {
 	// GPU 契约是刻意的：避免为「哪个物体被选中」新增 per-object 字节字段、触发
 	// ObjectDraw 布局变更与 just reflect 重生成。帧局部存储，生命周期同 draws。
 	std::vector<uint32_t> materialBySlot;
-	// Phase 5.5 批次 4：天空盒 draw 的 push data（shader 不声明 push constants，
-	// 推默认零值 DrawArgs 占位——pushDataEXT 与 shader 声明无关，见 DrawCall 契约）
-	RGL::DrawArgs skyboxArgs{};
+	// Phase 5.5 批次 4 天空盒 draw 的 push data（skyboxArgs）已随 forward 绘制机制删除
+	// （2026-10-18 刀②.2）。
 	// Phase 11 批 11.2：阴影段 push data（ShadowDrawArgs 8B，索引 = 分块号 × objectSlot）。
 	// 每帧只写一次且值不随时间变（objectIndex 永丸、cascadeIndex 永丸）——
 	// 故只 resize 不重填：resize 保留已有内容（对同一场景的相邻帧不会丢值）。
@@ -97,8 +96,9 @@ export struct RenderListState {
  * Phase 5 透明排序（roadmap 决策：排序在 renderSystem 内做，不单独建 system）：
  * 经 MaterialRef → MaterialAsset.alphaModeBlend（glTF alphaMode == "BLEND"）分桶——
  * 不透明段保持实体迭代序（深度写正确），透明段按相机距离² 降序（back-to-front）稳定排序，
- * 产出 [opaque | skybox | transparent 远→近] 单列表 + skyboxStart/transparentStart 边界
- *（drawFrame 段首各 applyDynamicState 一次，见 vkrenderer.cppm）。MASK 材质留在不透明段
+ * 产出 [opaque | transparent 远→近] 单列表 + transparentStart 边界
+ *（drawFrame 段首各 applyDynamicState 一次，见 vkrenderer.cppm；原 skybox 段与
+ * skyboxStart 边界已随 forward 绘制机制删除，2026-10-18 刀②.2）。MASK 材质留在不透明段
  *（Phase 8 C1：alpha-test discard 在 shader 内，cutoff 经 ObjectDraw.emissive.w；doubleSided
  * 的 cull 切换见 C2）；排序距离 = primitive 实体 world 平移列
  * 到相机位置的 distance2（无包围盒时的标准近似，legacy RenderQueue 同款思路）。
@@ -108,15 +108,15 @@ export struct RenderListState {
  * 保守：跨界判可见，绝不误剔；可见/剔除计数写 state（仅计数变化时打日志）。
  *
  * 灯 entity 化（Phase 7，ECS 规范 3）：灯 = entity（Light 组件，画不画 = 实体有无），
- * 收集按 Light.index 落槽（不依赖 view 迭代序）：primary = index 0（forward @0 头），
- * 延迟灯数组按 index 填（≤ kMaxLights）。
+ * 收集按 Light.index 落槽（不依赖 view 迭代序）：primary = index 0（写 scene data 头 @0
+ * 单灯），延迟灯数组按 index 填（≤ kMaxLights）。
  *
  * @param rg registry（读 ViewProjection/SceneSpin/Camera/SceneEnv/NextObjectSlot，
  *   遍历 Transform+MeshRef+MaterialRef+CullSphere 实体 view + Light 组件 view，写 ctx FrameDrawList）
  * @param resources 资源层（资产表：mesh/material 记录解析）
  * @param env 环境服务（irradianceSH 每帧拷入 scene data，架构债务续账步骤 3）
  * @param assets 资产表（mesh/material 记录解析；F 拆出不再经内核取）
- * @param state 每帧 push constant 存储（args/matrices/skyboxArgs 填充 + culling 统计）
+ * @param state 每帧 push constant 存储（args/matrices 填充 + culling 统计）
  * @param frameSlot ★M-1b：本帧**录制槽**号（= `FrameSession::currentFrameSlot()`，由调用它的
  *   帧循环在 drawFrame **之前**取——slot 只在 drawFrame 末尾 advance ⟹ 采集与录制同值）。
  *   仅 MDI 生效档消费（同源 pair 的一半输入）；门关时传什么都不影响画面。

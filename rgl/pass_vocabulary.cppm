@@ -53,15 +53,15 @@ export struct RgStateName {
 };
 
 /**
- * pass.state 全量状态名词表（**单一真相源**，15 条）——键集合 = StateKit::stateFor
+ * pass.state 全量状态名词表（**单一真相源**，14 条）——键集合 = StateKit::stateFor
  * 能解析的名字集合（static_assert 绑定）；按 scope 派生出图校验用的两个子集。
  *
  * 加一个状态 = 本表加一行 + StateKit 加成员与实现（漏实现编译不过）；
  * Lua 配置侧与文档不再各自抄名单（写错的启动报错会列出合法值）。
+ * （"skybox" 条目已随 forward 绘制机制删除，2026-10-18 图变体收敛刀②.2。）
  */
-export inline constexpr std::array<RgStateName, 15> kAllPassStates{{
+export inline constexpr std::array<RgStateName, 14> kAllPassStates{{
 	{"opaque", RgStateScope::meshPass},
-	{"skybox", RgStateScope::meshPass},
 	{"transparent", RgStateScope::meshPass},
 	{"picking", RgStateScope::meshPass},       // 批 10.5：id pass 重放 opaque 段
 	{"highlight", RgStateScope::meshPass},     // 批 10.7：高亮 pass 按材质过滤重放
@@ -251,12 +251,11 @@ export struct RgDrawSourcePattern {
  * frame_draw_list::segmentSpan 的 if 链（含兜底分支），两者不共享机制——漂移由
  * tests/test_render_graph.cppm 的覆盖用例拦（红线 3）。
  */
-export inline constexpr std::array<RgDrawSourcePattern, 4> kAllDrawSources{{
+export inline constexpr std::array<RgDrawSourcePattern, 3> kAllDrawSources{{
 	{"opaque", RgDrawSourceMatch::exact},
-	{"skybox", RgDrawSourceMatch::exact},
 	{"transparent", RgDrawSourceMatch::exact},
 	{"shadow", RgDrawSourceMatch::prefix},
-}};
+}};  // "skybox" 段已随 forward 绘制机制删除（2026-10-18 刀②.2）
 
 /**
  * 执行器可识别的 drawSource 段名判定（图校验入口，逐条按 match 方式比对）。

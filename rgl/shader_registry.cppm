@@ -87,7 +87,7 @@ export inline MeshletMeshVariant pickMeshletMeshVariant(const RuntimeConfig& cfg
  * = 4B，material_types_generated static_assert 与 shader 反射一致）；pushDataSet = 0（显式）。
  */
 export struct PipelineEntry {
-	std::string name;                             // 条目名（模型 = "{规格}.v{顶点槽}.t{base槽}.n{normal槽}.o{orm槽}"，skybox/cube/light 固定名）
+	std::string name;                             // 条目名（模型 = "{规格}.v{顶点槽}.t{base槽}.n{normal槽}.o{orm槽}"，cube/light 固定名）
 	RGL::RenderPipeline pipeline;                 // shader object + 烘焙 binding mapping（见 PipelineBindings）
 	uint32_t argsSize = sizeof(RGL::DrawArgs);    // push constant 字节数（DrawArgs 4B，仅 objectIndex）
 	uint32_t pushDataSet = 0;                     // 显式 push constant set 号（vkCmdPushDataEXT 用）
@@ -124,8 +124,7 @@ inline const PipelineSpec* findLightSpec(const char* name) {
 /**
  * 管线表（Phase 4：从 Renderer 迁出，零 entt——只认 slot/资产 id，不认场景实体）：
  *   条目全部按需动态加入：模型 = addModelEntry、内建 cube = addCubeEntry（架构债务 1：
- *   slot 经传入的资产记录取，Resources 不认识 cube）、天空盒 = addSkyEntry、
- *   延迟光 = addLightEntry；模型条目按 (规格, 顶点 slot, base 纹理 slot, normal slot,
+ *   slot 经传入的资产记录取，Resources 不认识 cube）、延迟光 = addLightEntry；模型条目按 (规格, 顶点 slot, base 纹理 slot, normal slot,
  *   orm slot) 五元组组合去重——binding mapping 是 shader object 级状态（无法运行时换），
  *   同组合的映射恒等，故共享一条条目而非每 primitive 一条（Phase 4 验收：392 primitive
  *   → 12 条；Phase 8 ③a 扩 normal/orm 槽后条目数仍 ≤ 材质贴图组合数）。
@@ -138,13 +137,13 @@ export class ShaderRegistry {
 	/**
 	 * 构造（main.cpp 初始化层构造顺序第 5 站：Resources→ShaderRegistry→Renderer）：
 	 * specs 来自 configs/scene.lua（name → SPV 路径），按 name 索引；条目全按需建
-	 *（模型 = addModelEntry、内建 cube = addCubeEntry、天空盒 = addSkyEntry、
-	 * 延迟光 = addLightEntry）——画不画 = entity 有无，无内容专属的构造期恒建条目。
+	 *（模型 = addModelEntry、内建 cube = addCubeEntry、延迟光 = addLightEntry）——
+	 * 画不画 = entity 有无，无内容专属的构造期恒建条目。
 	 * @param device 设备层（RenderPipeline 创建）
 	 * @param res 资源层（heap / sampler 槽 / env——binding mapping 烘焙）
 	 * @param sceneData scene data 服务（幂等创建 buffer + 各子范围槽，架构债务续账步骤 1）
 	 * @param env 环境服务（env 槽/sky sampler binding 4/5 烘焙，架构债务续账步骤 3）
-	 * @param specs 管线规格（scene.lua styles 表，name → SPV 路径；缺条目时
+	 * @param specs 管线规格（scene.lua pipelines 表，name → SPV 路径；缺条目时
 	 *   findSpec 回落默认路径）
 	 */
 	ShaderRegistry(RGL::DeviceContext& device, RGL::Resources& res,
@@ -216,7 +215,7 @@ export class ShaderRegistry {
 	 * 形态里没有的号，仍是「声明未 mapping」VVL 错误——两侧同向约束不因克隆放松）。非 model 条目（cube/天空盒/光 = mesh 输出接口非
 	 * ModelVertexOutput）不克隆——重放路对其跳过。
 	 * 装配时序契约 = main 于模型注册完成后调用（门 = diagnostics.picking；先于
-	 * addSkyEntry/addLightEntry = 克隆段追加在 model 条目后）；既有条目下标语义零改动。
+	 * addLightEntry 等杂项条目 = 克隆段追加在 model 条目后）；既有条目下标语义零改动。
 	 * @param purpose 克隆用途（进 remap 表键，见 cloneEntryFor）
 	 * @param fragSpvPath 克隆 frag 的 SPV 相对路径（generated_shaders/ 下）
 	 * @throws std::runtime_error 克隆 frag / model mesh SPV 读失败（装配期 fail-fast）
@@ -248,13 +247,14 @@ export class ShaderRegistry {
 	 * 过滤烘焙）；binding 6/7 =
 	 * normal/orm 贴图槽
 	 *（Phase 8 ③a）、binding 8 = emissive 贴图槽（Phase ③，extra 追加，见 impl））。
-	 * 首参 specName = 管线规格名（Phase 4 批次 3：风格→规格名映射在 main.cpp 经 scene.lua
-	 * styles 表完成，本函数只认规格名）；按 (规格, 顶点 slot, base 纹理 slot, normal slot,
+	 * 首参 specName = 管线规格名（Phase 4 批次 3：风格→规格名映射在装配层经
+	 * resolvePrimitiveSpecName（material_rules / deferred_styles）完成，本函数只认规格名）；
+	 * 按 (规格, 顶点 slot, base 纹理 slot, normal slot,
 	 * orm slot, emissive slot) 六元组组合去重——同组合返回既有条目下标（不重复建 shader
 	 * object）；新组合建条目并记入 indexByName / 去重表。返回条目下标，调用方经 bindToAsset
 	 * 写回资产记录（renderListSystem 经资产表解析管线，无字符串约定）。失败（规格缺失 /
 	 * SPV 加载失败等）抛出（同构造期路径）。
-	 * @param specName 管线规格名（scene.lua styles / findSpec 回落词表）
+	 * @param specName 管线规格名（resolvePrimitiveSpecName 产物 / findSpec 回落词表）
 	 * @param vertexSlot 顶点 buffer heap 槽（binding 0；模型顶点/索引共享同一 buffer）
 	 * @param textureSlot baseColor 纹理 SAMPLED_IMAGE heap 槽（binding 1；白纹理 = 纹理首槽）
 	 * @param normalSlot normal 贴图 SAMPLED_IMAGE heap 槽（binding 6；无贴图 = 中性法线纹理槽）
@@ -318,18 +318,13 @@ export class ShaderRegistry {
 	void bindMeshletToAsset(uint32_t assetId, uint32_t entryIdx);
 
 	/**
-	 * 天空盒管线条目（Phase 5.5 批次 4）：单条目（env 槽全局单例，无组合去重需求）。
-	 * mapping = binding 0/1 占位槽号（skybox shader 不声明顶点/索引 = 批 M 过滤不烘，
-	 * 槽号只是 PipelineBindings 形态的合法占位）+ scene data 子范围载体（skyClipToWorld 读
-	 * invViewProj 走头区 UBO）+ binding 4/5 env（skybox.frag import env 声明——"声明未映射"才是错误，
-	 * 声明了 ⟹ 过滤后照烘）。
-	 * 前提 = env 已上传（main 调用点保证）；幂等（既有 "skybox" 条目直接返回下标）。
-	 * @return 条目下标；规格缺失 / env 未上传抛 runtime_error
+	 * 天空盒管线条目（addSkyEntry）已随 forward 绘制机制删除（2026-10-18 图变体收敛
+	 * 刀②.2，docs/图变体收敛_plan.md §6.2：执行 skybox DrawCall 的 pass 只存在于已删的
+	 * forward 图；deferred 的天穹对应物 = env.intensity 总闸）。
 	 */
-	[[nodiscard]] uint32_t addSkyEntry();
 
 	/**
-	 * Phase 7 D1：deferred light pass 管线条目（单条目，仿 addSkyEntry）。spec = "light"
+	 * Phase 7 D1：deferred light pass 管线条目（单条目；原仿 addSkyEntry，该条目已随刀②.2 删除）。spec = "light"
 	 *（全屏 mesh + 采样 frag）。binding：0/1 占位槽号（light mesh 不声明 = 批 M 过滤不烘）
 	 * + 3 sceneData
 	 *（readSceneLight 单灯）+ extra：4-8 → 5 个 G-buffer RT 的 SAMPLED_IMAGE 堆槽
@@ -342,7 +337,7 @@ export class ShaderRegistry {
 	 * @param metalRoughSlot G-buffer metalRough RT 槽（binding 7）
 	 * @param emissiveSlot G-buffer emissive RT 槽（binding 11，RGBA16F）
 	 * @param samplerSlot 共享 sampler 的 sampler heap 槽（binding 8，sampler 映射）
-	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，与 forward 模型条目同号）
+	 * @param shadowMapSlot 阴影图 SAMPLED_IMAGE 槽（**binding 12**，与 shadow.slang 声明成对）
 	 * @param shadowSamplerSlot 阴影专用 NEAREST sampler 槽（**binding 13**）
 	 * @param evssmMapSlot EVSSM 矩图 SAMPLED_IMAGE 槽（**binding 15**，批 11.6d-2；
 	 *        无条件传入（批 M 按声明过滤烘焙）+ binding 16 复用本条目 LINEAR sampler，
@@ -540,14 +535,14 @@ export class ShaderRegistry {
 	 * sceneData，纹理槽外一切不消费 ⟹ 每个 16MB 拼接块一个条目，bistro ≈8）。**这个去重键在
 	 * 簇路径不存在了**：簇路径不读 per-资产拼接顶点 buffer，读的是全局单例的簇四段 buffer
 	 * （§10.2「全局单例进固定 binding，不进 per-entry 描述符」）⟹ 条目退化成常量一份
-	 * （同 addSkyEntry / addLightEntry 的"全局单例 ⟹ 单条目"形态）。
+	 * （同 addLightEntry 的"全局单例 ⟹ 单条目"形态）。
 	 *
 	 * ## binding 映射
 	 *
 	 *  · 0/1 = 合法占位槽号：本管线的 mesh/frag **两个 stage 都不声明 binding 0/1**（mesh 不
 	 *    import model，frag 是空壳）⟹ 批 M 的按声明过滤在烘焙期把这两条**滤掉**（批 M 前是
 	 *    「烘了空转无害」，现在根本不烘）。🔴 方向别记反：「声明了未 mapping」才是 VVL 错误
-	 *    ——过滤只敢滤「没声明的」，声明了的（如 3/17-20）照烘（addSkyEntry/addLightEntry 的
+	 *    ——过滤只敢滤「没声明的」，声明了的（如 3/17-20）照烘（addLightEntry 的
 	 *    0/1 占位既证方向）。
 	 *  · 3 = scene data（`hasSceneData = true`）：readObjectClusterRange / readObjectMatrix /
 	 *    readShadowViewProj 三张表都在这一份 buffer 里。
@@ -559,7 +554,7 @@ export class ShaderRegistry {
 	 *  · 不传 env、不传 6/7/8/12/13/15/16：两个 shader 文件都不声明它们（`textured = false`；
 	 *    批 M 后传了也不烘，但「不传」让槽号来源不参与账目）。
 	 *
-	 * 幂等：同名条目（"shadow_meshlet"）命中直接返回既有下标（同 addSkyEntry 的写法）——
+	 * 幂等：同名条目（"shadow_meshlet"）命中直接返回既有下标（同 addLightEntry 的写法）——
 	 * 装配层逐 primitive 调用它，去重住在本函数。
 	 * @param clusterSlots 4 个簇 buffer 描述符**堆槽号**（vertexPool/clusters/tris/remap 序 =
 	 *        binding 17-20 升序；🔴 传的是槽号不是 binding 号，同 addMeshletEntry）
@@ -650,12 +645,12 @@ export class ShaderRegistry {
 	/**
 	 * 按名查找 pipeline 规格 + 软阴影变体替换（批 11.5/11.6，唯一入口 = 本函数，
 	 * findSpecBase 为回落体）：门 shadowEvssm 优先、其次 shadowPcss，且 fragSpv 属阴影
-	 * 采样 frag（前缀 ∈ model_pbr_ibl / model_vegetation / model_light / light.frag*——
-	 * 最后一个也覆盖 IZB 变体，拼接结果 light.frag_IZB_CONSUME_EVSSM_SOFT.spv 与
-	 * rgl_shader_defined2 命名同源）时换对应 _EVSSM_SOFT / _PCSS_SOFT 变体路径。
+	 * 采样 frag（前缀 = light.frag*——也覆盖 IZB 变体，拼接结果
+	 * light.frag_IZB_CONSUME_EVSSM_SOFT.spv 与 rgl_shader_defined2 命名同源；forward
+	 * 三个阴影采样 frag 已随刀②.2 删除）时换对应 _EVSSM_SOFT / _PCSS_SOFT 变体路径。
 	 * 两门全关原样透传指针 = 原版 SPV（红线构造性保证，同 1e IZB 门 = 选 spec 变体）。
 	 * @param name 规格名
-	 * @return 规格 const 指针（styles 表命中或默认回落，可能已换变体）；未知名 = nullptr
+	 * @return 规格 const 指针（pipelines 表命中或默认回落，可能已换变体）；未知名 = nullptr
 	 */
 	const RGL::PipelineSpec* findSpec(const char* name) const {
 		return softShadowVariantSpec(findSpecBase(name));
@@ -669,47 +664,20 @@ export class ShaderRegistry {
 	 */
 	const RGL::PipelineSpec* softShadowVariantSpec(const RGL::PipelineSpec* base) const;
 
-	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua styles 命中或默认回落词表
-	 *  cube / model / model_pbr / model_phong / model_pbr_ibl / skybox / deferred_geometry×3 /
-	 *  light×2 / 尾部 kTailSpecs（tonemap/shadow/shadow_meshlet/izb_mask/ao/taa/velocity/
-	 *  ao_apply/ssr_trace/ssr）；不含 PCSS 变体替换）。 */
+	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua pipelines 命中或默认回落词表
+	 *  cube / deferred_geometry×4 / light×2 / 尾部 kTailSpecs（tonemap/shadow/shadow_meshlet/
+	 *  izb_mask/ao/taa/velocity/ao_apply/ssr_trace/ssr）；不含 PCSS 变体替换。forward 规格与
+	 *  skybox 的回落条目已随刀②.2 删除）。 */
 	const RGL::PipelineSpec* findSpecBase(const char* name) const {
 		auto it = styles.find(name);
 		if (it != styles.end())
 			return &it->second;
+		// forward 规格回落链（cube 之外的 model/model_pbr/model_phong/model_pbr_ibl/skybox）
+		// 已随刀②.2 删除（docs/图变体收敛_plan.md §5）；cube 保留（内建几何 + deferred 共用）。
 		if (std::strcmp(name, "cube") == 0) {
 			static const RGL::PipelineSpec defaultCube{
 				"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"};
 			return &defaultCube;
-		}
-		if (std::strcmp(name, "model") == 0) {
-			static const RGL::PipelineSpec defaultModel{
-				"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"};
-			return &defaultModel;
-		}
-		if (std::strcmp(name, "model_pbr") == 0) {
-			static const RGL::PipelineSpec defaultModelPbr{
-				"model_pbr", "generated_shaders/model.mesh.spv",
-				"generated_shaders/model_pbr.frag.spv"};
-			return &defaultModelPbr;
-		}
-		if (std::strcmp(name, "model_phong") == 0) {
-			static const RGL::PipelineSpec defaultModelPhong{
-				"model_phong", "generated_shaders/model.mesh.spv",
-				"generated_shaders/model_phong.frag.spv"};
-			return &defaultModelPhong;
-		}
-		if (std::strcmp(name, "model_pbr_ibl") == 0) {
-			static const RGL::PipelineSpec defaultModelPbrIbl{
-				"model_pbr_ibl", "generated_shaders/model.mesh.spv",
-				"generated_shaders/model_pbr_ibl.frag.spv"};
-			return &defaultModelPbrIbl;
-		}
-		if (std::strcmp(name, "skybox") == 0) {
-			static const RGL::PipelineSpec defaultSkybox{
-				"skybox", "generated_shaders/skybox.mesh.spv",
-				"generated_shaders/skybox.frag.spv"};
-			return &defaultSkybox;
 		}
 		if (std::strcmp(name, "deferred_geometry") == 0) {
 			static const RGL::PipelineSpec defaultDeferredGeom{
@@ -786,7 +754,7 @@ export class ShaderRegistry {
 	RGL::SceneDataService& sceneData;  // scene data 服务引用（各子范围槽烘焙；架构债务续账步骤 1）
 	RGL::Environment& env;  // 环境服务引用（env 槽 + sky sampler binding 4/5 烘焙；架构债务续账步骤 3）
 	RGL::AssetTable& assets;  // 资产表引用（bindPipelineToAsset 回写；F 拆出）
-	std::map<std::string, RGL::PipelineSpec> styles;          // 风格名 → SPV 规格（scene.lua）
+	std::map<std::string, RGL::PipelineSpec> styles;          // 规格名 → SPV 规格（scene.lua pipelines 表；成员名沿用历史）
 	std::map<std::string, uint32_t> indexByName;              // 条目名 → 下标（启动期 name 解析）
 	std::map<std::tuple<std::string, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, uint32_t> modelEntryBySlot;  // 模型条目去重表：(规格名, 顶点 slot, base 纹理 slot, normal slot, orm slot, emissive slot) → 下标
 	// 簇路径叠加条目去重表（★1-a1ii-α）：(规格名, base/normal/orm/emissive 纹理 slot,

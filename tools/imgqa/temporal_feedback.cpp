@@ -81,7 +81,7 @@ using namespace tmotion;  // 本族跨 TU 的类型 / 常量 / 算子（唯一�
 //  1. 分辨率钉死 1280×720，每组回显实际帧尺寸（`collectGroup` 自证，不等即抛）。
 //  2. 连拍一律 `/shotburst` 逐帧连续。
 //  3. 统计在 sRGB 解码后的**线性域**（复用 `prepareLinear`，本文件不另写解码）。
-//  4. 交付配置（`deliveryConfigDir` = 仓库 configs/，env/skybox/IBL/AO/shadow 全开）；
+//  4. 交付配置（`deliveryConfigDir` = 仓库 configs/，env/IBL/AO/shadow 全开）；
 //     配置走 `makeProfile` 生成的独立目录，**不碰 build 端 configs 副本**。
 //  5. 单实例：`Engine` 构造内 `pgrep -x rgl` 有残留直接拒跑。
 //  6. **参数生效自证**：每组回显**引擎自己报的** feedback（`GET /state` 读回，不是写进 lua
@@ -141,7 +141,7 @@ int cmdTemporalFeedback(const std::string& cameraName, double angleDeg, int burs
     std::printf("  连拍 = %d 帧（/shotburst 逐帧连续，= %d 个抖动周期）；运动组 warm 一律 16"
                 "（= 已发表 M0/M1 的视点），静止组 warm = align16(6/α)\n",
         burst, periods);
-    std::printf("  配置 = 交付 configs/（deferred + env/skybox/IBL/AO/shadow 全开）；单实例；"
+    std::printf("  配置 = 交付 configs/（deferred + env/IBL/AO/shadow 全开）；单实例；"
                 "统计一律线性域\n");
     std::printf("  输入侧重建核 taa.input_kernel = %g（0 双线性 / 1 CR 4×4 / 2 Lanczos3；"
                 "只作用于 TAA 开组，M0/REFm/REFs/S0 = TAA 关 = 不消费本键）\n\n", kernel);

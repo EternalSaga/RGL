@@ -163,7 +163,7 @@ export class CullDriver {
 	 * GPU/CPU 剔除结果对账（同帧口径，`gpu_sync` 档）：逐 candidate 可见集合 vs CPU
 	 * opaque 段（objectSlot 多重集）比对 + 对齐自检（cullArgs[i] ↔ entries[i] 同
 	 * objectSlot 顺序契约的运行时证明）。
-	 * @param list 每帧绘制列表（CPU opaque 段 [0, skyboxStart)）
+	 * @param list 每帧绘制列表（CPU opaque 段 [0, transparentStart)）
 	 */
 	void reconcile(const FrameDrawList& list);
 

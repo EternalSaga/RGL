@@ -64,9 +64,9 @@ constexpr std::string_view kRuntimeKeys[]{
 
 /**
  * 键表是否声明了 `块.` 前缀的点分键（= 该块是**固定字段块**，可下钻；债-129 第三刀）。
- * 开放 map 段（scene 的 styles/deferred_styles：子键是用户自起的材质名，键表里没有）
+ * 开放 map 段（scene 的 deferred_styles：子键是用户自起的材质名，键表里没有）
  * 键表只有裸表名 ⟹ false ⟹ 不钻——「护栏喊错一次，以后所有 warn 都没人信」，规则
- * 自配置：键表没声明 `styles.` 就不报 `styles.pbr`。
+ * 自配置：键表没声明 `deferred_styles.` 就不报 `deferred_styles.xxx`。
  * @param block 顶层键名（候选块名）
  */
 bool declaresNestedKeys(std::string_view block) {

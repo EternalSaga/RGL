@@ -84,17 +84,51 @@ std::vector<RgPassPlan> passesOf(const RgGraphDesc& d) {
 constexpr GateEnv kHappyEnv{.headless = false, .llmCapture = true, .staticGraphicsIndirect = true};
 
 /**
- * forward 臂的阴影侧配置：出厂形态是 csm + **izb 开**，而 izb 只接 deferred 光照 pass
- * ⟹「全默认 × forward」本身就是规则该喊的 error（不是沉默）。需要"forward 上合法"的
- * 用例一律显式关 izb——测的是「合法世界沉默」，不是「全默认在任何图合法」。
+ * 「非 deferred 图」臂的样本（原出厂 forward 图已随 2026-10-18 图变体收敛刀②.2 删除，
+ * `docs/图变体收敛_plan.md` §5）：自建一张**没有 drawLight "light"** 的最小合法图 ——
+ * opaque（drawMesh）写 scene_hdr + depth，tonemap（全屏）采 scene_hdr 写 swapchain。
+ * 规则表从 pass 序列里只消费 `graphHasDeferredLight` 这一条图事实，故样本取最小形态即可；
+ * 仍走 `compileRenderGraph` 而不是手搓 `RgPassPlan`，是为了让样本保持「真编译产物」性质
+ * ——状态 / 附件词表改名时本样本先编译失败出声，不会静默漂成一张不合法的图。
  */
-constexpr ShadowConfig kShadowFwd{.izb = false};
+std::vector<RgPassPlan> passesOfNoLightGraph() {
+	return passesOf(RgGraphDesc{
+		.attachments = {
+			RgAttachmentDesc{.name = "swapchain", .kind = RgAttachmentKind::swapchain},
+			RgAttachmentDesc{.name = "depth", .kind = RgAttachmentKind::depth},
+			RgAttachmentDesc{.name = std::string{kSceneHdrName},
+				.kind = RgAttachmentKind::offscreen, .format = std::string{kSceneHdrFormat}},
+		},
+		.passes = {
+			RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+				.drawSource = "opaque",
+				.outputs = {RgPassAttachment{.attachment = std::string{kSceneHdrName},
+					                  .usage = RgUsage::colorWrite,
+					                  .loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store},
+					RgPassAttachment{.attachment = "depth", .usage = RgUsage::depthWrite,
+						.loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}}},
+			RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
+				.outputs = {RgPassAttachment{.attachment = "swapchain", .usage = RgUsage::colorWrite,
+					.loadOp = RgLoadOp::clear, .storeOp = RgStoreOp::store}},
+				.inputs = {RgPassAttachment{.attachment = std::string{kSceneHdrName},
+					.usage = RgUsage::sampleRead, .loadOp = RgLoadOp::load,
+					.storeOp = RgStoreOp::store}}},
+		},
+	});
+}
+
+/**
+ * 非 deferred 图臂的阴影侧配置：出厂形态是 csm + **izb 开**，而 izb 只接 deferred 光照
+ * pass ⟹「全默认 × 非 deferred 图」本身就是规则该喊的 error（不是沉默）。需要"这张图上
+ * 合法"的用例一律显式关 izb——测的是「合法世界沉默」，不是「全默认在任何图合法」。
+ */
+constexpr ShadowConfig kShadowNoLight{.izb = false};
 
 /**
  * 调用简写（债-106 后 lint 有九个入参）：三份 defaults 恒取出厂默认（旧用例本来就全传
  * `DiagnosticsConfig{}`），shadow 默认取出厂形态（csm + izb），runtime 默认取出厂态
  * （meshlet.assets = true + shadow_lod = 5，其余默认 = meshlet 规则全沉默）。
- * @param shadow 阴影侧生效值（forward 臂记得传 kShadowFwd）
+ * @param shadow 阴影侧生效值（非 deferred 图臂记得传 kShadowNoLight）
  * @param runtime 运行配置生效值（meshlet 用例的变量在这；默认 = 出厂态）
  */
 std::vector<GateFinding> lint(const DiagnosticsConfig& cfg, std::span<const RgPassPlan> passes,
@@ -202,29 +236,29 @@ TEST_CASE("gate_lint 基线：全默认配置（任何图/任何世界）零 fin
 	// 变异红线：meshlet 任一行/任一枚块条目谓词改成恒真 → 本用例红。
 	const DiagnosticsConfig d;
 	// 结构体默认 = 交付形态（csm + **izb 关**，2026-10-10 换红线）。izb 关之后交付默认在
-	// **两种图上都沉默**（此前 izb 开 ⟹ forward 必有一条 izb error，"全默认零 findings"这条
+	// **两种图上都沉默**（此前 izb 开 ⟹ 非 deferred 图上必有一条 izb error，"全默认零 findings"这条
 	// 总锚其实一直是靠例外撑着的，现在才是真锚）。
-	const auto fwd = passesOf(defaultRenderGraphDesc());
-	CHECK(lint(d, fwd, {}, kShadowFwd).empty());
+	const auto noLight = passesOfNoLightGraph();
+	CHECK(lint(d, noLight, {}, kShadowNoLight).empty());
 	CHECK(lint(d, passesOf(deferredRenderGraphDesc()), kHappyEnv).empty());
 	// 出厂 meshlet 态**显式**再钉一次（不靠 lint() 默认参的隐式默认——默认参改了这条也得在）：
 	CHECK(lint(d, passesOf(deferredRenderGraphDesc()), kHappyEnv,
 		ShadowConfig{}, RuntimeConfig{}).empty());
-	// 反向锚点：把 izb 显式开回来 ⟹ forward 上 izb 恰有 **2** 条（一条 error = 非 deferred
+	// 反向锚点：把 izb 显式开回来 ⟹ 非 deferred 图上 izb 恰有 **2** 条（一条 error = 非 deferred
 	// 图、一条 warn = 交付已关的近场 v1）。这条在，"izb 关"才不是把规则删掉才绿的。
 	const ShadowConfig onIzb{.izb = true};
-	CHECK(std::ranges::count(lint(d, fwd, {}, onIzb), "izb.on",
+	CHECK(std::ranges::count(lint(d, noLight, {}, onIzb), "izb.on",
 		&GateFinding::gate) == 2);
 	// 全默认 + headless/llm关/static关 也零（门全关时环境事实不参与判定）
 	const GateEnv dark{.headless = true, .llmCapture = false, .staticGraphicsIndirect = false};
-	CHECK(lint(d, fwd, dark, kShadowFwd).empty());
+	CHECK(lint(d, noLight, dark, kShadowNoLight).empty());
 }
 
 TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evssm × 非 deferred") {
-	const auto fwd = passesOf(defaultRenderGraphDesc());
+	const auto noLight = passesOfNoLightGraph();
 	const auto def = passesOf(deferredRenderGraphDesc());
-	{  // 正例：IZB × forward = error（此前静默早退）
-		const auto fs = lint(DiagnosticsConfig{}, fwd, kHappyEnv,
+	{  // 正例：IZB × 非 deferred 图 = error（此前静默早退）
+		const auto fs = lint(DiagnosticsConfig{}, noLight, kHappyEnv,
 			ShadowConfig{.izb = true});
 		REQUIRE(find(fs, "izb.on") != nullptr);
 		CHECK(find(fs, "izb.on")->severity == GateSeverity::error);
@@ -233,9 +267,9 @@ TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evs
 		CHECK(find(lint(DiagnosticsConfig{}, def, kHappyEnv), "izb.on")
 			== nullptr);
 	}
-	{  // 正例：mode="evssm" × forward = error（EvssmShadow 不构造 = 该档整体无效）
+	{  // 正例：mode="evssm" × 非 deferred 图 = error（EvssmShadow 不构造 = 该档整体无效）
 		const ShadowConfig evssm{.mode = ShadowMode::evssm};
-		const auto fs = lint(DiagnosticsConfig{}, fwd, kHappyEnv, evssm);
+		const auto fs = lint(DiagnosticsConfig{}, noLight, kHappyEnv, evssm);
 		REQUIRE(find(fs, "mode") != nullptr);
 		CHECK(find(fs, "mode")->severity == GateSeverity::error);
 	}
@@ -261,7 +295,7 @@ TEST_CASE("gate_lint error 组：izb × {非 deferred 图, mode=none} / mode=evs
 	   // ⟹ 两条 error findings，各有自己的消息；合并成一条 = 丢归因）
 	   // 变异红线：删掉任一条 izb error 规则 → 本断言只剩 1 条 ⟹ 红
 		const ShadowConfig noneIzb{.mode = ShadowMode::none, .izb = true};
-		const auto fs = lint(DiagnosticsConfig{}, fwd, kHappyEnv, noneIzb);
+		const auto fs = lint(DiagnosticsConfig{}, noLight, kHappyEnv, noneIzb);
 		// 两条 **error** 各自独立（第三条 izb finding 是"交付已关"的 warn，与本断言的归因无关，
 		// 故按 severity 计数而不是按 gate 计数——按 gate 计会把 warn 混进来变成"3 条 error"的假象）
 		CHECK(std::ranges::count_if(fs, [](const GateFinding& f) {
@@ -281,44 +315,44 @@ TEST_CASE("gate_lint error 组：dump_gbuf / picking_probe / 输入探针×headl
 	}
 	{  // dump_gbuf 保持默认 -1（关）→ 即使世界全黑也不喊（未偏离默认不参与）
 		const GateEnv dark{.headless = true, .llmCapture = false, .staticGraphicsIndirect = false};
-		CHECK(lint(DiagnosticsConfig{}, passesOf(defaultRenderGraphDesc()),
-			dark, kShadowFwd).empty());
+		CHECK(lint(DiagnosticsConfig{}, passesOfNoLightGraph(),
+			dark, kShadowNoLight).empty());
 	}
 	{  // picking_probe × picking=false = error；反向：picking 开 + frame 非零不喊
 		DiagnosticsConfig c;
 		c.pickingProbeFrame = 30;
-		CHECK(find(lint(c, passesOf(defaultRenderGraphDesc()), kHappyEnv,
-			kShadowFwd), "picking_probe.frame") != nullptr);
+		CHECK(find(lint(c, passesOfNoLightGraph(), kHappyEnv,
+			kShadowNoLight), "picking_probe.frame") != nullptr);
 		DiagnosticsConfig c2;
 		c2.picking = true;
 		c2.pickingProbeFrame = 30;
-		CHECK(find(lint(c2, passesOf(defaultRenderGraphDesc()), kHappyEnv,
-			kShadowFwd), "picking_probe.frame") == nullptr);
+		CHECK(find(lint(c2, passesOfNoLightGraph(), kHappyEnv,
+			kShadowNoLight), "picking_probe.frame") == nullptr);
 	}
 	{  // 输入探针 × headless = error；反向：窗口模式（非 headless）不喊
 		DiagnosticsConfig c;
 		c.uiClickProbeFrame = 10;
 		c.cameraProbeFrame = 10;
 		const GateEnv headless{.headless = true, .llmCapture = true, .staticGraphicsIndirect = true};
-		const auto fs = lint(c, passesOf(defaultRenderGraphDesc()),
-			headless, kShadowFwd);
+		const auto fs = lint(c, passesOfNoLightGraph(),
+			headless, kShadowNoLight);
 		REQUIRE(find(fs, "ui_click_probe.frame") != nullptr);
 		REQUIRE(find(fs, "camera_probe.frame") != nullptr);
 		CHECK(find(fs, "ui_click_probe.frame")->severity == GateSeverity::error);
-		CHECK(find(lint(c, passesOf(defaultRenderGraphDesc()), kHappyEnv,
-			kShadowFwd), "ui_click_probe.frame") == nullptr);
+		CHECK(find(lint(c, passesOfNoLightGraph(), kHappyEnv,
+			kShadowNoLight), "ui_click_probe.frame") == nullptr);
 	}
 }
 
 TEST_CASE("gate_lint warn 组：cull_replay 非 gpu_sync × dgc_static（DGC execute 走不到）") {
 	// 债-30 方案 C 新增门。lint 的失败模式是常喊，故两条反向用例分别钉住两个假阳性方向：
 	// ① gpu_sync（DGC 路真会被走到）不该喊；② 出厂默认（dgc_static 关）绝不该喊。
-	const auto fwd = passesOf(defaultRenderGraphDesc());
+	const auto noLight = passesOfNoLightGraph();
 	for (const auto mode : {CullReplayMode::cpu, CullReplayMode::gpuLagged}) {
 		DiagnosticsConfig c;
 		c.dgcStatic = true;
 		c.cullReplay = mode;
-		const auto fs = lint(c, fwd, kHappyEnv, kShadowFwd);
+		const auto fs = lint(c, noLight, kHappyEnv, kShadowNoLight);
 		REQUIRE(find(fs, "cull_replay") != nullptr);
 		CHECK(find(fs, "cull_replay")->severity == GateSeverity::warn);
 	}
@@ -326,26 +360,26 @@ TEST_CASE("gate_lint warn 组：cull_replay 非 gpu_sync × dgc_static（DGC exe
 		DiagnosticsConfig c;
 		c.dgcStatic = true;
 		c.cullReplay = CullReplayMode::gpuSync;
-		CHECK(find(lint(c, fwd, kHappyEnv, kShadowFwd), "cull_replay")
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "cull_replay")
 			== nullptr);
 	}
 	{  // 反向②：dgc_static 关（出厂默认）+ cull_replay=cpu（也是出厂默认）→ 不喊
 		DiagnosticsConfig c;
 		c.cullReplay = CullReplayMode::cpu;
-		CHECK(find(lint(c, fwd, kHappyEnv, kShadowFwd), "cull_replay")
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "cull_replay")
 			== nullptr);
 	}
 }
 
 TEST_CASE("gate_lint warn 组：dgc_static 能力不符 / imgui×headless / rpc_port 孤儿") {
-	const auto fwd = passesOf(defaultRenderGraphDesc());
+	const auto noLight = passesOfNoLightGraph();
 	{  // dgc_static：设备无 static 能力 = warn；能力齐 = 不喊（判据只看能力，不看厂商）
 		DiagnosticsConfig c;
 		c.dgcStatic = true;
-		CHECK(find(lint(c, fwd, kHappyEnv, kShadowFwd), "dgc_static")
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "dgc_static")
 			== nullptr);  // kHappyEnv static=true → 合法
 		const GateEnv noStatic{.headless = false, .llmCapture = true, .staticGraphicsIndirect = false};
-		const auto fs = lint(c, fwd, noStatic, kShadowFwd);
+		const auto fs = lint(c, noLight, noStatic, kShadowNoLight);
 		REQUIRE(find(fs, "dgc_static") != nullptr);
 		CHECK(find(fs, "dgc_static")->severity == GateSeverity::warn);
 	}
@@ -353,22 +387,22 @@ TEST_CASE("gate_lint warn 组：dgc_static 能力不符 / imgui×headless / rpc_
 		DiagnosticsConfig c;
 		c.imgui = true;
 		const GateEnv headless{.headless = true, .llmCapture = true, .staticGraphicsIndirect = true};
-		CHECK(find(lint(c, fwd, headless, kShadowFwd), "imgui") != nullptr);
-		CHECK(find(lint(c, fwd, kHappyEnv, kShadowFwd), "imgui") == nullptr);
+		CHECK(find(lint(c, noLight, headless, kShadowNoLight), "imgui") != nullptr);
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "imgui") == nullptr);
 	}
 	{  // rpc_port：偏离默认但 rpc=off = warn；rpc 开 = 不喊；默认端口不喊
 		DiagnosticsConfig c;
 		c.rpcPort = 9000;
-		CHECK(find(lint(c, fwd, kHappyEnv, kShadowFwd), "rpc_port")
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "rpc_port")
 			!= nullptr);
 		DiagnosticsConfig c2;
 		c2.rpcPort = 9000;
 		c2.rpc = true;
-		CHECK(find(lint(c2, fwd, kHappyEnv, kShadowFwd), "rpc_port")
+		CHECK(find(lint(c2, noLight, kHappyEnv, kShadowNoLight), "rpc_port")
 			== nullptr);
 		DiagnosticsConfig c3;
 		c3.rpc = true;  // 默认端口 + rpc 开 = 完全合法
-		CHECK(lint(c3, fwd, kHappyEnv, kShadowFwd).empty());
+		CHECK(lint(c3, noLight, kHappyEnv, kShadowNoLight).empty());
 	}
 }
 
@@ -457,13 +491,13 @@ TEST_CASE("gate_lint inertNote 组（shadow）：izb.grid 与两档调参块按 
 }
 
 TEST_CASE("gate_lint inertNote 组：主门关时的死值（探针坐标）") {
-	const auto fwd = passesOf(defaultRenderGraphDesc());
+	const auto noLight = passesOfNoLightGraph();
 	{  // 探针坐标 × frame=0 = inertNote；frame 设了坐标就有效
 		DiagnosticsConfig c;
 		c.pickingProbeX = 640;
 		c.uiClickProbeY = 360;
 		c.cameraProbeHold = 20;
-		const auto fs = lint(c, fwd, kHappyEnv, kShadowFwd);
+		const auto fs = lint(c, noLight, kHappyEnv, kShadowNoLight);
 		CHECK(find(fs, "picking_probe.x")->severity == GateSeverity::inertNote);
 		CHECK(find(fs, "ui_click_probe.y")->severity == GateSeverity::inertNote);
 		CHECK(find(fs, "camera_probe.holdFrames")->severity == GateSeverity::inertNote);
@@ -807,7 +841,7 @@ struct GoldenCase {
 	DiagnosticsConfig cfg{};
 	ShadowConfig shadow{};
 	RuntimeConfig runtime{};
-	bool fwd = false;  ///< true = forward 图（缺省 = deferred 图）
+	bool noLight = false;  ///< true = 非 deferred 图（缺省 = deferred 图）
 	GateEnv world = kHappyEnv;
 };
 
@@ -825,8 +859,8 @@ const std::vector<GoldenCase>& goldenCases() {
 	static const std::vector<GoldenCase> kCases{
 		// ———— factory：出厂配置 × 图/env 四世界 ————
 		{.name = "factory/def-happy"},
-		{.name = "factory/fwd-dark", .fwd = true, .world = kGoldenDark},
-		{.name = "factory/fwd-happy", .fwd = true},
+		{.name = "factory/no-light-dark", .noLight = true, .world = kGoldenDark},
+		{.name = "factory/no-light-happy", .noLight = true},
 		{.name = "factory/def-headless", .world = kGoldenDark},
 		// ———— pcss 块：宿主 = mode=="pcss"（含结构性错位键 min_footprint_texels）————
 		{.name = "pcss/owner-on", .shadow = {.mode = ShadowMode::pcss, .pcss = kTuningAll}},
@@ -847,14 +881,14 @@ const std::vector<GoldenCase>& goldenCases() {
 			.shadow = {.mode = ShadowMode::evssm, .pcss = kTuningAll}},
 		// ———— izb：error（非 deferred 图 / mode=none）× warn（交付已关）× 子键 ————
 		{.name = "izb/on-def", .shadow = {.izb = true}},
-		{.name = "izb/on-fwd", .shadow = {.izb = true}, .fwd = true},
+		{.name = "izb/on-no-light", .shadow = {.izb = true}, .noLight = true},
 		{.name = "izb/on-none", .shadow = {.mode = ShadowMode::none, .izb = true}},
-		{.name = "izb/on-none-fwd", .shadow = {.mode = ShadowMode::none, .izb = true}, .fwd = true},
+		{.name = "izb/on-none-no-light", .shadow = {.mode = ShadowMode::none, .izb = true}, .noLight = true},
 		{.name = "izb/dump-off", .shadow = {.izbDumpFrame = 120}},
 		{.name = "izb/dump-on", .shadow = {.izb = true, .izbDumpFrame = 120}},
 		{.name = "izb/grid-off", .shadow = {.izbGrid = 1024}},
 		{.name = "izb/grid-on", .shadow = {.izb = true, .izbGrid = 1024}},
-		{.name = "izb/evssm-fwd", .shadow = {.mode = ShadowMode::evssm}, .fwd = true},
+		{.name = "izb/evssm-no-light", .shadow = {.mode = ShadowMode::evssm}, .noLight = true},
 		// ———— picking_probe：宿主 picking（error）× 块宿主 frame（inertNote）————
 		{.name = "pp/frame-off-nopicking", .cfg = {.pickingProbeFrame = 30}},
 		{.name = "pp/frame-on-picking-on", .cfg = {.picking = true, .pickingProbeFrame = 30}},
@@ -887,7 +921,7 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "imgui/headless", .cfg = {.imgui = true}, .world = kGoldenHeadless},
 		{.name = "imgui/window", .cfg = {.imgui = true}},
 		{.name = "gbuf/nollm", .cfg = {.dumpGbuf = 2}, .world = kGoldenNoLlm},
-		{.name = "gbuf/llm-fwd", .cfg = {.dumpGbuf = 2}, .fwd = true},
+		{.name = "gbuf/llm-no-light", .cfg = {.dumpGbuf = 2}, .noLight = true},
 		{.name = "gbuf/ok", .cfg = {.dumpGbuf = 2}},
 		// ———— rt：runtime.lua 的 meshlet 块（红线 A 打底 = redlineA；其余指定初始化）————
 		{.name = "rt/factory"},
@@ -1006,10 +1040,10 @@ const std::vector<GoldenCase>& goldenCases() {
 /** 88 档全组合扫描 → 两份基线文本（触发面 keep / 归因面 msg）。校验与重生成**共用这一份**
  *  装配代码：两条路各写一遍 = 两个真相源，改口径时必漂（本 harness 要拦的正是这个形态）。 */
 void buildGoldenBlobs(std::string& keep, std::string& msg) {
-	static const std::vector<RgPassPlan> kFwd = passesOf(defaultRenderGraphDesc());
+	static const std::vector<RgPassPlan> kNoLightGraph = passesOfNoLightGraph();
 	static const std::vector<RgPassPlan> kDef = passesOf(deferredRenderGraphDesc());
 	for (const auto& c : goldenCases()) {
-		const std::span<const RgPassPlan> passes = c.fwd ? std::span{kFwd} : std::span{kDef};
+		const std::span<const RgPassPlan> passes = c.noLight ? std::span{kNoLightGraph} : std::span{kDef};
 		const auto fs = lintDiagnosticsGates(c.cfg, DiagnosticsConfig{}, c.shadow, ShadowConfig{},
 			c.runtime, RuntimeConfig{}, passes, c.world);
 		std::vector<std::string> keepLines, msgLines;

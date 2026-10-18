@@ -7,8 +7,8 @@
 -- ⚠ 两件事都要写，只关一件不够：
 --   mode = "none" → 图首 shadow0..3 段零 draw + 采样端 enabled=0 恒全亮（旧 shadow_pass）
 --   izb  = false  → 不构造 IZB、light 条目不选 IZB_CONSUME 变体（旧 izb_shadow）。
---     本目录 render_graph.lua 是 **forward** 图，而 IZB 只接 deferred light pass
---     ⟹ izb 开着既触发 gate_lint 启动期 error，又会把 frag 换成 izb 变体（换 SPV = 换
+--     本目录走内建 deferred 图（刀② 起），但 IZB 消费变体同样换被测 frag SPV
+--     ⟹ izb 开着既可能触发 gate_lint 启动期 error，又会把 frag 换成 izb 变体（换 SPV = 换
 --     被测对象）。交付默认 2026-10-10 已翻成 false（docs/shadow_routes_plan.md §7），这一条
 --     看着"能靠默认兜住"了——**别删**：探针的语义要的是"我关掉了它"，不是"别人恰好关着"。
 --

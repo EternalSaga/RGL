@@ -11,8 +11,8 @@ import rlstd;
 // 契约（为何插在图中间、为何要改前一个 pass 的 storeOp）见 render_graph.cppm 接口注释。
 //
 // 纪律：装饰只认"角色"不认名字——depth 附件名从写它的 pass 反查、场景色附件名从采样它
-// 的 pass 反查，因此 forward / deferred 两个内建变体与自定义图（附件名 scene_hdr /
-// scene_rt 各不相同）都自动适用，无需为图形态写分支。
+// 的 pass 反查，因此内建 deferred 图与自定义图（附件名 scene_hdr / scene_rt 各不相同）
+// 都自动适用，无需为图形态写分支（forward 内建变体已随刀②.2 删除）。
 
 namespace RGL {
 
@@ -180,8 +180,9 @@ bool graphDecoratedTooLate(const RgGraphDesc& desc) {
  * 插入点与 depth 来源均按角色反查（见本文件头部纪律）；颜色写既有场景色附件（load 保留成片，
  * 高亮 alpha 混合叠加），插图末 = 落在 tonemap 之后、盖不到上屏内容，故必须插在消费 pass 之前。
  *
- * 跨 pass 补丁 = 前一个 depth 写者的 storeOp 改 store（否则 forward 图的 transparent 段按
- * "depth 后续无人用"的优化声明 dontCare，高亮读到未定义内容）。
+ * 跨 pass 补丁 = 前一个 depth 写者的 storeOp 改 store（否则自定义图的 transparent 段按
+ * "depth 后续无人用"的优化声明 dontCare，高亮读到未定义内容；原 forward 图正是此形态，
+ * 已随刀②.2 删除）。
  */
 RgHighlightPlan planHighlightDecoration(const RgGraphDesc& desc) {
 	RgHighlightPlan plan;
@@ -207,7 +208,7 @@ RgHighlightPlan planHighlightDecoration(const RgGraphDesc& desc) {
 				.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store }
 		}
 	};
-	// ⚠ 只在**真的需要改**时才发补丁：内建图里前驱本来就是 store（deferred / forward 皆然），
+	// ⚠ 只在**真的需要改**时才发补丁：内建 deferred 图里前驱本来就是 store，
 	// 发一条 store→store 的补丁只会给撤回添一个「还原成什么」的悬案。原值**在这里**读、且只能
 	// 在这里读——补丁落盘后就再也问不到「申报前它是什么」（见 RgStoreOpPatch::originalStoreOp）。
 	if (prior->second.storeOp != RgStoreOp::store)
@@ -306,7 +307,7 @@ bool decoratePickingPass(RgGraphDesc& desc) {
  * decorateShadowPass 定义（契约见 render_graph.cppm 接口注释，含"当前段内零 draw、
  * 画面逐位不变"的诚实声明）。与 picking / highlight 两个装饰的关键差别：**不需要**
  * 按角色反查——阴影 pass 自为一体（自带专属深度附件），既不读既有拓扑也不借既有附件，
- * 故任何图形态（forward / deferred / 自定义图）都直接适用，前插即可；也正因它没有任何
+ * 故任何图形态（deferred / 自定义图）都直接适用，前插即可；也正因它没有任何
  * 「图形态不支持」的失败分支，返回类型是 void（债-129 S1c：原 `bool` 恒真、唯一生产
  * 调用点把返回值丢掉，留着会让 selfCheck 误以为自己在断一条真判据）。
  */
@@ -342,8 +343,9 @@ void decorateShadowPass(RgGraphDesc& desc, uint32_t mapSize) {
 		});
 	}
 	// 消费方声明：把阴影图作为 sampleRead 输入接到**光照 pass**。不接的话编译器不会为它生成
-	// DSAO → ShaderReadOnly 的布局转换，采样端就会报 VVL。按 state 而不是按 pass 名：forward 图的光照在
-	// opaque/transparent 段，deferred 图的光照在 light pass（state="light"）——三个 state 名在两种图里都是语义角色。
+	// DSAO → ShaderReadOnly 的布局转换，采样端就会报 VVL。按 state 而不是按 pass 名：原 forward
+	// 图的光照在 opaque/transparent 段（该图已随刀②.2 删除，词表条目保留），deferred 图的光照在
+	// light pass（state="light"）——三个 state 名在任何图里都是语义角色（自定义图可在 opaque 段光照）。
 	static constexpr std::array<std::string_view, 3> kShadowLitStates{"opaque", "transparent", "light"};
 	for (auto& pass : desc.passes)
 		if (std::ranges::any_of(kShadowLitStates, [&](std::string_view s) { return pass.state == s; }))
@@ -448,7 +450,7 @@ bool decorateAoApplyPass(RgGraphDesc& desc) {
 	//    `references unknown attachment 'ao'`（**正确的硬失败**）。旧行为是 warn + AO 施加
 	//    点静默退回 tonemap 内 = 本债的病；而「怕装饰出引用不存在附件的 pass 所以先 skip」
 	//    恰恰把我们要的编译期错误给藏掉了（§项目哲学 4：让错的东西编不过 > 让错的东西被看见）。
-	//    内建 forward / deferred 两图都**无条件**声明 ao（render_graph_builtin.cppm），
+	//    内建 deferred 图**无条件**声明 ao（render_graph_builtin.cppm；forward 图同刀已删），
 	//    自定义 blit 上屏图走不到这里（上面锚点判据先 false）⟹ 出厂形态逐位不变。
 
 	desc.attachments.push_back(RgAttachmentDesc{
@@ -511,7 +513,7 @@ bool decorateVelocityPass(RgGraphDesc& desc) {
 	if (!consumerIdx)
 		return false;  // 自定义 blit 上屏图：无"写 swapchain 且采色"的 pass
 	// depth 附件名从"插入点之前最后一个写 depth 的 pass"反查（不硬编码 "depth"，内建两图与
-	// 自定义图自动适用），并顺手把它的 storeOp 修成 store——否则 forward 图的 depth 按"后续
+	// 自定义图自动适用），并顺手把它的 storeOp 修成 store——否则自定义图的 depth 按"后续
 	// 无人用"声明 dontCare，本 pass 读到未定义内容，且编译期"后续使用的写必须 store"校验
 	// 会直接失败（同 ao 批 11.4 那条教训，见 configs/render_graph.lua:57 的硬警告）。
 	auto depthAtt = borrowDepthFromPriorWriter(desc, *consumerIdx);
@@ -574,8 +576,9 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 	if (!consumerIdx)
 		return false;
 	auto colorAtt = sampledColorName(desc, desc.passes[*consumerIdx]);  // 上一步已保证有值
-	// 跳过条件 3 = **SSR 的 deferred-only 边界**（D1 对等豁免已拍板，forward 不跟，出处
-	// `docs/phase15_plan.md` §0.1）。判据 = 「图里**逐一**有 kGBufferAttachments 契约表的全部
+	// 跳过条件 3 = **SSR 的 deferred-only 边界**（当年 D1 对等豁免拍板 forward 不跟，出处
+	// `docs/phase15_plan.md` §0.1；forward 已随刀②.2 删除，这条边界现在是唯一形态）。判据 =
+	// 「图里**逐一**有 kGBufferAttachments 契约表的全部
 	// 通道」，不再是前半的「有 position 即可」。
 	// 🔴 查**全表**而非只查 trace 真正引用的那四个，唯一站得住的理由是「表就是契约」：缺任何
 	//    一通道 = 这张图**不是 deferredRenderGraphDesc 产出的那张**，本装饰就不该往上贴。

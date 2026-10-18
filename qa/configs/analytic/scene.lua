@@ -12,30 +12,25 @@
 -- 判据虽好算但弱；倾斜后 NdotL=0.766、H≠N，BRDF 三项全展开，判别力更强。
 -- 期望 L（指向光源）= -direction = (-0.642788, 0, 0.766044)。
 --   environment.intensity = 0  → IBL 漫反射 + 镜面两路同时归零（shader 里统一乘；
---                                deferred 的 light.frag env 分支同样 ×env.intensity）
---   environment.skybox = false → 无背景贡献（屏幕中心本来也被墙挡住，双保险。⚠ deferred
---                                不读本标志——天穹内联在 light.frag、只门控 env.mipRange>0——
---                                对 deferred 它不是门，靠的是墙挡满画面）
+--                                deferred 的 light.frag env 分支同样 ×env.intensity）。
+--                                原「关键 3：skybox = false 无背景」双保险已随 skybox 标志
+--                                删除（2026-10-18 刀②.2）——deferred 本就不读它；天穹由
+--                                intensity=0 一起关（light.frag sky 分支门控 mipRange>0 &&
+--                                intensity>0，§6.2），且屏幕中心本来就被墙挡满）
 --   light.ambient = 0          → 平环境光项归零
 --   ao.strength = 0            → lerp(1,ao,0) 位级 = 1.0（BIT-IDENTICAL 旁路；AO 施加住在
---                                两路共用的 tonemap pass）
+--                                tonemap pass）
 --   exposure = 1.0             → ACES 前的线性倍率取中性
 --   shadow.lua mode = "none"    → 阴影因子恒 1（批 N6b 起阴影键住 shadow.lua）
 -- 剩下的只有：color = lightColor × NdotL × (albedo/π + GGX_spec)
 return {
-    -- 显式钉住交付风格（缺表回落 model_pbr = 非交付路径——12.3b 查实：探针此前一直
-    -- 测的是非交付 frag；12.3b 调试中曾被 git checkout 误毁，此为恢复重钉）。
-    -- ⚠ 2026-10-18 切 deferred 后本键**不被消费**（deferred 走 deferred_styles，缺表回落
-    -- deferred_geometry）；留着只为 forward 还在的窗口期可回切对照，随 forward 一起删。
-    styles = { unlit = "model", pbr = "model_pbr_ibl" },
     entities = {
         { type = "model", file = "models/cornell_box.glb" },
     },
     environment = {
         hdr = "env/san_giuseppe_bridge_4k.hdr",
         hdr_size = 2048,
-        intensity = 0.0,     -- ← 关键 2：IBL 两路统一归零
-        skybox = false,      -- ← 关键 3：无背景
+        intensity = 0.0,     -- ← 关键 2：IBL 两路统一归零（天穹同闸，见头注）
     },
     light = {
         -- 照射方向 (0,0,-1) ⟹ 指向光源的 L = -direction = (0,0,1) ≡ 探针面上的 N ≡ V

@@ -81,7 +81,7 @@ std::expected<uint32_t, Error> resolveAnchor(const RgOffGraphWorkDecl& decl,
 		hitIndex = i;
 	}
 	if (hits == 0 && decl.anchor.mayBeAbsent) {
-		// 债-128：**逐条显式**的容忍档。同一张申报表服务多张编译图（forward 图没有
+		// 债-128：**逐条显式**的容忍档。同一张申报表服务多张编译图（自定义图可以没有
 		// drawLight "light"），命中 0 的含义从「装配错」变成「本图不可调度」：相位给
 		// 不可达哨兵 ⟹ enter 打上来必红（挂点错）、帧末门开着必红（静默旁路）。
 		// 日志不静默且必须在 warn 档（console sink = warn，info 到不了 smoke 抓的 stdout）；

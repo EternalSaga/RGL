@@ -145,9 +145,10 @@ ProfileOpts makeSeriesProfile(const SeriesOpts& s)
         o.overridePicking = true;
     }
     // A/B 侧：env.intensity=0 关 IBL、ao.strength=0 关 AO。两个门都是**IEEE 精确**旁路
-    // （ao：tonemap 的 lerp(1,ao,0)≡1；env：model_pbr_ibl / light 的 diffuse+specular 都乘
-    // env.intensity）——但 ⚠ **天穹背景不受 env.intensity 影响**（skybox.frag.slang 与
-    // light.frag.slang 的 envSky 分支直接返回 env 采样、不乘 intensity），所以背景会**原样亮着**。
+    // （ao：tonemap 的 lerp(1,ao,0)≡1；env：light.frag 的 diffuse+specular 都乘
+    // env.intensity）——且 env.intensity=0 **连天穹一起关**（light.frag 的天穹分支同时门控
+    // mipRange 与 intensity，2026-10-18 探针重立定案；原 forward skybox pass 的独立背景开关
+    // 已随刀②.2 删除）⟹ 背景与 IBL 一起变黑，不会残留一块逐相位变化的天穹。
     if (s.overrideEnv) {
         o.envIntensity = s.envIntensity;
         o.overrideEnvIntensity = true;

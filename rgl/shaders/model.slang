@@ -52,8 +52,8 @@ SamplerState baseColorSampler;
 
 // 贴图扩展（Phase 8 批次 ③a）：normal + ORM 各占一个 SAMPLED_IMAGE 堆槽（运行时
 // allocSlot，同 baseColorTexture；sampler 复用 baseColorSampler binding 2，不新增
-// sampler binding）。不 import 本文件的风格（cube/skybox/light 等）不声明 = 无影响；
-// import 但不消费的风格（model.frag unlit 等）Slang 剔除未用全局 = SPV 无此描述符，
+// sampler binding）。不 import 本文件的风格（cube/light 等；skybox 已随刀②.2 删除）
+// 不声明 = 无影响；import 但不消费的风格（原 model.frag unlit 等，同刀删除）Slang 剔除未用全局 = SPV 无此描述符，
 // 烘焙的 mapping 空转（既证无害，同 binding 4/5 对不 import env 的风格）。
 // normal 贴图：DirectX 约定（Y-up，README "Normal (DirectX)"）+ 可能 BC5 压缩无 Z——
 // flip-G 与 Z 重建在 normalmap.slang（decodeNormalDx）处理，本处只声明采样源；

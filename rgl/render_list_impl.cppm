@@ -344,7 +344,8 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
 Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDrawList& out) {
 	// 灯 entity 化（Phase 7，ECS 规范 3）：灯 = entity（Light 组件），画不画 = 实体有无。
 	// 收集**不依赖 view 迭代序**（无保证）——按 Light.index 显式落槽：primary = index 0
-	//（forward @0 头单灯，diff0）；延迟灯数组按 index 填（≤ kMaxLights，尾区
+	//（写 scene data 头 @0 单灯，deferred light/highlight/ssr/shadow 经 readSceneLight 取共享
+	// eyePos/ambient）；延迟灯数组按 index 填（≤ kMaxLights，尾区
 	// @kSceneDataLightArrayOffset，契约 lights.slang）。lightEntityCount 每帧算（非启动期常量）
 	// = 留“运行时增删灯”接缝。
 	std::array<Light, kMaxLights> lightSlot{};
@@ -381,7 +382,7 @@ constexpr uint32_t kNoMaterial = 0xFFFFFFFFu;
 // BMI 只含声明 + RenderListState；本单元是叶子边。
 
 /** 实现流水（语义/契约见接口声明）：cull 分桶（opaque/transparent，Pending 暂存）
- * → 可见统计 → 段装配（opaque → skybox 单 draw → transparent 稳定排序）
+ * → 可见统计 → 段装配（opaque → transparent 稳定排序；skybox 单 draw 已随刀②.2 删除）
  * → scene data 填充 → 写 ctx。 */
 /** 批 14.5：填 FSR 的相机输入（执行器侧唯一消费者 = `Renderer::fsrTonemapPassPre`）。
  *
@@ -605,7 +606,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	auto& list = rg.ctx().get<FrameDrawList>();	const auto& viewProj = rg.ctx().get<ViewProjection>();
 	const auto& spin = rg.ctx().get<SceneSpin>();
 	const auto& camera = rg.ctx().get<Camera>();
-	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（天空盒 draw 生成 + env 参数）
+	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（env 参数；天空盒 draw 已随刀②.2 删除）
 	const auto& taa = rg.ctx().get<TaaState>();  // 批 12.6（帧间载荷；taaSystem 本帧已算好）
 
 	std::vector<Pending> opaque, transparent;
@@ -750,15 +751,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	fresh.materialBySlot = std::span<const uint32_t>{state.materialBySlot};
 	for (const auto& p : opaque)
 		fresh.calls.push_back(p.call);
-	// Phase 5.5 批次 4 天空盒段：opaque 之后、透明之前（天空恒最远背景，透明在其上混合）；
-	// 单 draw groupCount=1（大三角单 group）。enabled 但条目未建 = 契约漂移（main 保证同批回填）
-	fresh.skyboxStart = static_cast<uint32_t>(fresh.calls.size());
-	if (env.skybox) {
-		if (env.skyboxPipeline == 0xFFFFFFFF)
-			throw std::runtime_error("SceneEnv.skybox enabled but skybox pipeline not bound (main contract)");
-		fresh.calls.push_back(RGL::DrawCall{env.skyboxPipeline,
-			std::as_bytes(std::span<const RGL::DrawArgs>{&state.skyboxArgs, 1}), 1});
-	}
+	// Phase 5.5 批次 4 天空盒段（opaque 之后、透明之前的单 draw）已随 forward 绘制机制
+	// 删除（2026-10-18 图变体收敛刀②.2，docs/图变体收敛_plan.md §6.2）。
 	fresh.transparentStart = static_cast<uint32_t>(fresh.calls.size());
 	// 稳定排序：同距离保持实体迭代序（确定性输出，截图可复现）
 	std::ranges::stable_sort(transparent,
@@ -768,7 +762,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// Phase 11 批 11.2：阴影段独立向量（不进 calls；见 FrameDrawList::shadowCalls）。顺序
 	// = 实体迭代序不变（与 opaque 段同源，保证结构可复现）；不做距离排序
 	//（深度测试与光方向无关，排序只多花 O(n log n) 且不改结果）。
-	// 逐级拼成一条**级主序**的扁平序列 + 段边界（与 calls/skyboxStart 的既有风格同构）：
+	// 逐级拼成一条**级主序**的扁平序列 + 段边界（与 calls/transparentStart 的既有风格同构）：
 	// 采样端按段名后缀取子段（FrameDrawList::shadowSegment），故扁平序必须是级主序。
 	fresh.shadowBoundaries[0] = 0;
 	uint32_t total = 0;

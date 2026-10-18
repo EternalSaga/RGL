@@ -65,8 +65,9 @@ namespace RGL {
  *
  * 绘制内容 = 渲染 system 产出的 FrameDrawList（本类是盲执行器，不认识具体场景资产，
  * 见 DrawCall/FrameDrawList 注释）；帧拓扑 = 构造传入的编译图（Phase 6：barrier 与
- * 布局转换由 render_graph 编译器从 pass 声明推导，执行器不再手写；现默认图 =
- * opaque/skybox/transparent 三段直渲）。核心现代特性：Dynamic Rendering（无 RenderPass）+
+ * 布局转换由 render_graph 编译器从 pass 声明推导，执行器不再手写；现内建图 =
+ * deferred geometry→light + ao + tonemap；forward 三段直渲已随刀②.2 删除）。核心现代特性：
+ * Dynamic Rendering（无 RenderPass）+
  * ShaderObject（无 PipelineLayout，bindShadersEXT + 动态状态）+ DescriptorHeap
  *（vkCmdBindResourceHeapEXT 取代 descriptor set，使用规范见 docs/DESCRIPTOR_HEAP_SPEC.md）。
  */
@@ -374,7 +375,7 @@ export class Renderer {
 	 * 图能表达的最强事实就是「先于一切消费者」；shadow 级 0 由 decorateShadowPass **无条件**
 	 * 前插 = 任何图形态的 pass 0，且 shadow_meshlet.mesh.slang 不声明 binding 21（不读标志）
 	 * ⟹ 同 pass 无读写 feedback。消费者锚点判据用 drawSource 而不是 pass 名：deferred 的
-	 * 主 opaque 段叫 "geometry"（drawSource 仍是 "opaque"），forward 叫 "opaque"；
+	 * 主 opaque 段叫 "geometry"（drawSource 仍是 "opaque"）；
 	 * meshlet.mode = "switch" 档只替换主 opaque 段 ⟹ 消费者就是它。失败 = throw（装配期路径，
 	 * 同 syncIzbGraphAttachments 写上界对账的 fail-fast 口径；对账缺边红在声明现场）。
 	 */
@@ -471,8 +472,8 @@ export class Renderer {
 	/** 批 11.6d-2 EVSSM 帧首段（drawFrame 调用，与 izbPreFrame 同位）：门开时构造
 	 *  EvssmShadow（需 deferred light pass + 阴影图 RT 已在 + shadow.lua 的 mode=="evssm"）。
 	 *  门关 = 一次布尔判断零分配（evssmShadow 恒空 = 逐位红线）。
-	 *  ⚠️ v1 边界 = 仅 deferred：forward 的矩消费在 geometry pass（sandwich 未接），
-	 *  forward + 门开 = warn-once 不构造（变体采样读 fallback 零矩 = 全亮，无害）。 */
+	 *  ⚠️ 仅 deferred：消费点在 deferred light pass；非 deferred 图形态由 gate_lint 启动期
+	 *  error（2026-10-02 从本处 warn-once 迁走），运行期早退保留。 */
 	void evssmPreFrame();
 	/** 批 11.6d-2：pass 循环头部 EVSSM sandwich（与 izbLightPassPre 同位）——仅
 	 *  deferred light pass 录矩派生 + 7 级 mip 链（图外 compute，其余 pass 零命令）。 */

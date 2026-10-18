@@ -25,8 +25,9 @@
 // ——后者不自关会第 8 帧自截自退，且 RPC /shot 被 409 拒）；**渲染门一个不碰**，
 // 冻结的已知量集合仍是契约本体。
 //
-// 光照式两路逐字相同（light.frag shadeLight ≡ model_pbr_ibl shadeDirect，连 epsilon 一致），
-// tonemap 尾段两路共用同一个 tonemapPass() ⟹ 闭式模型只补 G-buffer 量化往返（analytic.cpp）。
+// 光照式 = light.frag 的 shadeLight（现行唯一光照路；它与已随刀②.2 删除的 forward
+// model_pbr_ibl shadeDirect 曾逐字相同、连 epsilon 一致，那条对偶是这套闭式解的出身），
+// tonemap 尾段 = 内建图同一个 tonemapPass() ⟹ 闭式模型只补 G-buffer 量化往返（analytic.cpp）。
 #include "imgqa.h"
 
 #include <algorithm>

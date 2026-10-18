@@ -159,7 +159,8 @@ int cmdFaces(const std::string& glb, const std::string& pieceName, bool shadowPa
     cam.target = center;
     cam.fovDegrees = 45.0;
 
-    ProfileOpts o;  // 默认 = 分析光照（env/ambient/ao/skybox 归零、shadow 关、曝光 1）
+    ProfileOpts o;  // 默认 = 分析光照（env/ambient/ao 归零、shadow 关、曝光 1；原 skybox
+                    // 字段已随刀②.2 删除，deferred 天穹总闸 = envIntensity）
     o.glb = glb;
     o.shadowPass = shadowPass;
     if (envOn)

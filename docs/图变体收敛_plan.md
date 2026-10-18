@@ -1,6 +1,7 @@
 # 图变体收敛（forward / deferred / offscreen）
 
-> **状态：现行·施工中**（2026-10-17 调研；2026-10-18 三枚裁决全部关闭，见 §6.1，开始施工）。
+> **状态：现行·已落地**（2026-10-17 调研；2026-10-18 三枚裁决关闭 + 刀①/探针重立/刀② 全部落地，
+> 施工读数 §9）。本文保留作**裁决与读数记录**，后续 deferred 单路线的维护以各源码注释为准。
 > 上游：`docs/配置正交性_plan.md`（债-129，**已结案**）；MDI 侧定案：`docs/mdi_plan.md` §19.20。
 
 ## 0. 结论
@@ -88,8 +89,9 @@
 
 **探针的 forward 依赖精确到式**（三条实测，比初稿估的轻）：
 
-1. 光照式两路**逐字相同**：`light.frag.slang:101-122` `shadeLight` ≡ `model_pbr_ibl.frag.slang:16-36`
-   `shadeDirect`（连 epsilon `1e-7·a2` 都一致）⟹ 探针闭式模型 `analytic.cpp:shadeDirect` 一行不改。
+1. 光照式两路**逐字相同**：`light.frag.slang:101-122` `shadeLight` ≡ model_pbr_ibl.frag.slang:16-36
+   （已删文件，git history 可查）`shadeDirect`（连 epsilon `1e-7·a2` 都一致）⟹ 探针闭式模型
+   `analytic.cpp:shadeDirect` 一行不改。
 2. tonemap 尾段（ACES + sRGB）两路**共用同一个 `tonemapPass()`** ⟹ 探针那半条链也不改。
 3. 唯一硬墙 = G-buffer 编码往返：`gbuffer_albedo` 8bit sRGB、`gbuffer_metalrough` 8bit unorm
    （`gbuffer_contract.cppm:48-54`）。⚠ 初稿写"法线不经 **8bit** 量化"**数错**——normal 是
@@ -131,16 +133,14 @@ deferred 的天穹对应物是 `env.intensity` 总闸（light.frag sky 分支 20
 抑制比被"关不掉的天穹"污染实测抓出，与 unlit 破口同批修复）。
 ② 删的是 **forward draw 侧的那枚标志**；"env 开不开"这一轴由 intensity 独立表达，deferred 已具备。
 
-## 7. 施工序（2026-10-18 定稿）
+## 7. 施工序（2026-10-18 定稿；同日全部收口，读数见 §9）
 
 1. ~~债-129 剩余项~~ **已结案**（N9，2026-10-17）。
-2. **刀①**：删 offscreen（零前置、零使用者）。blit **机制**保留——Lua 词表能声明 blit pass
-   （`render_graph_config_impl.cppm:250`），自定义图仍是它的生产者。
-3. **探针重立**（§6.1-1，刀② 的硬前置）：`Engine::shot` 补 `gbuf` 参数 → probe 切 RPC 模式
-   单启动三拍（后缓冲 + 通道 0/3）→ 闭式补量化往返 → 模板切 deferred。
-   验收 = `just analytic` 双锚绿 + 变异对照（临时改 `deferred_geometry` 写入，确认 gbuffer 锚红）。
-4. **刀②**：删 forward + variant 枚举 + 换触发（§6.1-2）+ skybox 死路（§6.2）+ qa 配置目录处置（§6.1-3）。
-   逐刀独立验收：逐位锚 + `just gates`。
+2. ~~**刀①**：删 offscreen~~ **已落地**（`c986eb4`）。blit **机制**保留——Lua 词表能声明 blit pass
+   （`render_graph_config_impl.cppm`），自定义图仍是它的生产者。
+3. ~~**探针重立**~~ **已落地**（`eb2ecce` + 破口修复 `e0c31ee`，读数 §9-2/3）。
+4. ~~**刀②**~~ **已落地**（§9-6）：删 forward + variant 枚举 + 换触发（§6.1-2）+
+   skybox 绘制机制（§6.2 改判版）+ qa 配置目录处置（§6.1-3）。
 
 ## 8. 待决
 
@@ -161,5 +161,20 @@ deferred 的天穹对应物是 `env.intensity` 总闸（light.frag sky 分支 20
    是把 forward 掩盖着的 deferred 缺口逼出来。
 4. 合成 profile 判据迁移验收：aa-coverage / temporal / temporal-residual / faces / switch /
    attribution 在 deferred 下全绿（temporal 抑制比 3.52× vs forward 同靶 3.51×）。
-5. **刀② 未动工**（下一步）。刀② 连带清单在 §5/§6.1/§6.2 之外新增一条：
+5. ~~**刀② 未动工**~~ → **刀② 已落地**（§9-6）。刀② 连带清单在 §5/§6.1/§6.2 之外新增一条：
    `environment.skybox` 配置键随 forward draw 侧一起删（deferred 的对应表达 = intensity）。
+6. **刀② 落地读数**（2026-10-18，分两笔）：
+   - **②.1 配置面**：`RgGraphVariant` 枚举 + `variant` 键 + gate_lint 交叉校验整条消失；
+     选路只剩一条规则（文件有 attachments/passes = 自定义图，否则内建 deferred）；
+     `deferredMode` 改吃图事实 `graphHasDeferredLight`。**regress ab 逐位相同**
+     （A/B 各 3 跑全中出厂档的逐位基线哈希），variant 键出现 = 启动报错，缺文件 = warn + 内建 deferred。
+   - **②.2 本体**：forward 图声明 + 6 支 forward frag + skybox.frag/mesh + `styleMap`/`styles`
+     键 + skybox 绘制机制（`SceneEnv.skybox`/`addSkyEntry`/`skyboxStart` 段/词表两档）+
+     d1_parity/env_band 生成器删除；净删 ~1300 行（106 文件 +862/−2200）。
+     测试手术零流失：forward 样本换成**合成无-light-pass 图**（金标准 6 档改名，
+     findings 与消息**逐字节未变** = 合成图与原 forward 图在规则表面等价）。
+   - **保留清单核对**：blit 机制 ✓、transparent 段与词表条目 ✓（自定义图可消费）、
+     `sky.slang` ✓（light.frag 射线重建在用）、`model.mesh.slang` ✓、material_rules ✓。
+   - 自定义图路实测：手写 opaque→transparent→ao→tonemap 图能起跑（"图是数据"活着）；
+     逐字照抄旧 forward 图**不再能起**（skybox 状态已出词表）——这是本刀的**预期行为**，
+     不是回归。

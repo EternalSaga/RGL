@@ -1,9 +1,9 @@
 module;
 /**
- * test_state_kit —— StateKit 十段动态状态表（批 12.2d）
+ * test_state_kit —— StateKit 动态状态表（批 12.2d）
  *
- * 为什么值得测：StateKit 是**执行器与着色器之间唯一的状态契约面**。十段里有好几处
- * 「反直觉但有理由」的设定（skybox 用 LEQUAL、picking 用 LEQUAL 而非 LESS、transparent
+ * 为什么值得测：StateKit 是**执行器与着色器之间唯一的状态契约面**。表里有好几处
+ * 「反直觉但有理由」的设定（picking 用 LEQUAL 而非 LESS、transparent
  * 剔背面、shadow depth-only 且双面写入），它们一旦被改动，症状是画面慢慢变得不对而
  * 没有任何报错——正是本项目最贵的那类 bug（阴影链 5a-3→5a-9 七轮里有若干轮是状态
  * 被改坏，而当时所有数值指标全绿）。
@@ -20,20 +20,21 @@ module;
  *
  * ## 一条与直觉相反的事实（本文件的核心发现之一）
  *
- * 十段**不是**十种不同形态，只有五种。把 (cullMode, depthCompareOp, depthTest,
- * depthWrite, colorBlend) 取成指纹后实际分组是：
+ * 表里的名字**不是**一名一形态，十四名只有五种形态。把 (cullMode, depthCompareOp,
+ * depthTest, depthWrite, colorBlend) 取成指纹后实际分组是：
  *
  *   A = opaque / shadow              : None, Less, 测, 写, 不混
- *   B = light / tonemap / ao / velocity / taa / ao_apply / ssr / izb_mask
+ *   B = light / tonemap / ao / velocity / taa / ao_apply / ssr / ssr_trace / izb_mask
  *                                    : None, Less, 不测, 不写, 不混
- *   C = skybox / picking             : None, LEQ,  测, 不写, 不混
+ *   C = picking                      : None, LEQ,  测, 不写, 不混
  *   D = transparent                  : Back, Less, 测, 不写, 混
  *   E = highlight                    : Back, LEQ,  测, 不写, 混
  *
- * 「十段两两不同」是**错的**（tonemap/ao 与 light 同形、picking 与 skybox 同形、
- * shadow 与 opaque 同形、izb_mask 与 light 同形）。真正的不变量是**地址**：stateFor
- * 返回各成员存储的引用，十个名字必须映射到十个不同对象，否则执行器改一段会连带改
- * 另一段。故「十段不同」改成断言地址互异 + 指纹分组如上。
+ * 「各段两两不同」是**错的**（tonemap/ao 与 light 同形、shadow 与 opaque 同形、
+ * izb_mask 与 light 同形）。原与 picking 同形的 skybox 段已随 forward 绘制机制删除
+ * （2026-10-18 刀②.2），C 组自此只剩一名。真正的不变量是**地址**：stateFor
+ * 返回各成员存储的引用，每个名字必须映射到不同对象，否则执行器改一段会连带改
+ * 另一段。故「各段不同」改成断言地址互异 + 指纹分组如上。
  *
  * ## 变异红线（哪个变异让我红）
  *
@@ -86,7 +87,7 @@ void checkSameState(const RenderState& got, const RenderState& want, const char*
 
 constexpr RenderState kDefaults{};  // 全默认
 
-/** 状态指纹（只取描述形态的 5 个字段；其余 14 个字段十段全同，另由逐字段比对覆盖）。 */
+/** 状态指纹（只取描述形态的 5 个字段；其余 14 个字段各段全同，另由逐字段比对覆盖）。 */
 std::array<int, 5> fingerprint(const RenderState& s) {
     return {static_cast<int>(s.cullMode), static_cast<int>(s.depthCompareOp),
         s.depthTest ? 1 : 0, s.depthWrite ? 1 : 0, s.colorBlend ? 1 : 0};
@@ -147,25 +148,20 @@ TEST_CASE("transparent 三项差异各自守一个失效模式（逐项独立断
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 组 3：skybox —— 大三角 z=1（远平面）故必须 LEQUAL
+// 组 3：skybox 段已删（2026-10-18 图变体收敛刀②.2）——本组只剩「删了就不许再被承认」
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("skybox 段：LEQUAL + 不写深度 + 不剔除（只在未被几何占据的像素通过）") {
+TEST_CASE("skybox 段名已随 forward 绘制机制删除：stateFor 必须抛（不是回落默认）") {
+    // 原正例（大三角 z=1 故必须 LEQUAL 的形态断言）随该段删除；它验的**机制**——
+    // 「同面等值必须 LEQUAL」——由组 5 的 picking 段继续钉着（同一形态，见下方分组表）。
+    // 本条是删除侧的反向半边：词表与实现侧都少一名，若有人只把名字加回词表而 StateKit
+    // 没跟上，StateKit 的 static_assert 先编译不过；若两侧一起加回而执行器路径没人录，
+    // 这条至少保证「图里写 skybox」会在 stateFor 现场炸出来而不是静默用默认状态渲染。
     const StateKit kit{true};
-    // LEQUAL 而非 LESS：大三角在 z=1（远平面），深度 clear 也是 1.0，数值恰好相等。
-    // 用 LESS 会让天空**永远画不出来**——这是"恰好相等"型依赖的经典。
-    RenderState expect = kDefaults;
-    expect.depthCompareOp = vk::CompareOp::eLessOrEqual;
-    expect.depthWrite = false;
-    checkSameState(kit.stateFor("skybox"), expect, "skybox 应恰为「默认 + LEQUAL + 不写深度」");
-    CHECK(kit.stateFor("skybox").cullMode == vk::CullModeFlagBits::eNone);  // 绕序不剔
-}
-
-TEST_CASE("skybox 用 LEQUAL 而 opaque 用 LESS（对照：同库内两种 CompareOp 都存在）") {
-    // 反向锚点：把任一边的期望改掉都会立刻红——证明这两条断言**会**红，
-    // 而不是"恒真的摆设"（AGENTS.md：会绿 = 无效断言）。
-    const StateKit kit{true};
-    CHECK(kit.stateFor("skybox").depthCompareOp == vk::CompareOp::eLessOrEqual);
+    CHECK_THROWS_AS(static_cast<void>(kit.stateFor("skybox")), std::runtime_error);
+    // 「同库内两种 CompareOp 都存在」的对照半边换 picking 顶上来（LEQUAL vs opaque LESS）：
+    // 反向锚点——把任一边的期望改掉都会立刻红，证明这两条断言**会**红。
+    CHECK(kit.stateFor("picking").depthCompareOp == vk::CompareOp::eLessOrEqual);
     CHECK(kit.stateFor("opaque").depthCompareOp == vk::CompareOp::eLess);
 }
 
@@ -256,7 +252,7 @@ TEST_CASE("shadow 段：depth-only，LESS 写光视最近深度 + cull=None 双�
 // 组 7：stateFor 分派 —— 地址互异 + 未知名抛异常
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("stateFor 十个名字映射到十个**不同**的存储对象（地址互异）") {
+TEST_CASE("stateFor 每个名字映射到**不同**的存储对象（地址互异）") {
     const StateKit kit{true};
     // 契约是「返回成员存储的引用」。若某两个名字映射到同一成员，执行器改一段会
     // 连带改另一段——而两者形态本就不同（见分组测试），症状是画面局部错乱无报错。
@@ -283,12 +279,12 @@ TEST_CASE("词表每个名字都能解析（派生口径 + internal 段也在 st
         INFO("state = " << n);
         CHECK_NOTHROW(static_cast<void>(kit.stateFor(n)));
     }
-    // 计数写死 = 加一个状态必须是显式决定（历史上 izb_mask 落地时本文件名单少一名，
-    // AGENTS 与两份 Lua 头注释的"九段"口径同时变谎言行）。
-    CHECK(kAllNames.size() == 15);
+    // 计数写死 = 加/减一个状态必须是显式决定（历史上 izb_mask 落地时本文件名单少一名，
+    // 各处口径同时变谎言行）。名字名单本身不在本文件抄写 = kAllNames 派生自词表。
+    CHECK(kAllNames.size() == 14);  // "skybox" 一条随 forward 绘制机制删除（刀②.2）
     // internal 档（izb_mask）**不走图但必须能被 stateFor 解析**：执行器有硬编码录制
     // 路径直接按名取它（vkrenderer_passrec 的 IZB mask）。它的独有形态是 conservative
-    // =true（FTIZB 保守覆盖命门）——十段里只有它有，正反两面一起钉。
+    // =true（FTIZB 保守覆盖命门）——全表里只有它有，正反两面一起钉。
     CHECK(kit.stateFor("izb_mask").conservative == true);
     for (const auto n : kAllNames) {
         if (n == "izb_mask")
@@ -298,7 +294,7 @@ TEST_CASE("词表每个名字都能解析（派生口径 + internal 段也在 st
     }
 }
 
-TEST_CASE("十段实际只有五种形态（分组如实记录，防有人悄悄加一段而静默扩面）") {
+TEST_CASE("十四名实际只有五种形态（分组如实记录，防有人悄悄加一段而静默扩面）") {
     // 文件头那份分组表就是从这条断言的期望反推出来的。分组数若变化，说明有人动过
     // 某段的状态——那时**先问是不是有意的**，再改这条。
     const StateKit kit{true};
@@ -314,10 +310,11 @@ TEST_CASE("十段实际只有五种形态（分组如实记录，防有人悄悄
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("velocity")));
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("ssr")));
     CHECK(fingerprint(kit.stateFor("light")) == fingerprint(kit.stateFor("ssr_trace")));
-    CHECK(fingerprint(kit.stateFor("skybox")) == fingerprint(kit.stateFor("picking")));
+    // C 组（LEQUAL + 测深 + 不写 + 不混 + 不剔）现在只剩 picking 一名（原同组的 skybox
+    // 随 forward 绘制机制删除，刀②.2），故这里没有组内等式可写，只在下面钉它跨组不同。
     // 组间必须真的不同：任取一对跨组的做不等断言
     CHECK(fingerprint(kit.stateFor("opaque")) != fingerprint(kit.stateFor("transparent")));
-    CHECK(fingerprint(kit.stateFor("skybox")) != fingerprint(kit.stateFor("highlight")));
+    CHECK(fingerprint(kit.stateFor("picking")) != fingerprint(kit.stateFor("highlight")));
     CHECK(fingerprint(kit.stateFor("light")) != fingerprint(kit.stateFor("picking")));
 }
 

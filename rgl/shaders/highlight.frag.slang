@@ -13,9 +13,9 @@
 // 本 frag 只管「亮的那部分画成什么样」——不需要任何 per-object 选中标志进 scene data，
 // 故不改 ObjectDraw 布局、不触发 just reflect 的字节契约重生成。
 //
-// binding/import 与 model_pbr_ibl.frag 对齐：需要 scene.slang 拿对象矩阵与 eyePos
+// binding/import 与 deferred 光照一族（light.frag / deferred_geometry*）对齐：需要 scene.slang 拿对象矩阵与 eyePos
 // 算世界空间视向 V；纹理槽虽不消费，但克隆条目沿用原 bindings（映射空转无害，
-// 同 picking.frag 与 skybox 条目先例）。
+// 同 picking.frag 先例；原 skybox 条目亦证之，已随刀②.2 删除）。
 import model;     // ModelVertexOutput（mesh 输出接口匹配）
 import material;  // push constant DrawArgs（objectIndex）
 import scene;     // readSceneLight / readObjectMatrix / worldPos / worldNormal

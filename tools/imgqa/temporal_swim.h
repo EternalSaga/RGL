@@ -71,7 +71,7 @@ struct FreeShift {
 /// 之前跑的是合成 profile（forward + 无 izb + 默认机位），于是 `temporal-identity` 在
 /// 那里绿（残差 0.016/255）而在交付配置 + 用户机位上红（mad 1.688、max 37、10.37% >2LSB）
 /// ——**判据量在别的场景上得出的绿不是绿**。交付配置是 deferred + scale 0.01 + izb_shadow
-/// + env/skybox/AO/shadow 全开，与合成 profile 不是同一个场景，别再拿两边的数互相解释。
+/// + env/AO/shadow 全开，与合成 profile 不是同一个场景，别再拿两边的数互相解释。
 struct SwimRun {
     std::vector<cv::Mat> bytes;  ///< 各帧观测字节（中央裁块，8UC3）
     double consecDiff = 0.0;     ///< 相邻帧 |Δ| 均值（0..255；§1.5 表同单位）

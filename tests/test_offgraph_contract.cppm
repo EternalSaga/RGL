@@ -149,14 +149,15 @@ RgOffGraphWorkDecl absentWork(std::string name, std::string state) {
 }
 
 /**
- * forward 形态的 pass 序列（照 `configs/render_graph.lua` 的 passes 缩到锚点相关的那几个）：
- * opaque / skybox / transparent / ao / tonemap —— **没有 drawLight "light"**，债-128 的病根。
- * tonemap 保留是判据的一半：fsr_upscale 的锚点在 forward 也必须命中（不许顺手也标可缺席）。
+ * 非 deferred 图形态的 pass 序列（原出厂 forward 图已随 2026-10-18 刀②.2 删除，本序列是
+ * 它那两条锚点相关事实的存活表示）：opaque / transparent / ao / tonemap ——
+ * **没有 drawLight "light"**，债-128 的病根。tonemap 保留是判据的一半：fsr_upscale 的锚点
+ * 在这种图上也必须命中（不许顺手也标可缺席）。原序列里的 skybox 一段随该绘制机制同刀删除，
+ * 它是 drawMesh 段、不参与任何锚点匹配，删掉不改变本文件判据的射程。
  */
-std::vector<RgPassPlan> forwardLikePasses() {
+std::vector<RgPassPlan> noLightPasses() {
 	return {
 		pass("opaque", RgPassKind::drawMesh, "opaque"),
-		pass("skybox", RgPassKind::drawMesh, "skybox"),
 		pass("transparent", RgPassKind::drawMesh, "transparent"),
 		pass("ao", RgPassKind::drawLight, "ao"),
 		pass("tonemap", RgPassKind::drawLight, "tonemap"),
@@ -172,7 +173,6 @@ std::vector<RgPassPlan> forwardLikePasses() {
 std::vector<RgPassPlan> offscreenLikePasses() {
 	return {
 		pass("opaque", RgPassKind::drawMesh, "opaque"),
-		pass("skybox", RgPassKind::drawMesh, "skybox"),
 		pass("transparent", RgPassKind::drawMesh, "transparent"),
 		pass("composite", RgPassKind::blit, ""),
 	};
@@ -690,9 +690,9 @@ TEST_CASE("兜底 fail-fast：忘了摘申报 → 重推相位表当场 Error �
 // ═══════════════════════════════════════════════════════════════════════════
 
 TEST_CASE("锚点可缺席（逐条显式）：命中 0 → 建表成功 + 该项不可调度；不可缺席同形态仍红；帧首段组合被拒") {
-	const auto passes = forwardLikePasses();  // 没有 drawLight "light"
+	const auto passes = noLightPasses();  // 没有 drawLight "light"
 
-	// ① 生产申报集（四条，forward 形态）：build 成功、**申报集不缩小**，
+	// ① 生产申报集（四条，非 deferred 图形态）：build 成功、**申报集不缩小**，
 	//    锚 light 的两条不可调度，锚帧首段 / tonemap 的两条正常可调度。
 	{
 		const std::vector<RgOffGraphWorkDecl> decls = {
@@ -708,7 +708,7 @@ TEST_CASE("锚点可缺席（逐条显式）：命中 0 → 建表成功 + 该�
 		CHECK(built->isSchedulable("meshlet_cull"));
 		CHECK_FALSE(built->isSchedulable("izb_mask"));
 		CHECK_FALSE(built->isSchedulable("evssm_moments"));
-		CHECK(built->isSchedulable("fsr_upscale"));  // forward 有 tonemap ⟹ 必须仍可调度
+		CHECK(built->isSchedulable("fsr_upscale"));  // 本图有 tonemap ⟹ 必须仍可调度
 	}
 	// ④ 🔴 正向锚点（变异 M-a「全局容忍」的红点）：同图同锚点，**只把 mayBeAbsent 翻回 false**
 	//    ⟹ 仍 Error。做成全局容忍时这段会绿 = 「state 改名 = 装配错」被拆掉。
@@ -736,10 +736,10 @@ TEST_CASE("锚点可缺席（逐条显式）：命中 0 → 建表成功 + 该�
 }
 
 TEST_CASE("可缺席只管「命中 0」：命中多个仍歧义红；命中 1 时可缺席申报必须正常可调度") {
-	// 歧义半边：forward + 两个 drawLight "light" ⟹ 命中 2，mayBeAbsent 不豁免
+	// 歧义半边：非 deferred 图 + 两个 drawLight "light" ⟹ 命中 2，mayBeAbsent 不豁免
 	//（歧义与缺席是两件事：容忍缺席不该顺手把"相位无法确定"也吞掉）。
 	{
-		auto ambiguous = forwardLikePasses();
+		auto ambiguous = noLightPasses();
 		ambiguous.push_back(pass("light", RgPassKind::drawLight, "light"));
 		ambiguous.push_back(pass("light2", RgPassKind::drawLight, "light"));
 		const std::vector<RgOffGraphWorkDecl> decls = {absentWork("izb_mask", "light")};
@@ -766,7 +766,7 @@ TEST_CASE("不可调度项的三向判据：没锚点却录了红 / 门开着没
 		absentWork("izb_mask", "light"),
 		prologueWork("meshlet_cull"),
 	};
-	auto built = OffGraphSchedule::build(decls, forwardLikePasses());
+	auto built = OffGraphSchedule::build(decls, noLightPasses());
 	REQUIRE(built.has_value());
 
 	// ⑥ 没锚点却录了 = 挂点错。消息点名该项，且**不借**「位置契约违例」那条
@@ -796,7 +796,7 @@ TEST_CASE("不可调度项的三向判据：没锚点却录了红 / 门开着没
 		CHECK(errOf(cov).find("izb_mask") != std::string::npos);
 		CHECK(errOf(cov).find("静默旁路") != std::string::npos);
 	}
-	// ③ 门关 = 不响（forward 的正常旁路形态；缺这条就分不清「护栏没触发」与「护栏坏了」）。
+	// ③ 门关 = 不响（正常的旁路形态；缺这条就分不清「护栏没触发」与「护栏坏了」）。
 	built->beginFrame();
 	{
 		const bool active[2] = {false, false};
@@ -842,12 +842,12 @@ TEST_CASE("offscreen 形态（无 tonemap）：fsr_upscale 不可调度而 meshl
 		INFO(errOf(cov));
 		CHECK(cov.has_value());
 	}
-	// 反向半边（不许删）：同一条可缺席申报在 **forward** 图里必须仍可调度 —— 「offscreen
-	// 标了可缺席」不等于「fsr_upscale 永远不可调度」，forward 的 FSR 档全靠这半边。
-	auto fwd = OffGraphSchedule::build(decls, forwardLikePasses());
-	REQUIRE(fwd.has_value());
-	CHECK(fwd->isSchedulable("fsr_upscale"));
-	CHECK_FALSE(fwd->isSchedulable("izb_mask"));  // forward 有 tonemap、没有 light：两半各归各
+	// 反向半边（不许删）：同一条可缺席申报在**非 deferred 图**里必须仍可调度 —— 「offscreen
+	// 标了可缺席」不等于「fsr_upscale 永远不可调度」，非 deferred 图的 FSR 档全靠这半边。
+	auto noLight = OffGraphSchedule::build(decls, noLightPasses());
+	REQUIRE(noLight.has_value());
+	CHECK(noLight->isSchedulable("fsr_upscale"));
+	CHECK_FALSE(noLight->isSchedulable("izb_mask"));  // 本图有 tonemap、没有 light：两半各归各
 }
 
 }  // namespace RGL

@@ -6,8 +6,9 @@
 // tonemap 当乘数把开阔处（occlusion=0）直接乘成黑（实测 strength=1 整幅全黑）。存可见度
 // 的另一好处：RT 本身就是一张可直接复合的乘数图，将来接模糊/升采样不必再翻转。
 //
-// 为什么 depth-only：本 pass 同时挂在 forward 与 deferred 两张图上，forward 没有 G-buffer
-// 可读法线；加 depth prepass 等于把 283 万三角形的光栅化再跑一遍。法线改由"重建世界坐标的
+// 为什么 depth-only：本 pass 当年同时挂在 forward 与 deferred 两张图上，forward 没有
+// G-buffer 可读法线（forward 已随刀②.2 删除，depth-only 形态与下列理由原样保留）；
+// 加 depth prepass 等于把 283 万三角形的光栅化再跑一遍。法线改由"重建世界坐标的
 // 屏幕空间导数叉积"给出——不增几何、不增附件。
 //
 // 消费的 scene data 槽位**全部既有**，本 shader 不新增任何契约字段：
@@ -21,7 +22,7 @@
 //     代价 = 前景物体轮廓外一圈会出现 AO 光晕（前景物被误判为遮挡背景的半球）。
 //     深度偏置 + 半径收紧可压到可接受；Bistro 街道以凸体为主，实测不明显。
 //   · 法线来自 2×2 quad 导数，深度量化误差表现为轻微块状（1280×720 下不可见）。
-//   · 深度 == 1.0（天空像素，skybox 不写深度）直接输出 0 = 不遮蔽。
+//   · 深度 == 1.0（天空像素：无几何，深度停在远平面清值）直接输出 0 = 不遮蔽。
 
 import scene;  // 头区 UBO（binding 22）：readSceneEyePos / readAoStrength + worldFromDepth
 
@@ -101,8 +102,9 @@ float main(AoInput input) : SV_Target
     // strength 旁路，故关闭时输出逐位等于加 AO 之前（BIT-IDENTICAL 基线不受影响）。
     if (readAoStrength() <= 0.0)
         return 1.0;
-    // 天空像素：深度 = 远平面清值（skybox 大三角 z=1 靠 depth clear + LEQUAL，不写深度）
-    // → 无遮蔽。阈值 0.9999 而非 ==1.0：clear 值位级未必精确是 1。
+    // 天空像素：深度 = 远平面清值（deferred 天穹像素无几何，深度停在 clear 值；原 forward
+    // skybox 大三角 LEQUAL 不写深度机制已随刀②.2 删除）→ 无遮蔽。阈值 0.9999 而非 ==1.0：
+    // clear 值位级未必精确是 1。
     if (depth >= 0.9999)
         return 1.0;
 

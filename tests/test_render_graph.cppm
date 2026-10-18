@@ -53,7 +53,7 @@ import frame_draw_list;  // FrameDrawList / segmentSpan（段名词表的映射�
 namespace RGL {
 namespace {
 
-// ── 最小合法图（forward 直渲骨架）────────────────────────────────────────
+// ── 最小合法图（单 opaque pass 直渲骨架）──────────────────────────────────
 // swapchain 颜色附件 + depth + 一个 opaque drawMesh pass 清 depth 并写 color。
 // 注意 format：swapchain / depth 都必须是 "inherit"（词表格式只开放给图属 RT）。
 
@@ -716,7 +716,9 @@ TEST_CASE("blit 变体：swapchainWaitStage = Transfer，blit 两端被解析成
 
 // 期望值写成**字面量**（出处 = 契约本身，不抄被测的派生代码）：改词表 = 本组红，
 // 那是刻意的——名单变动必须是有意识的决定。
-constexpr std::array<std::string_view, 6> kExpectMesh{"opaque", "skybox", "transparent",
+// "skybox" 段名已随 forward 绘制机制删除（2026-10-18 图变体收敛刀②.2）——删除的名单面
+// 由下方「kAllDrawSources」用例里的 CHECK_FALSE 钉住，不许静默回流。
+constexpr std::array<std::string_view, 5> kExpectMesh{"opaque", "transparent",
     "picking", "highlight", "shadow"};
 constexpr std::array<std::string_view, 8> kExpectFullscreen{"light", "ao", "taa", "tonemap",
     "velocity", "ao_apply", "ssr_trace", "ssr"};  // 批 14.4 加 velocity（逐像素速度场）；批 14.5 加 ao_apply（AO 施加专用）；
@@ -737,10 +739,11 @@ std::set<std::string_view> namesInInternal() {
     return out;
 }
 
-TEST_CASE("kAllPassStates = 十五名、无重复、每名恰属一档") {
+TEST_CASE("kAllPassStates = 十四名、无重复、每名恰属一档") {
     // 计数写死 = 「加一个状态」必须是显式决定（本项目的口径漂移正是从多一个名字
     // 而四处口径没人改开始的：izb_mask 落地时单测/Lua 头注释/AGENTS 三处都没跟）。
-    REQUIRE(kAllPassStates.size() == 15);
+    // "skybox" 一条已随 forward 绘制机制删除（2026-10-18 刀②.2），15 → 14。
+    REQUIRE(kAllPassStates.size() == 14);
     // 无重复 + 每名都能被自己那一档承认（档判据与表自洽）。
     for (const auto& e : kAllPassStates) {
         INFO("state = " << e.name);
@@ -763,8 +766,8 @@ TEST_CASE("kFullscreenPassStates 恰含 light / ao / taa / tonemap / velocity / 
     CHECK(toSet(kFullscreenPassStates) == toSet(kExpectFullscreen));
 }
 
-TEST_CASE("kMeshPassStates 恰含六个（三主段 + picking / highlight / shadow）") {
-    REQUIRE(kMeshPassStates.size() == 6);
+TEST_CASE("kMeshPassStates 恰含五个（两主段 + picking / highlight / shadow）") {
+    REQUIRE(kMeshPassStates.size() == 5);
     CHECK(toSet(kMeshPassStates) == toSet(kExpectMesh));
 }
 
@@ -801,9 +804,12 @@ TEST_CASE("kAllDrawSources 段名词表 + isKnownDrawSource 的精确/前缀两�
     // shadow 是**前缀档**：分块号可变（kActiveShadowCascades 1→4），写死字面量会在
     // 切级联时漏校验。前缀档的宽松面如实记录（照源码写，不照期望写）：任何 "shadow"
     // 开头的名字都算合法，"shadowmap" 也放行，解析不出数字时落 0 级。
-    REQUIRE(kAllDrawSources.size() == 4);
+    REQUIRE(kAllDrawSources.size() == 3);
     CHECK(isKnownDrawSource("opaque"));
-    CHECK(isKnownDrawSource("skybox"));
+    // "skybox" 段名已随 forward 绘制机制删除（2026-10-18 刀②.2）——反向半边钉住「删了就不
+    // 许再被承认」：图里写 state/drawSource = skybox 必须过不了校验（回流 = 画一张没有段可
+    // 执行的图，静默少一块）。
+    CHECK_FALSE(isKnownDrawSource("skybox"));
     CHECK(isKnownDrawSource("transparent"));
     CHECK(isKnownDrawSource("shadow"));    // 无后缀 = 0 级
     CHECK(isKnownDrawSource("shadow13"));  // 前缀档
@@ -822,8 +828,7 @@ TEST_CASE("segmentSpan 覆盖 kAllDrawSources 每个段名（表 ↔ if 链的�
     FrameDrawList list;
     for (uint32_t i = 0; i < 6; ++i)
         list.calls.push_back(DrawCall{.pipeline = i, .pushData = {}, .groupCount = 1u});
-    list.skyboxStart = 2;       // opaque = [0,2)
-    list.transparentStart = 3;  // skybox = [2,3)、transparent = [3,6)
+    list.transparentStart = 2;  // opaque = [0,2)、transparent = [2,6)（skybox 段随刀②.2 删）
     for (uint32_t c = 0; c < kSceneShadowCascadeCount; ++c)
         list.shadowCalls.push_back(DrawCall{.pipeline = 100 + c, .pushData = {}, .groupCount = 1u});
     for (uint32_t c = 0; c < list.shadowBoundaries.size(); ++c)
@@ -846,8 +851,7 @@ TEST_CASE("segmentSpan 覆盖 kAllDrawSources 每个段名（表 ↔ if 链的�
             CHECK(got[0].pipeline == expect[0].pipeline);
     };
     check("opaque", 0, 2);
-    check("skybox", 2, 1);
-    check("transparent", 3, 3);
+    check("transparent", 2, 4);
     check("shadow", 100, 1);  // 无后缀 = 0 级
     check("shadow2", 102, 1);
     check("shadow3", 103, 1);
@@ -855,15 +859,15 @@ TEST_CASE("segmentSpan 覆盖 kAllDrawSources 每个段名（表 ↔ if 链的�
     // **兜底分支的危险面**（图校验必须拦未知段名的理由）：不认识的段名不报错，
     // 而是返回 transparent 段——静默多画一遍透明体。
     const auto unknown = segOf("nosuchsegment");
-    CHECK(unknown.size() == 3);
-    CHECK(unknown.data() == list.calls.data() + 3);
+    CHECK(unknown.size() == 4);
+    CHECK(unknown.data() == list.calls.data() + 2);
 }
 
-TEST_CASE("graphHasDeferredLight：deferred 的「图事实」判据（两张内建图 + 两个反例）") {
+TEST_CASE("graphHasDeferredLight：deferred 的「图事实」判据（内建 deferred 图为真 + 三张图为假）") {
     // 收口原 IZB / EVSSM 各写一份逐字相同的 any_of（vkrenderer_passrec 两处）。
-    // 语义 = 图事实（有没有人在跑 deferred 光照），**不是**配置层的 variant——
-    // 两者不等价正是本判据存在的理由（自定义 Lua 图可在 forward 变体下手写 light pass）。
-    // 变异红线：判据的 kind 侧或 state 侧任一半被删 → 下面两条反例立刻变 true 而红。
+    // 语义 = 图事实（有没有人在跑 deferred 光照），**不是**配置层的形态开关——
+    // 两者不等价正是本判据存在的理由（自定义 Lua 图自己手写 light pass 也算真）。
+    // 变异红线：判据的 kind 侧或 state 侧任一半被删 → 下面几条反例立刻变 true 而红。
     // （原第三条内建 offscreen 图的 CHECK 随该变体删除〔2026-10-18 刀①〕；blit 上屏形态
     //  的存活表示 = tests/test_offgraph_contract.cppm 的 offscreenLikePasses。）
     const auto passesOf = [](const RgGraphDesc& d) {
@@ -871,7 +875,20 @@ TEST_CASE("graphHasDeferredLight：deferred 的「图事实」判据（两张内
         REQUIRE(g.has_value());
         return g->passes;
     };
-    CHECK(graphHasDeferredLight(passesOf(defaultRenderGraphDesc())) == false);   // forward HDR
+    // 假侧的「完整图」样本（原出厂 forward 图随刀②.2 删除，本段自建其替代物）：
+    // opaque 写 scene_hdr + tonemap 采它上屏的两段 HDR 链——图能编译、只是没有 deferred
+    // 光照 pass，判据在这种图上必须 false。
+    RgGraphDesc hdrChain;
+    hdrChain.attachments = {swapchainAtt(), depthAtt(),
+        offscreenAtt(std::string{kSceneHdrName}, std::string{kSceneHdrFormat})};
+    hdrChain.passes = {
+        RgPassDesc{.name = "opaque", .kind = RgPassKind::drawMesh, .state = "opaque",
+            .drawSource = "opaque",
+            .outputs = {colorOut(std::string{kSceneHdrName}), depthOut("depth")}},
+        RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
+            .outputs = {colorOut("swapchain")}, .inputs = {sampleIn(std::string{kSceneHdrName})}},
+    };
+    CHECK(graphHasDeferredLight(passesOf(hdrChain)) == false);   // 无 light pass 的 HDR 链
     CHECK(graphHasDeferredLight(passesOf(deferredRenderGraphDesc())) == true);   // 内建 deferred
 
     // 反例 1：drawMesh 写 state="light" —— kind 不对，不算（且执行器 state 词表也不认它）
@@ -1014,7 +1031,7 @@ TEST_CASE("highlight 装饰：采样**深度**的全屏 pass（ao 形态）不�
     // ao pass（Phase 11 批 11.4）也以 sampleRead 读 depth，若只看 usage 会把它误当"成片消费
     // 者" → highlight 的 colorAtt 与借来的 depthAtt 同为 "depth" → 同 pass 引用同一附件两次，
     // 编译报 "references attachment 'depth' more than once"（源码注释点名这条撞名史）。
-    // 图形态照 defaultRenderGraphDesc 的 aoPass()/tonemapPass()（render_graph_builtin.cppm:40-45）。
+    // 图形态照 deferredRenderGraphDesc 的 aoPass()/tonemapPass()（render_graph_builtin.cppm）。
     // **精确语义**（isColorAttachment 实文 :22-26）：只排除 RgAttachmentKind::depth；
     // depthOffscreen（shadow_map 那类）仍按色处理——本条钉 depth 排除分支，不外推到 depthOffscreen。
     RgGraphDesc d;
@@ -1576,7 +1593,7 @@ namespace {
 
 /** ssr 骨架图的 G-buffer 配置档（跳过条件「契约表全体存在」的三种存在形态）。 */
 enum class SsrGBufferMode {
-	none,     // 无任何 G-buffer 附件（= forward 图形态）
+	none,     // 无任何 G-buffer 附件（= 非 deferred 图形态）
 	partial,  // 只有 gbuffer_position（= 前半旧判据会放行、后半必须跳过的半张契约表）
 	full,     // 契约表全部 5 通道（= deferred 图形态）
 };
@@ -1744,7 +1761,7 @@ TEST_CASE("decorateSsrPass 产物形状（15.3B 双 pass）：trace+apply 附件
     CHECK(toneRead->newLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-TEST_CASE("decorateSsrPass 图形态跳过：blit 上屏变体 / G-buffer 契约表不全（forward 与半表）"
+TEST_CASE("decorateSsrPass 图形态跳过：blit 上屏变体 / G-buffer 契约表不全（无表与半表）"
           " → false 且不动图；阳性配对防门槛恒 false") {
     // ① blit 变体（offscreen DIAG 路线）：消费者判据不命中（transferRead ≠ sampleRead）。
     {
@@ -1765,8 +1782,9 @@ TEST_CASE("decorateSsrPass 图形态跳过：blit 上屏变体 / G-buffer 契约
         CHECK(d.attachments.size() == attsBefore);  // 失败路径不得留下半成品附件
         CHECK(d.passes.size() == 2);
     }
-    // ② forward 图（无任何 G-buffer 附件）：SSR 的 deferred-only 边界（D1 对等豁免，
-    // forward 不跟）。跳过 = 原图不动，**不是**编译错误——门关路径与 forward 都不许被
+    // ② 无 G-buffer 附件的图（= 非 deferred 图形态）：SSR 的 deferred-only 边界（当年 D1
+    // 对等豁免拍板 forward 不跟，forward 已随刀②.2 删除，这条边界自此是唯一形态）。
+    // 跳过 = 原图不动，**不是**编译错误——门关路径与这类图都不许被
     // 这个装饰改变。
     {
         auto d = ssrSkeletonGraph(SsrGBufferMode::none);
@@ -2524,17 +2542,19 @@ TEST_CASE("FSR 深度按**名**查、IZB 深度按 **kind** 查：两条轴刻�
 	CHECK_FALSE(graphAttachmentSlot(atts, kDepthName).has_value());
 }
 
-TEST_CASE("真图对账：出厂 forward 图不接 FSR（缺 velocity），装饰速度场后接、色输入 = scene_hdr") {
-	// 出厂 forward 图：有色输入（scene_hdr）、有深度，**没有** velocity pass/附件
-	// ⟹ complete() 假。这条把「出厂不接 FSR」从"日志里没那行"变成毫秒级判据。
-	const CompiledRenderGraph& factory = defaultRenderGraph();
-	const auto fi = graphFsrInputs(factory.attachments);
+TEST_CASE("真图对账：出厂 deferred 图不接 FSR（缺 velocity），装饰速度场后接、色输入 = scene_hdr") {
+	// 出厂 deferred 图（原出厂 forward 图随刀②.2 删除，本对账换喂出厂内建图）：有色输入
+	//（scene_hdr）、有深度，**没有** velocity pass/附件 ⟹ complete() 假。这条把「出厂不接
+	// FSR」从"日志里没那行"变成毫秒级判据。
+	const auto factory = compileRenderGraph(deferredRenderGraphDesc());
+	REQUIRE(factory.has_value());
+	const auto fi = graphFsrInputs(factory->attachments);
 	REQUIRE(fi.color.has_value());
 	CHECK_FALSE(fi.color->baseSpace);  // 出厂没有 taa_out
 	CHECK_FALSE(fi.complete());
 
 	// 装饰速度场后重编：齐备，且色输入仍是 scene_hdr（速度场不换色输入）。
-	RgGraphDesc d = defaultRenderGraphDesc();
+	RgGraphDesc d = deferredRenderGraphDesc();
 	REQUIRE(decorateVelocityPass(d));
 	const auto g = compileRenderGraph(d);
 	INFO(errOf(g));

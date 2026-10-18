@@ -34,12 +34,13 @@ namespace {
  */
 constexpr std::string_view kCounterReconcileSkip = "cull.reconcileSkip";
 
-/** 收集 CPU opaque 段（[0, skyboxStart)）各 draw 的 objectIndex（对账 CPU 侧多重集源）。
+/** 收集 CPU opaque 段（[0, transparentStart)；原 [0, skyboxStart) 口径随刀②.2 的
+ *  skybox 段删除而合并）各 draw 的 objectIndex（对账 CPU 侧多重集源）。
  *  写入调用方复用的缓冲（债-22：clear 不缩容 ⟹ 稳态零堆分配）。 */
 void collectCpuObjectSlots(const FrameDrawList& list, std::vector<uint32_t>& out) {
 	out.clear();
-	out.reserve(list.skyboxStart);
-	for (uint32_t i = 0; i < list.skyboxStart; ++i) {
+	out.reserve(list.transparentStart);
+	for (uint32_t i = 0; i < list.transparentStart; ++i) {
 		const auto* a = reinterpret_cast<const RGL::DrawArgs*>(list.calls[i].pushData.data());
 		out.push_back(a->objectIndex);
 	}
@@ -306,7 +307,7 @@ void CullDriver::reportReconcile(std::vector<uint32_t>& cpuSlots, std::vector<ui
 	memoCpuSlots = cpuSlots;  // 存**采集序**（下面就地排序，基准必须是排序前的序）
 	memoGpuSlots = gpuSlots;
 
-	// CPU opaque 段（[0, skyboxStart)）的 objectSlot 多重集 vs GPU 可见 candidate 的
+	// CPU opaque 段（[0, transparentStart)）的 objectSlot 多重集 vs GPU 可见 candidate 的
 	// objectSlot 多重集（逐 candidate 固定槽，顺序无关 → 排序后多重集比对）
 	bool match = cpuSlots.size() == gpuSlots.size();
 	if (match) {

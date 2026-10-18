@@ -109,7 +109,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "⚠ 比值只能在**线性域**算：同一份数据在显示空间给 **0.771**（本命令实测，"
             "`mean(tonemap(x)) ≠ tonemap(mean(x))`，TAA 累积在线性 HDR 域、截图在 ACES+sRGB 之后），"
             "会把「正确」读成「糊了 23%」。\n"
-            "⚠ 本命令的靶 = 合成 `aa_target`，**不是**批 13.1 要求的 bistro（env/skybox/IBL/AO 全开）；"
+            "⚠ 本命令的靶 = 合成 `aa_target`，**不是**批 13.1 要求的 bistro（env/IBL/AO 全开）；"
             "bistro 版是同一判据换 profile，未做。\n"
             "⚠ 变异验过：`prepareLinear` 不做 sRGB 解码（= 违反红线 1）→ 本条以 0.769 红而 ①②③④⑤ "
             "**全绿**——本条就是红线 1 的守卫，域选错不会静默给出一个看起来正常的数；把 R2 搬到长窗 "

@@ -74,7 +74,7 @@ std::expected<uint32_t, Error> ensureSceneHdrSlot(
 
 /**
  * Phase 11 批 11.4（接口注释见 render_graph.cppm）：名字/格式 = kAoName/kAoFormat
- * 契约常量（与 forward/deferred 图描述共享，无漂移）；extent = 当前 swapchain；
+ * 契约常量（与 deferred 图描述共享，无漂移）；extent = 当前 swapchain；
  * ensure + heapSlot（r8_unorm 自带 COLOR_ATTACHMENT|SAMPLED usage）。启动期一次
  * （main 在 scene_hdr 槽之后、addTonemapEntry 之前）。
  */

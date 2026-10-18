@@ -295,20 +295,8 @@ void checkPushDataLimits(const DeviceContext& device) {
 			maxPushConstants, maxPushData, sizeof(DrawArgs)));
 }
 
-/** Phase 5.5 IBL 风格契约检查（违约抛 std::runtime_error）。 */
-void validateEnvironmentContract(const SceneConfig& scene) {
-	if (!scene.environment.enabled) {
-		std::string iblStyles;
-		for (const auto& [style, specName] : scene.styleMap)
-			if (specName == "model_pbr_ibl" || specName == "model_vegetation"
-				|| specName == "model_light")
-				iblStyles += (iblStyles.empty() ? "" : ", ") + style;
-		if (!iblStyles.empty())
-			throw std::runtime_error(fmt::format(
-				"styles [{}] reference model_pbr_ibl but scene.lua 'environment' is disabled "
-				"(env descriptor unmapped = undefined sampling)", iblStyles));
-	}
-}
+/** Phase 5.5 IBL 风格契约检查（validateEnvironmentContract）已随刀②.2 删除，理由见
+ *  main.cppm 的 tombstone 注释。 */
 
 /**
  * SceneEnv + TaaState context 装配（main 启动流调用；三处配置读取收一处，main 保持
@@ -316,7 +304,8 @@ void validateEnvironmentContract(const SceneConfig& scene) {
  *
  * - **SceneEnv**（Phase 5.5）：曝光（Phase 8 收尾）与 SSAO 强度（批 11.4）都与 env
  *   开关无关（任何变体的图都有 tonemap / ao pass），故在此直填；env cubemap 自身的
- *   intensity/mipRange/skybox 由 env 上传成功后回填（见 main_scene 的装配函数）。
+ *   intensity/mipRange 由 env 上传成功后回填（见 main_scene 的装配函数；skybox 字段
+ *   已随 forward 绘制机制删除，刀②.2）。
  * - **TaaState**（批 12.6）= 本项目第一个**跨帧 CPU context**（与 GPU 侧 `taa_hist`
  *   附件同生死）；默认值语义 = 「首帧无历史」（frameIndex 0 ⇒ historyValid false ⇒
  *   shader 逐位旁路）。运行参数（feedback / jitterScale / motionCompensation）搭
@@ -495,8 +484,8 @@ bool decorateSsrOrThrow(RgGraphDesc& desc, bool ssrEnabled) {
 		return true;
 	throw decorationRefused("ssr.enabled = true", "decorateSsrPass 三条判据之一未过：① taa / ao_apply 已在图里 = main_impl 的"
 		"「SSR 先于它们装饰」调用序被挪错 ② swapchainColorConsumerIndex 未命中 = 无 pass 同时「写 swapchain」且「sampleRead 场景色」"
-		"（自定义 blit 上屏图）③ G-buffer 契约表 kGBufferAttachments 通道不齐 = 这张图不是 deferred 图（forward 不跟 = D1 对等豁免，"
-		"docs/phase15_plan.md §0.1；含不被引用的 emissive ⟹ compile 不替你拒这条）", "删 render_graph.lua 的 attachments/passes 两键（回落内建 deferred 图），或 ssr.enabled = false");
+		"（自定义 blit 上屏图）③ G-buffer 契约表 kGBufferAttachments 通道不齐 = 这张图不是 deferred 图（SSR 是 deferred-only；"
+		"当年 D1 对等豁免拍板 forward 不跟，docs/phase15_plan.md §0.1，forward 已随刀②.2 删除；含不被引用的 emissive ⟹ compile 不替你拒这条）", "删 render_graph.lua 的 attachments/passes 两键（回落内建 deferred 图），或 ssr.enabled = false");
 }
 
 /**
@@ -769,17 +758,16 @@ int main() {
 		// 内建 cube 条目 cube 资产上传后 addCubeEntry、天空盒/光源条目各自前提满足时建。
 		// 先于 Renderer 构造（Renderer 持引用）
 		ShaderRegistry shaderRegistry(vkDevice, vkResources, sceneData, env, assetTable, configs.scene.pipelines);
-		// Phase 6 批次 3：渲染意图图 = configs/render_graph.lua（缺文件/缺段回落默认
-		// 三段图）；compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
+		// Phase 6 批次 3：渲染意图图 = configs/render_graph.lua（选路见下）；
+		// compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
 		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
-		// Phase 7 路线选路（2026-09-08 env→配置）：顶层 variant = "forward"(默认)/
-		// "deferred"/"offscreen"——后两者为内建 exclusive 图变体（覆盖文件 passes）
+		// 选路（2026-10-18 图变体收敛刀②）：文件有 attachments/passes = 自定义图，
+		// 否则 = 内建 deferred；variant 枚举与 forward 图本体已删（docs/图变体收敛_plan.md）。
 		// 批 14.6：TAA 图形态与 FSR 开关都是 aa 三态推导（原 scene.taaEnabled / fsr_upscaler
 		// 键已删）；velocityField 在 aa=fsr 时已被解析期隐含打开（单一来源在解析处）。
 		// 批 15.1 前半：四个图形态开关（taa/velocity/fsr/ssr）改由 configs.runtime 一次传入
 		// （派生点搬进 compileGraphOrThrow，见其函数头注释）。
 		auto graphResult = compileGraphOrThrow(configPath("render_graph.lua").c_str(), configs.runtime);
-		const bool deferredMode = graphResult.deferredMode;
 		// 图来源/规模观测（排"配置没生效"类问题：pass 数与 configs/render_graph.lua 对账）
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("RenderGraph: {} attachments / {} passes compiled",
@@ -789,9 +777,8 @@ int main() {
 		// Renderer 构造下移至 deferred G-buffer RT / light 管线就绪之后（deferred 模式需在构造前
 		// addLightEntry 供 Renderer 取 light 管线下标）；compiledGraph 此时保持存活（下方 move 进 Renderer）
 
-		// Phase 5.5 契约：引用 ibl/植被/光源风格必须配 environment（检查语义见
-		// validateEnvironmentContract 接口注释）
-		validateEnvironmentContract(configs.scene);
+		// Phase 5.5 契约检查（validateEnvironmentContract）已随刀②.2 删除——它吃的
+		// styles 表与三条 forward 规格同刀消失（tombstone → main.cppm）。
 
 		// CPU 解析 + GPU 上传 + 纹理 + ECS 注册：资产数据（buffer/slot/三角形数/管线条目引用、
 		// 纹理资产、材质资产）全部在 Resources 资产表（初始化层 owner，生命周期不依赖
@@ -810,7 +797,7 @@ int main() {
 
 		// C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry
 		// 按 (规格,顶点 slot,纹理 slot) 组合去重兜底）
-		bakePipelineEntries(assets, configs.scene, deferredMode, shaderRegistry, vkResources, samplers,
+		bakePipelineEntries(assets, configs.scene, shaderRegistry, vkResources, samplers,
 			assetTable, rtCache);
 		// 克隆管线条目（Phase 10 批 10.5 picking / 10.7 highlight）：契约与门控见 helper
 		// 注释；自 main() 抽出（★0-b2 装配层行数预算，纯代码搬移零行为变化）。
@@ -821,7 +808,7 @@ int main() {
 		// ★1-a2-i / ★M-1a：返回装配持有者（🔴 所有权在装配层，声明序 = 本行 = backEnd 之前
 		// ⟹ 析构序在其后；两格各持 GPU buffer，Renderer 只持裸指针，块尾析构 = 帧循环读到已销毁的 VA）。
 		auto meshletAssembly = wireMeshletOverlay(vkResources, vkDevice, meshletGeometry, assets,
-			configs.scene, deferredMode, shaderRegistry, assetTable, samplers, rtCache, configs.runtime, sceneData);
+			configs.scene, shaderRegistry, assetTable, samplers, rtCache, configs.runtime, sceneData);
 		// C2/C2b：场景实体注册（模型/cube/灯）+ 实例矩阵槽容量契约
 		registerSceneEntities(registry, assets, configs.scene, vkResources, assetTable, shaderRegistry);
 		// 簇化轴 ★1-a1i + ★1-a1ii-β-1：簇区间表装配 + 原位取代开关落地（**必须在实体注册之后**——
@@ -832,10 +819,10 @@ int main() {
 		wireMeshletPostRegistration(registry, assets, meshletAssets, assetTable, shaderRegistry,
 			vkResources, configs.runtime, vkDevice, meshletAssembly);
 
-		// C3 GPU culling 候选表 + GpuCull + skybox + deferred G-buffer/HDR + DGC + Renderer
+		// C3 GPU culling 候选表 + GpuCull + deferred G-buffer/HDR + DGC + Renderer
 		//（装配时序契约见 assembleBackEnd 接口注释；graph 在此 move 进 Renderer）
 		auto backEnd = assembleBackEnd(vkDevice, vkSwapchain, vkResources, sceneData, samplers, env, rtCache, assetTable, shaderRegistry,
-			std::move(graphResult), registry, configs.scene,
+			std::move(graphResult), registry,
 			// 批 14.6：FSR 开关 = aa 三态推导（原 fsr_upscaler 键已删）；两枚调参留在 fsr 块
 			configs.runtime.aaWantsFsr(), configs.runtime.fsrTemporal, configs.runtime.fsrJitter);
 		// 簇化轴 ★0.5-b2 / ★1-a2-i / ★M-1b：「Renderer 装配后挂」三连（coplanar 双臂 INFO +

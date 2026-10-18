@@ -523,12 +523,12 @@ void writeSyntheticDiagnosticsLua(const std::string& outDir, const ProfileOpts& 
         + lb(o.picking) + ", rpc = true, rpc_port = 8788 }\n");
 }
 
-/// 合成 profile 的 scene.lua：entities / styles / environment / light / spin / ao
-/// （+ TAA 时的 taa 调参段）。styles 四风格必须显式写，理由见函数内那段长注释。
+/// 合成 profile 的 scene.lua：entities / material_styles / deferred_styles /
+/// environment / light / spin / ao（+ TAA 时的 taa 调参段）。原 styles 表随刀②.2 删除。
 void writeSyntheticSceneLua(const std::string& outDir, const ProfileOpts& o)
 {
     std::set<std::string> sceneKeys
-        = {"entities", "styles", "material_styles", "deferred_styles", "environment", "light",
+        = {"entities", "material_styles", "deferred_styles", "environment", "light",
            "spin", "cube", "exposure", "ao"};
     if (o.aa == Aa::Taa)
         sceneKeys.insert("taa");  // 只在 TAA 真在图时写这段（批 14.6：开关在 runtime 的 aa，本块只剩调参）
@@ -562,19 +562,12 @@ void writeSyntheticSceneLua(const std::string& outDir, const ProfileOpts& o)
                      : "")
               + " },\n"
         : "";
-    // styles 必须显式写（switch 首战抓到的静默坑）：缺表回落默认 pbr→model_pbr，
-    // 而 model_pbr.frag **不 import shadow/env**——阴影与 env 开关全部
-    // 退化为逐位相同的假象（投影侧照画、采样侧不存在）。model_pbr_ibl 在
-    // env=0/shadow=off 下直接光与 model_pbr 逐式相同（IBL 项 ×intensity=0 归零），
-    // 闭式解前提不破。
-    // 表 = **交付配置 configs/scene.lua 的全量四风格 + 材质名连连看**（13.1b 补：此前只写
-    // unlit/pbr 两条，bistro 的 `light`/`vegetation` 材质直接启动失败
-    // "style not in scene.lua styles: light"；缺 material_styles 则 Emissive/Foliage
-    // 全落 pbr = 测的不是交付路径）。对无这些材质的探针场景（cornell_box / aa_target）
-    // 逐位 inert——连连看按材质名命中，探针场景无命中项。
+    // 原「styles 必须显式写」一段已随刀②.2 删除：forward 的 styles 表与 model_pbr/model_pbr_ibl
+    // 等规格消失，合成 profile 与交付同路（deferred_geometry 起步）。
+    // 表 = **交付配置 configs/scene.lua 的材质名连连看 + deferred_styles**（13.1b 补的判据
+    // 不变：缺 material_styles 则 Emissive/Foliage 全落 pbr = 测的不是交付路径）。对无这些
+    // 材质的探针场景（cornell_box / aa_target）逐位 inert——连连看按材质名命中，探针场景无命中项。
     const std::string styles =
-        "    styles = { unlit = \"model\", pbr = \"model_pbr_ibl\", vegetation = "
-        "\"model_vegetation\", light = \"model_light\" },\n"
         "    material_styles = { { pattern = \"Emissive\", style = \"light\" },\n"
         "      { pattern = \"Foliage\", style = \"vegetation\" } },\n"
         "    deferred_styles = { unlit = \"deferred_geometry_unlit\",\n"
@@ -583,14 +576,13 @@ void writeSyntheticSceneLua(const std::string& outDir, const ProfileOpts& o)
     writeFile(outDir + "/scene.lua",
         "return {\n" + entities
           + styles
-        // 环境（intensity / skybox 由 ProfileOpts 给；env 文件与交付配置同一张 .hdr）。
-        // ⚠ 资产**恒发**：styles 表引用 model_pbr_ibl，而引擎启动守卫拒「env 未启用 +
-        //   pbr_ibl」（env 描述符未映射 = 未定义采样，实测报错文案如此）——整段省略走不通。
-        //   deferred 天穹不读 skybox 标志（forward draw 侧 knob，随 forward 一起删）的污染
-        //   问题在引擎侧修：light.frag 天穹分支门控 `intensity > 0`（env 总闸语义，
-        //   2026-10-18 探针重立定案，docs/图变体收敛_plan.md §6.2）。
+        // 环境（intensity 由 ProfileOpts 给；env 文件与交付配置同一张 .hdr）。
+        // ⚠ 资产**恒发**保持既有口径：intensity=0 时 IBL 两路与天穹一起归零
+        //   （light.frag 天穹分支门控 `mipRange>0 && intensity>0`，env 总闸语义，
+        //   2026-10-18 探针重立定案，docs/图变体收敛_plan.md §6.2）。原 skybox 标志
+        //   （forward draw 侧 knob）已随刀②.2 删除，不再写出。
           + "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n      intensity = "
-            + std::to_string(o.envIntensity) + ", skybox = " + lb(o.skybox) + " },\n"
+            + std::to_string(o.envIntensity) + " },\n"
           + "    light = { direction = { "
             + j3(o.lightDir) + " }, color = { 1.0, 1.0, 1.0 },\n      intensity = "
             + std::to_string(o.lightIntensity) + ", ambient = { " + j3(o.ambient) + " } },\n"

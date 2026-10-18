@@ -29,8 +29,9 @@
 # 模型加载失败；TEXCOORD_0 可选（缺 → uv 填 0 走白纹理，**且 normal 槽整体回落中性纹理**：
 # texture_pool.cppm uploadModelTextures 的 `if (!prim.hasUv) continue;`）、TANGENT 可选
 # （缺 → Frisvad 解析正交基兜底）。历史理由仍然成立：**不输出 = 少两条出错路径**，所以
-# cornell_box / shadow_rig / d1_parity / izb_rig / env_band 五个场景**一个字节都没变**
-# （改前改后 md5 逐字节比对是本次改动的硬验收项）。只有 nm_rig 需要纹理面，它显式写。
+# cornell_box / shadow_rig / izb_rig 等早期场景**一个字节都没变**
+# （改前改后 md5 逐字节比对是当时的硬验收项；d1_parity / env_band 两场景已随图变体
+# 收敛刀②.2 删除，见下）。只有 nm_rig 需要纹理面，它显式写。
 #
 # 三条**非显然**的加载器契约（本轮实测查实，写错任何一条 = 纹理静默不生效、画面纹丝不动）：
 #   ① `material.normalTexture.index` 是 **images[] 下标**，不是 glTF 标准的 textures[] 下标
@@ -60,7 +61,7 @@
 # shadow_rig 另有级联跨距自证与影包络覆盖断言）→ 全过才写盘。
 # 任何一项失败 = 打错误列表、非零退出、坏文件不落盘。
 #
-# ## 五个场景的诚实定位
+# ## 各场景的诚实定位
 #
 # - cornell_box：**只是 Cornell box 的几何**。真正的标志性特征是面光源 + 颜色溢出，
 #   本引擎没有面光源（只有方向光 + 环境 cubemap，见 configs/scene.lua light 段），
@@ -68,15 +69,15 @@
 #   Cornell box 基准，不要拿它跟经典 radiance 参考图对比。
 # - shadow_rig：最重要。按 skill rgl-verify「阴影验收判据」硬要求 1-3 设计（阳性锚点 /
 #   跨级联分布 / 远景取景），逐物体的失效模式在场景函数注释里。
-# - d1_parity：forward / deferred 两路对拍（D1 指标）用的中等面数 + 材质混合 + 自发光面板。
+# - d1_parity / env_band：已随图变体收敛刀②.2 删除（docs/图变体收敛_plan.md §6.1-3：
+#   d1_parity = forward/deferred 两路对拍，forward 已不存在；env_band = 实验已结案的
+#   「带边」靶，零自动化消费者，冻结归档，现场见 git history @ < 2026-10-18）。
 # - izb_rig：FTIZB/IZB 硬阴影 spike 装置（docs/hfts_izb_plan.md 批 1a）——厚度梯
 #   0.4→0.02 m + 接触柱 + 穿插杆 + 叠影三分带；判据 = shadow.lua 的 izb 开关 A/B 对拍。
-# - env_band：变体 1「带边」——metallic=1 平坦地面 + 四条并排 roughness 档，配程序化
-#   env（纯黑 + 极亮窄带，tools/env_band_hdr.py），掠射机位让窄带镜面反射横贯画面；
-#   判据 = speck / phase-lock / grain 三口径的受控实验表（TAA × env × roughness）。
 # - nm_rig：**带 normal map 的受控靶**（本轮加）。单材质单 quad 平坦金属地面 + 程序化
 #   normal map，扰动**幅度**与**频率**两轴独立可扫。存在的理由是一条构造性事实：
-#   model_pbr_ibl.frag.slang:52-53 无 normal map 时 `geoN = worldNormal(...)`、`N = geoN`
+#   deferred_geometry.frag.slang 无 normal map 时 `geoN = worldNormal(...)`、`N = geoN`
+#   （该式承自已删除的 forward model_pbr_ibl.frag.slang:52-53，历史对偶）
 #   ⟹ shading 法线与 specular AA 的输入是同一个量，**不带 normal map 在构造上就复现不出**
 #   「法线高频变化而 specular AA 不察觉」那一类噪点（env_band 的 honesty 已把这条写成局限）。
 
@@ -825,76 +826,6 @@ def scene_shadow_rig() -> Scene:
 
 
 # ---------------------------------------------------------------------------
-# 场景 3：d1_parity —— forward / deferred 对拍（D1 指标）
-# ---------------------------------------------------------------------------
-# 目标：两条路线的差异**可量化**但不慢——~7k 三角形、10 个材质点（哑光介质 / 金属 /
-# 混合粗糙 / 自发光），每个材质点独立 piece（独立颜色 → 独立 objectID），D1 差异可以
-# 逐材质归因而非全图糊账。
-#
-# 自发光面板命名以 "Emissive" 开头是**故意的**：configs/scene.lua material_styles 的
-# 「材质名含 Emissive → light 风格」连连看让两条路线都走批 11.0c 已修对等的发光路径
-# （forward model_light 的 ×1/4 历史破口已消除，三处同值）。若用普通 pbr 材质携带
-# emissiveFactor，deferred 的 G-buffer 路径对 emissive 的处理不在该对等修复覆盖内，
-# 对拍结果会把「已知路线差异」混进 D1。
-#
-# 金属材质：metallicFactor=1 时无 baseColorTexture → 金属色 = baseColorFactor 染色反射；
-# roughnessFactor 覆盖 0.25/0.4/0.6/0.75 四档，专测两路 GGX 与预滤波 env 采样差异。
-
-def scene_d1_parity() -> Scene:
-    s = Scene(
-        name="d1_parity",
-        purpose="forward/deferred D1 对拍：材质矩阵（哑光×3 + 金属×3 + 混合×1）+ 自发光×2 + 地面",
-        honesty=("两路对拍前提 = 除 variant 外配置完全一致（含 env/曝光/ao.strength）；"
-                 "SSAO 施加点在 tonemap 合成处连直接光一起压（AGENTS.md 已知边界），"
-                 "逐材质 D1 应配合 ao.strength=0 的 BIT-IDENTICAL 基线各测一轮。"),
-        cameras={
-            "hero": {"position": [0.0, 4.5, 14.0], "target": [0.0, 1.2, -3.0],
-                     "fovDegrees": 55.0},
-        },
-    )
-    P = s.pieces.append
-    P(Piece("ground", quad((-30.0, 0.0, -30.0), (0.0, 0.0, 60.0), (60.0, 0.0, 0.0)),
-            PAL["yellow"], roughness=0.9, radial=False, closed=False,
-            intent="公共接收面（法线 +Y）；两路地面差 = 光照模型差的地板"))
-    P(Piece("matte_cube", box(-6.0, 1.25, -2.0, 2.5, 2.5, 2.5),
-            PAL["red"], metallic=0.0, roughness=0.9, intent="哑光漫反射基准（两路必须几乎为零差）"))
-    P(Piece("matte_sphere", sphere(-3.0, 1.2, -3.0, 1.2, 24, 48),
-            PAL["blue"], metallic=0.0, roughness=0.5,
-            intent="哑光介质中间粗糙度；光滑曲面 → 两路 GGX 高光的形状差"))
-    P(Piece("metal_sphere", sphere(0.0, 1.2, -3.0, 1.2, 24, 48),
-            PAL["green"], metallic=1.0, roughness=0.25,
-            intent="高金属低粗糙：deferred 屏幕空间 G-buffer 的法线量化对锐反射最敏感（D1 主力探针）"))
-    P(Piece("metal_box", box(3.0, 1.25, -2.0, 2.5, 2.5, 2.5),
-            PAL["cyan"], metallic=1.0, roughness=0.6,
-            intent="金属 + 中高粗糙：预滤波 env 高 mip 的两路采样一致性"))
-    # radial=False：torus 的管内侧（管角 v∈(110°,250°)，即 960/2304 三角形）按定义
-    # **朝中心**——「几何法线·(重心−bbox中心)>0」的径向判据对 1 亏格曲面不适用，
-    # 正确绕序也会被打标（2026-09-30 复盘：外部独立解析器据此误报"960 朝内"，
-    # 闭流形 + 方向一致 + 射线奇偶性三判据复核为全朝外）。本 piece 走
-    # closed-manifold + parity 判据（见 validate_glb_bytes）。
-    P(Piece("dielectric_torus", torus(6.0, 0.45, -3.0, 1.3, 0.45, 48, 24),
-            PAL["magenta"], metallic=0.0, roughness=0.35, radial=False,
-            intent="介质曲面 + 自遮挡（负 Gauss 区）：deferred 几何 pass 法线/深度重建的曲率压力点"))
-    P(Piece("worn_cube", box(-4.5, 0.9, 1.5, 1.8, 1.8, 1.8),
-            PAL["orange"], metallic=0.6, roughness=0.75,
-            intent="非端点 metallic=0.6：两路 metallic 插值路径（diffuse 衰减 × 金属染色）逐通道差"))
-    P(Piece("metal_cylinder", cylinder(4.5, 0.0, 1.5, 0.9, 2.4, 24),
-            PAL["purple"], metallic=1.0, roughness=0.4,
-            intent="金属曲面拉伸反射（柱面把 env 沿母线扫开）"))
-    # 自发光面板：立式朝 +Z（hero 机位可见）；emissiveFactor = 纯色，strength 走默认 1.0
-    # （loader CPU 端预乘 KHR_materials_emissive_strength，缺扩展 = 不加强，
-    #  三路径同值语义见 bistro_pack.py 头注 2026-09-29 段——故意**不**写该扩展，
-    #  省掉 extensionsUsed 声明面，两路读到同一字节）。
-    P(Piece("Emissive_panel_a", quad((-2.5, 0.0, -6.0), (2.0, 0.0, 0.0), (0.0, 2.0, 0.0)),
-            PAL["azure"], roughness=0.5, emissive=PAL["azure"], radial=False, closed=False,
-            intent="自发光面板 A：light 风格连连看命中（名字含 Emissive）；两路发光亮度对等"))
-    P(Piece("Emissive_strip", quad((0.5, 1.0, -6.0), (3.0, 0.0, 0.0), (0.0, 0.6, 0.0)),
-            PAL["chartreuse"], roughness=0.5, emissive=PAL["chartreuse"], radial=False, closed=False,
-            intent="自发光细长条：高频空间结构 → 两路 bloom 前的边缘差；与 A 颜色距离 0.87"))
-    return s
-
-
-# ---------------------------------------------------------------------------
 # 场景 4：izb_rig —— FTIZB/IZB 硬阴影 spike 装置（docs/hfts_izb_plan.md 批 1a）
 # ---------------------------------------------------------------------------
 # 设计哲学与 shadow_rig 同构：判据「边界免疫」。CSM 级联 texel 尺寸是运行时自适应量
@@ -1112,177 +1043,14 @@ def scene_izb_rig() -> Scene:
 
 
 # ---------------------------------------------------------------------------
-# 场景 5：env_band —— 变体 1「带边」：金属地面把极亮窄带的镜面反射扫过画面
-# ---------------------------------------------------------------------------
-# 要复现的现象（主 agent 已在 bistro 上定位）：静止机位下「相位锁定的高亮噪点」——某像素在
-# 16 个 TAA 抖动相位里恰好 1 个相位冲到 255、其余相位只有 6~22。机制假设 = 低 roughness
-# 金属面的 IBL 镜面项反射了高对比 env 的极亮窄带，被抖动切成相位锁定噪点。
-#
-# 为什么这个 rig 比 bistro 好归因：bistro 的 env（san_giuseppe 4k）里"亮区在哪、多宽、多亮"
-# 全是素材巧合，改不动。本 rig 把 env 换成程序化生成的**纯黑 + 一条恒定仰角的极亮窄带**
-# （tools/env_band_hdr.py），于是自变量只剩三个可写进文件名的数：带的仰角 / 角宽 / 亮度。
-# 地面再给四档 roughness 并排 ⟹ **一次渲染同时看到单调性**，不必跑四次再跨会话比。
-#
-# ## 几何为什么这么摆（掠射 + 镜像线，全部闭式）
-#
-# 平面 N=+Y 的镜面反射方向 D_ref = D_in − 2(D_in·N)N ⟹ **D_ref 的仰角 = −视线仰角**。
-# 于是"env 里仰角 θ_b 的水平带"在地面上的镜像 = 一条**恒定视线仰角 −θ_b 的水平线**，
-# 与方位角无关（带子是整圈 ⟹ 镜像线横贯全画面）。相机俯角取 α = θ_b ⟹ 镜像线正好落在
-# 画面主点行，且画面里"哪一行反射带子"是闭式可预测的（manifest.extra.probe）。
-#
-# 掠射角刻意取小（α = 3°）：① 镜像线离地平线近，地面在画面里铺得开；② 掠射端 Fresnel→1，
-# 金属镜面项最强。地面必须铺到镜像线之外（闭式校验 A4），否则看到的是地面尽头不是反射。
-#
-# ## 四条带 = 四条 X 向等宽长条（1 piece = 1 mesh = 1 primitive = 1 material）
-#
-# 本文件的 piece 契约要求每 piece 独立材质，而**同场景 piece 颜色两两距离 ≥ 0.5**（见 PAL
-# 注释与 validate_glb_bytes）⟹ 四条带不能同色。这是本 rig 唯一的已知混淆项：metallic=1 时
-# baseColorFactor 就是金属染色，四档的**亮度标尺不完全相同**。两条缓解：
-#   ① 挑调色板里 BT.601 亮度权重最接近的四色（yellow/chartreuse/cyan/green，权重
-#      0.886/0.737/0.701/0.587，最大/最小 = 1.51×，而预测效应是"显著 → ~0"的量级差）；
-#   ② harness 额外报"按实测平台亮度归一"的口径做稳健性对照。
-# 权重差与 roughness 档的对应关系写进 manifest（extra.probe.bands[].lumaWeight601），
-# 不藏。要彻底消掉混淆只能加中性色（改 PAL 固定表 = 动全表判据），刻意没做。
-#
-# ## 构建期断言（A1–A5）
-#
-# A1 镜像线在画面内且离上下边有裕量（否则"扫过画面"不成立）；A2 四条带在镜像线处**都可见**
-# 且各自像素宽 ≥ 128（否则某一档根本没样本，单调性表是空的）；A3 roughness 严格递增
-# （梯子公平性，同 izb_rig 的截面梯判据）；A4 地面在镜像线处铺满整个可见横向范围
-# （否则画面边缘是"地面尽头"不是反射）；A5 四档同色同几何、**只有 roughness 不同**
-# （单变量纪律：任何别的差异都会伪装成 roughness 效应）。
-
-ENV_BAND_H = 1.0            # 相机离地高度（m）
-ENV_BAND_VIEW_ELEV = 3.0    # 俯角 = env 带子仰角（度）⟹ 镜像线落在主点行
-ENV_BAND_FOV_V = 45.0       # 垂直 fov（glm::perspective 的 fovy，见 rgl/ecs_impl.cppm）
-ENV_BAND_STRIP_W = 10.0     # 每条 roughness 带的 X 宽（m）
-ENV_BAND_Z_NEAR = 30.0      # 地面向相机侧延伸（m）
-ENV_BAND_Z_FAR = 300.0      # 地面向视线方向延伸（m）；远端落在黑色天穹里 = 边缘不可见
-ENV_BAND_ROUGHNESS = (0.12, 0.25, 0.5, 0.75)
-ENV_BAND_COLORS = ("yellow", "chartreuse", "cyan", "green")  # 见上「唯一混淆项」
-# PIL/ITU-R BT.601 的 L 权重（度量脚本 convert("L") 用的就是这套，不是 BT.709）
-K601 = (0.299, 0.587, 0.114)
-
-
-def env_band_probe(width: int = 1280, height: int = 720) -> dict:
-    """镜像线行号与四条带在镜像线处的像素边界（闭式，供 harness 定位 + 构建期断言）。
-
-    逐式来源：视线仰角 −θ_b 的射线打到 y=0 的地面 ⟹ 距离 d = h/tan(θ_b)；
-    地面点 (c, 0, −d) 的屏幕横坐标 = 中心 + (c/d)/tan(hfov/2) · (W/2)，
-    其中 tan(hfov/2) = tan(fov_v/2)·(W/H)（垂直 fov + 宽高比，glm 约定）。
-    """
-    t = math.tan(math.radians(ENV_BAND_VIEW_ELEV))
-    d = ENV_BAND_H / t
-    tan_half_h = math.tan(math.radians(ENV_BAND_FOV_V / 2.0)) * (width / height)
-    edges = []
-    for i in range(len(ENV_BAND_ROUGHNESS) + 1):
-        c = (i - len(ENV_BAND_ROUGHNESS) / 2.0) * ENV_BAND_STRIP_W
-        edges.append(width / 2.0 + (c / d) / tan_half_h * (width / 2.0))
-    return {
-        "mirrorRow": height / 2.0,          # 俯角 = 带仰角 ⟹ 镜像线 = 主点行
-        "mirrorDistanceM": d,
-        "stripEdgesPxAtMirrorRow": edges,
-        "pxPerDegElevation": height / ENV_BAND_FOV_V,
-        "frameWidth": width,
-        "frameHeight": height,
-    }
-
-
-def scene_env_band() -> Scene:
-    n = len(ENV_BAND_ROUGHNESS)
-    x0 = -n * ENV_BAND_STRIP_W / 2.0
-    probe = env_band_probe()
-
-    s = Scene(
-        name="env_band",
-        purpose=("变体 1「带边」：metallic=1 平坦地面 + 四条并排 roughness 档 "
-                 f"{list(ENV_BAND_ROUGHNESS)}，配程序化 env（纯黑 + 仰角 "
-                 f"{ENV_BAND_VIEW_ELEV}° 极亮窄带），掠射机位让窄带的镜面反射横贯画面"),
-        honesty=("地面**完全平坦且无纹理**（无 TEXCOORD_0/TANGENT/normal map）——这是刻意的，"
-                 "变体 1 只测「env 窄带 × roughness」这一条轴。代价如实写在这里：本引擎的 "
-                 "shading 法线 = 插值顶点法线（rgl/shaders/model_pbr_ibl.frag.slang:52-53 "
-                 "geoN = worldNormal(M, normalize(input.normal))，N = geoN），无 normal map "
-                 "时**逐像素法线变化与 specular AA 的输入是同一个量**，所以本 rig 造不出"
-                 "「法线高频变化而 specular AA 不察觉」那一类噪点。bistro 湿面有 normal map，"
-                 "这一轴本 rig 覆盖不到，不要拿本 rig 的绿/红去否证 bistro 的机制。"),
-        cameras={
-            "grazing": {"position": [0.0, ENV_BAND_H, 0.0],
-                        "target": [0.0,
-                                   ENV_BAND_H - 10.0 * math.sin(math.radians(ENV_BAND_VIEW_ELEV)),
-                                   -10.0 * math.cos(math.radians(ENV_BAND_VIEW_ELEV))],
-                        "fovDegrees": ENV_BAND_FOV_V},
-        },
-    )
-    P = s.pieces.append
-    for i, r in enumerate(ENV_BAND_ROUGHNESS):
-        x = x0 + i * ENV_BAND_STRIP_W
-        P(Piece(f"rough_{r:.2f}",
-                quad((x, 0.0, -ENV_BAND_Z_FAR), (0.0, 0.0, ENV_BAND_Z_FAR + ENV_BAND_Z_NEAR),
-                     (ENV_BAND_STRIP_W, 0.0, 0.0)),
-                PAL[ENV_BAND_COLORS[i]], metallic=1.0, roughness=r,
-                radial=False, closed=False,
-                intent=(f"roughness={r} 档（metallic=1，N=+Y 平坦）；"
-                        f"镜像线处像素 x ∈ [{probe['stripEdgesPxAtMirrorRow'][i]:.0f},"
-                        f"{probe['stripEdgesPxAtMirrorRow'][i + 1]:.0f})")))
-
-    s.extra["probe"] = dict(probe)
-    s.extra["probe"]["bands"] = [
-        {"piece": f"rough_{r:.2f}", "roughness": r,
-         "color": list(PAL[ENV_BAND_COLORS[i]]),
-         "lumaWeight601": round(sum(a * b for a, b in zip(K601, PAL[ENV_BAND_COLORS[i]])), 6),
-         "xRangePx": [round(probe["stripEdgesPxAtMirrorRow"][i], 3),
-                      round(probe["stripEdgesPxAtMirrorRow"][i + 1], 3)]}
-        for i, r in enumerate(ENV_BAND_ROUGHNESS)]
-    s.extra["envRecipe"] = {
-        "tool": "tools/env_band_hdr.py",
-        "layout": "equirect (latlong), W=2H, row0=天顶, v=0.5-elev/180"
-                  "（出处 rgl/texture_pool.cppm loadEnvCubeMapHdr/sampleEquirect）",
-        "elevDeg": ENV_BAND_VIEW_ELEV,
-        "note": "带子仰角必须 == 相机俯角，否则镜像线跑出主点行（harness 仍按实测行定位）",
-    }
-
-    # ── 构建期断言 ──────────────────────────────────────────────────────
-    # A1 镜像线在画面内且离上下边 ≥ 15% 画高（离地平线也要有裕量：太贴地平线时
-    #    地面远端/侧端会跑进测量窗，把"地面尽头"的边缘当成反射来量）
-    h = probe["frameHeight"]
-    assert 0.15 * h <= probe["mirrorRow"] <= 0.85 * h, f"A1 镜像线行 {probe['mirrorRow']} 出画"
-    horizon_row = probe["mirrorRow"] - ENV_BAND_VIEW_ELEV * probe["pxPerDegElevation"]
-    assert horizon_row >= 0.15 * h, f"A1 地平线行 {horizon_row:.0f} 太贴画顶"
-    # A2 四条带在镜像线处都可见，且各自像素宽 ≥ 128
-    e = probe["stripEdgesPxAtMirrorRow"]
-    for i, r in enumerate(ENV_BAND_ROUGHNESS):
-        lo, hi = max(e[i], 0.0), min(e[i + 1], float(probe["frameWidth"]))
-        assert hi - lo >= 128.0, f"A2 roughness={r} 档在镜像线处仅 {hi - lo:.0f}px（<128）"
-    # A3 梯子公平性：roughness 严格递增
-    assert all(b > a for a, b in zip(ENV_BAND_ROUGHNESS, ENV_BAND_ROUGHNESS[1:])), \
-        "A3 roughness 档非严格递增"
-    # A4 地面在镜像线处铺满整个可见横向范围（画面左右边缘对应的地面 x 必须在地面内）
-    d = probe["mirrorDistanceM"]
-    tan_h = math.tan(math.radians(ENV_BAND_FOV_V / 2.0)) * (probe["frameWidth"] / h)
-    x_visible = d * tan_h
-    x_ground = n * ENV_BAND_STRIP_W / 2.0
-    assert x_ground > x_visible, \
-        f"A4 地面半宽 {x_ground} m < 镜像线处可见半宽 {x_visible:.2f} m（画面边缘是地面尽头）"
-    # A5 单变量纪律：四 piece 同色板位、同几何尺寸、metallic 全 1，只有 roughness 不同
-    assert len(s.pieces) == n
-    for p in s.pieces:
-        assert p.metallic == 1.0, f"A5 {p.name} metallic ≠ 1"
-        assert len(p.geom.positions) == 4, f"A5 {p.name} 不是单 quad"
-        ys = {v[1] for v in p.geom.positions}
-        assert ys == {0.0}, f"A5 {p.name} 地面不平整（y 出现 {ys}）"
-        assert {tuple(round(c, 3) for c in v) for v in p.geom.normals} == {(0.0, 1.0, 0.0)}, \
-            f"A5 {p.name} 法线不是恒定 +Y"
-    return s
-
-
-# ---------------------------------------------------------------------------
 # 场景 6：nm_rig —— 带 normal map 的受控靶（本轮加，复现 bistro 湿面高亮噪点）
 # ---------------------------------------------------------------------------
 # ## 为什么必须新造一个靶，而不是在 env_band 上加纹理
 #
 # env_band 的 honesty 已把那条构造性局限写进文件：本引擎无 normal map 时
 # `geoN = worldNormal(M, normalize(input.normal))`、`N = geoN`
-# （rgl/shaders/model_pbr_ibl.frag.slang:52-53）⟹ **shading 法线与 specular AA 的输入
+# （rgl/shaders/deferred_geometry.frag.slang，原 forward 的 model_pbr_ibl.frag 已随刀②.2 删除）
+# ⟹ **shading 法线与 specular AA 的输入
 # 是同一个量**。而 specular AA（normalFiltering）在平坦面上 ddx/ddy(geoN) ≈ 0 ⟹ 零增强。
 # 于是"法线高频变化而 specular AA 完全不察觉"这一类噪点**在没有 normal map 的靶上
 # 构造不出来**——不是没测到，是不存在。nm_rig 的唯一职责就是把这条轴变成可扫的自变量。
@@ -1302,10 +1070,11 @@ def scene_env_band() -> Scene:
 #
 # 俯角 25° + fov_v 45° ⟹ 画面仰角范围 [−2.5°, −47.5°]，**全画幅皆地面、地平线在画外**。
 # 三条硬收益：
-#   ① deferred 路线可用（deferred 的天穹不乘 env.intensity 也不读 skybox 标志，
-#      light.frag.slang:193-203；画幅里没有天穹像素 = 那条不对称根本不被触发）；
+#   ① deferred 路线可用（画幅里没有天穹像素 ⟹ light.frag 的天穹分支根本不被触发，
+#      它与 env.intensity 的口径关系怎么定都不影响本靶；2026-10-18 起 intensity=0 连天穹
+#      一起关，定案见 docs/图变体收敛_plan.md §6.2）；
 #   ② 可用像素从 env_band 的 49 行涨到整窗；
-#   ③ 不需要掩膜，也不需要 skybox=false 这条 forward 专属开关。
+#   ③ 不需要掩膜，也不需要原 forward 的背景天穹开关（environment.skybox 键已随刀②.2 删除）。
 # 窄带的镜像线 = 反射仰角等于带仰角的那一行；带仰角取 25°（= 俯角）⟹ 镜像线落在主点行。
 #
 # ## 两条自变量为什么"干净"（这是本 rig 全部的设计价值）
@@ -1340,7 +1109,7 @@ def nm_ray_dir(px: int, py: int, w: int, h: int, fov_v: float, pitch_deg: float)
     """像素 (px,py) 的世界空间视线方向（glm::perspective 约定 + 零 roll 俯角）。
 
     ndc_y = 1 − 2(y+0.5)/H（y=0 是顶行）；tan θ_v = ndc_y·tan(fov/2)、
-    tan θ_h = ndc_x·tan(fov/2)·(W/H)（垂直 fov + 宽高比，与 env_band_probe 同一约定）。
+    tan θ_h = ndc_x·tan(fov/2)·(W/H)（垂直 fov + 宽高比，与已归档的 env_band_probe 同一约定）。
     dir = cos θ_v·(cos θ_h·f̂ + sin θ_h·r̂) + sin θ_v·û，
     f̂=(0,−sin p,−cos p)、r̂=(1,0,0)、û=(0,cos p,−sin p)。
     """
@@ -1410,8 +1179,7 @@ def nm_rig_probe(w: int = 1280, h: int = 720, fov_v: float = NM_FOV_V,
 
 def scene_nm_rig(amp_deg: float = 2.0, block: int = 1, pattern: str = "blocks",
                  texels: int = NM_TEXELS, uv_scale: float = NM_UV_SCALE,
-                 roughness: float = 0.12, pitch_deg: float = NM_PITCH_DEG,
-                 variant: str = "forward") -> Scene:
+                 roughness: float = 0.12, pitch_deg: float = NM_PITCH_DEG) -> Scene:
     """单材质整块金属地面 + 程序化 normal map。参数即自变量，其余全部归零（见配置）。"""
     g = NM_GROUND_HALF
     # 顶点序与 env_band 的 quad() 同构，但这里要逐顶点带 uv/tangent，故手搓 4 顶点。
@@ -1469,13 +1237,12 @@ def scene_nm_rig(amp_deg: float = 2.0, block: int = 1, pattern: str = "blocks",
                       "B = cross(N,T)·w = +X = ∂P/∂v（自洽右基）",
     }
     s.extra["envRecipe"] = {
-        "tool": "tools/env_band_hdr.py",
+        # 生成脚本已随图变体收敛刀②.2 归档（git history @ < 2026-10-18 的该文件）
+        "tool": "tools/env_band_hdr.py（已归档）",
         "args": f"--elev {pitch_deg} --band <W> --intensity <RAD>",
         "note": f"带子仰角必须 == 相机俯角 {pitch_deg}°，否则镜像线跑出主点行 "
                 f"（harness 仍按实测行定位）",
     }
-    s.extra["variant"] = variant
-
     # ── 构建期断言 ────────────────────────────────────────────────────────
     # A1 全画幅皆地面：顶行视线仰角必须 < 0（地平线在画外），否则 deferred 的天穹
     #    会进来污染（它不乘 env.intensity，"env 关掉归零"那行实验永远不归零）。
@@ -2044,9 +1811,7 @@ def scene_ssr_rig_empty() -> Scene:
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
-    "d1_parity": scene_d1_parity,
     "izb_rig": scene_izb_rig,
-    "env_band": scene_env_band,
     "nm_rig": scene_nm_rig,
     "penumbra_ladder": scene_penumbra_ladder,
     "ssr_rig": scene_ssr_rig,
@@ -2785,7 +2550,6 @@ def main(argv=None) -> int:
     ap.add_argument("--nm-roughness", type=float, default=0.12)
     ap.add_argument("--nm-pitch", type=float, default=NM_PITCH_DEG,
                     help="相机俯角（度），必须 == env 窄带仰角")
-    ap.add_argument("--nm-variant", default="forward", choices=("forward", "deferred"))
     args = ap.parse_args(argv)
 
     out = Path(args.out)
@@ -2796,7 +2560,7 @@ def main(argv=None) -> int:
             scene = scene_nm_rig(amp_deg=args.nm_amp, block=args.nm_block,
                                  pattern=args.nm_pattern, texels=args.nm_texels,
                                  uv_scale=args.nm_uv_scale, roughness=args.nm_roughness,
-                                 pitch_deg=args.nm_pitch, variant=args.nm_variant)
+                                 pitch_deg=args.nm_pitch)
         else:
             scene = SCENES[name]()
         glb, manifest_json, stats = build_scene(scene)

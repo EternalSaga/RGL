@@ -262,10 +262,10 @@ AbOverride echoAbOverride(double envIntensity, double aoStrength)
         std::printf("\n    两个门都是 IEEE 精确旁路（ao：tonemap 的 lerp(1,ao,0)≡1；env：几何体的 "
                     "IBL diffuse+specular 都乘 env.intensity）\n");
         if (abEnv)
-            std::printf("    ⚠ 但 **天穹背景不受 env.intensity 影响**（skybox.frag.slang 与 "
-                        "light.frag.slang 的 envSky 分支直接返回 env 采样、不乘它）\n"
-                        "      ⟹ 背景会**原样亮着**。「背景还在」≠「IBL 没关掉」，"
-                        "看几何体别看天。\n");
+            std::printf("    ⚠ 天穹口径（2026-10-18 探针重立起）：light.frag 的 sky 分支门控 "
+                        "`mipRange>0 && intensity>0`（docs/图变体收敛_plan.md §6.2）\n"
+                        "      ⟹ env.intensity=0 时天穹**一起关**；env 未上传（mipRange=0）时同样黑天。"
+                        "「背景还在」只可能是交付配置 intensity>0。\n");
         if (abEnv && envIntensity <= 0.0)
             std::printf("    ⚠ 更要紧：env 是本场景**唯一的环境光**（scene.lua 原注释：0.2 时阴影面只剩"
                         "受光的 0.2%%，\n"

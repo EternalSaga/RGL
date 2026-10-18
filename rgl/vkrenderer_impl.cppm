@@ -166,7 +166,7 @@ Renderer::Renderer(RGL::DeviceContext& vkDevice, RGL::Swapchain& vkSwapchain, RG
 	  // 帧内捕获器（手术 2）：持资源层 + 编译图引用，构造期自图定位 swapchain slot
 	  capturer(vkResources, rtCache, this->renderGraph),
 	  // edS3 能力门 + 四段状态值（Phase 10 批次 0 手术 1：状态表迁 StateKit，
-	  // transparent/skybox/light 的差异值语义注释随迁 state_kit.cppm ctor）
+	  // transparent/light 的差异值语义注释随迁 state_kit.cppm ctor；skybox 随刀②.2 删除）
 	  // 双条件门（12.3d 就范于 issue_history 声明）：eds3 && depth_clip_enable base，
 	  // 缺 base 时动态调 vkCmdSetDepthClipEnableEXT 违 VUID-07451（见 features.cppm）
 	  stateKit(depthClipDynamicSupported(vkDevice.getOptionalFeatures()),

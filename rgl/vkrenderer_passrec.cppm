@@ -759,7 +759,7 @@ std::expected<void, Error> Renderer::drawFrame(const FrameDrawList& list) {
 		offGraph.advanceTo(offGraph.inPassPhase(passIndex));
 		// 动态状态在 draw 时采样（spec chapters/shaders.adoc "Setting State"），与
 		// bindShadersEXT 先后无约束；段首各 applyDynamicState 一次（Phase 5 语义，
-		// 状态对象经 pass.state 名解析——opaque/skybox/transparent 三成员不变；
+		// 状态对象经 pass.state 名解析（成员表 = StateKit kStateSlots，名字 = pass_vocabulary）；
 		// viewport/scissor 尺寸随 passExtent，与上面 beginRendering.renderArea 同源）
 		RGL::applyDynamicState(cmd, renderRect,
 			stateKit.stateFor(pass.state), stateKit.depthClipDynamicEnabled(),

@@ -314,7 +314,7 @@ std::optional<MeshletBindingSlots> wireMeshletBindings(Resources& resources,
  * @param variant mesh SPV 变体（base/debug/tint，★0.5-b2 起三档；优先级在调用点定）
  */
 void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene,
-	bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets, Resources& resources,
+	ShaderRegistry& pipelines, AssetTable& assets, Resources& resources,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache,
 	const MeshletGeometryStore& meshletGeometry, const std::optional<MeshletBindingSlots>& slots,
 	MeshletMeshVariant variant) {
@@ -346,7 +346,7 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 		for (size_t i = 0; i < um.assetIds.size(); ++i) {
 			const uint32_t id = um.assetIds[i];
 			const uint32_t entryIdx = pipelines.addMeshletEntry(
-				resolvePrimitiveSpecName(scene, deferredMode, um.model->primitives[i]),
+				resolvePrimitiveSpecName(scene, um.model->primitives[i]),
 				assets.getTexture(um.textureIds.base[i]).heapSlot,
 				assets.getTexture(um.textureIds.normal[i]).heapSlot,
 				assets.getTexture(um.textureIds.orm[i]).heapSlot,
@@ -608,7 +608,7 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
 MeshletAssembly wireMeshletOverlay(Resources& resources,
 	DeviceContext& device,
 	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
-	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
+	const SceneConfig& scene, ShaderRegistry& pipelines, AssetTable& assets,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, const RuntimeConfig& cfg,
 	SceneDataService& sceneData) {
 	MeshletAssembly assembly;
@@ -622,7 +622,7 @@ MeshletAssembly wireMeshletOverlay(Resources& resources,
 	// 保证，见 meshlet.instrument 规则）。一件事一个函数：选档 = pickMeshletMeshVariant
 	// （债-129 S2 起住在 shader_registry，= MeshletMeshVariant 的 owner）。
 	const MeshletMeshVariant variant = pickMeshletMeshVariant(cfg);
-	bakeMeshletEntries(uploaded, scene, deferredMode, pipelines, assets, resources, samplers,
+	bakeMeshletEntries(uploaded, scene, pipelines, assets, resources, samplers,
 		rtCache, meshletGeometry, slots, variant);
 	// ★18-B1：阴影段簇路径条目（**只建条目不接 draw**，接线归 B2）。放在 bakeMeshletEntries
 	// 之后 = 同一份 slots 复用、且不打乱既有条目序之前的任何一条（本条目是纯追加）。

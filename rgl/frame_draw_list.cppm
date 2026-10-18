@@ -19,8 +19,8 @@ namespace RGL {
 //
 /**
  * 一次绘制（FrameDrawList 的条目；由渲染 system 每帧产出，drawFrame 消费）：
- *   pipeline   = 管线表下标（直接取自资产记录 MeshAsset.pipelineIndex /
- *                SceneEnv.skyboxPipeline——启动期经 ShaderRegistry::bindPipelineToAsset
+ *   pipeline   = 管线表下标（直接取自资产记录 MeshAsset.pipelineIndex——
+ *                启动期经 ShaderRegistry::bindPipelineToAsset
  *                写回，每帧路径零字符串查找，构造后稳定；见 render_list_impl）
  *   pushData   = 本次 draw 的 push constant，布局随管线（CPU 内存录制时读取——
  *                vkCmdPushDataEXT 只要求内存活到录制结束，故帧局部存储即可）
@@ -120,7 +120,7 @@ export struct MdiShadowSegment {
  * 帧局部存储（录制期读取即完成使命，同 DrawCall.pushData 生命周期规则）。
  */
 export struct SceneFrameData {
-	SceneLight light;  // scene data @0 头单灯（forward 消费 lights[0]，布局见 scene_forward_types_generated）
+	SceneLight light;  // scene data @0 头单灯（readSceneLight 消费，布局见 scene_forward_types_generated）
 	// Phase 5.5 env 参数（scene data 头 @48/@52，原 16B 保留区启用；shader 端
 	// env.slang readEnvParams 字面量一致）：x=envIntensity y=envMipRange（=L−1，0 = 无环境）
 	glm::vec2 envParams{0.0f};
@@ -150,7 +150,8 @@ export struct SceneFrameData {
 	std::span<const ObjectDraw> objectDraws;
 	// Phase 7 D3：多灯数组（scene data 尾区 kSceneDataLightArrayOffset，4B count@base +
 	// GpuLight[count]@base+16，契约见 lights.slang / lights_schema.lua）。lightCount=0 时
-	// 该区不写。forward 仍走 .light（@0 头单灯），二者独立填。
+	// 该区不写。scene data 头 @0 单灯（eyePos/ambient 共享项）与之独立填，消费方见
+	// scene.slang readSceneLight。
 	uint32_t lightCount = 0;
 	std::array<GpuLight, kMaxLights> lightArray{};
 	// Phase 11 批 11.2：级联阴影光空间 VP（scene data 尾区 kSceneDataShadowMatrixOffset，
@@ -282,18 +283,18 @@ export using CullFrameInput = CullPush;
 /**
  * 每帧绘制列表：顺序 = 绘制顺序（Phase 5 透明排序已落地：不透明段在前、透明段按
  * 相机距离 back-to-front 排；Phase 7 culling 输出的落点）。
- * Phase 5.5 批次 4 三段：opaque = [0, skyboxStart)，skybox = [skyboxStart,
- * transparentStart)，transparent = [transparentStart, size)——两个边界字段与段序
- * **与 Phase 6 RenderGraph pass 序列同构**（机械翻译：每段 = 一个 Pass，边界 = 依赖边）。
- * drawFrame 段首各 applyDynamicState 一次（不透明写深度关混合 / 天空盒 LEQUAL 不写深度 /
- * 透明关深度写开混合），段内逐 draw 循环不变（盲执行契约保持）。
+ * Phase 5.5 批次 4 曾有三段（opaque/skybox/transparent），skybox 段与 skyboxStart 边界
+ * 已随 forward 绘制机制删除（2026-10-18 图变体收敛刀②.2）：现在两段 = [0,
+ * transparentStart) + [transparentStart, size)——边界字段与段序**与 Phase 6 RenderGraph
+ * pass 序列同构**（机械翻译：每段 = 一个 Pass，边界 = 依赖边）。
+ * drawFrame 段首各 applyDynamicState 一次（不透明写深度关混合 / 透明关深度写开混合），
+ * 段内逐 draw 循环不变（盲执行契约保持）。
  */
 export struct FrameDrawList {
 	std::vector<DrawCall> calls;
-	uint32_t skyboxStart = 0;       // 无天空盒 = 与 transparentStart 重合（空段跳过）
 	uint32_t transparentStart = 0;
 	// Phase 11 批 11.2：阴影段（**独立向量，不属于 calls**）。为什么不拼进 calls：
-	// calls 的段边界（skyboxStart / transparentStart）被 GPU culling 的候选序对账与
+	// calls 的段边界（transparentStart）被 GPU culling 的候选序对账与
 	// cull_driver 重放路强依赖（采样候选表 = CPU opaque 段序），插一个新段就要重新对账；
 	// 而阴影段的可见集与主视野不同（下方“源几何”备注），属于独立通道。
 	// drawSource = "shadow" + 分块号字符串（见 scene_context::shadowDrawSource）。
@@ -369,7 +370,7 @@ export struct FrameDrawList {
 };
 
 // 执行器可识别的 drawSource 段名 = pass_vocabulary::isKnownDrawSource（**单一真相源**
-// = kAllDrawSources：三个精确段名 + 可变分块号的 "shadow" 前缀，分块号可变
+// = kAllDrawSources：两个精确段名 + 可变分块号的 "shadow" 前缀，分块号可变
 // kActiveShadowCascades 1→4，写死字面量会在切级联时漏校验）。本模块只负责
 // **段名 → draw 序列**的映射（下方 segmentSpan）；"合法吗"归词表，图校验里判。
 // ⚠️ 本模块的 if 链与那张表不共享机制（表判合法、链做映射）——漂移由
@@ -393,16 +394,14 @@ uint32_t shadowCascadeOf(std::string_view drawSource) {
  * **为何改 span**：阴影段存在独立向量 FrameDrawList::shadowCalls 里（见该字段注释：不拼进
  * calls 是为了不打破 GPU culling 的候选序对账契约），二者不共用索引空间 → 一个统一的
  * span 返回值比“返回下标对、由调用点自己取对应向量”不容易错。
- * @param drawSource 段名（"opaque" / "skybox" / "transparent" / "shadow0..3"）
+ * @param drawSource 段名（"opaque" / "transparent" / "shadow0..3"；"skybox" 已随刀②.2 删除）
  * @param list 每帧绘制列表
  * @return 该段的 draw 序列（空段 = 空 span，无特判）
  */
 export std::span<const DrawCall> segmentSpan(std::string_view drawSource,
 	const FrameDrawList& list) {
 	if (drawSource == "opaque")
-		return {list.calls.data(), list.skyboxStart};
-	if (drawSource == "skybox")
-		return {list.calls.data() + list.skyboxStart, list.transparentStart - list.skyboxStart};
+		return {list.calls.data(), list.transparentStart};
 	// 阴影段：独立向量 + 名字串前缀匹配，**后缀是分块号**（"shadow" = 0）。
 	// 先判前缀再退到 transparent 兼容分支：退容分支返回【transparentStart, size)。
 	// 漏掉前缀判断等于让 shadow pass 把透明段再画一遍进阴影图（静默错渲染）。

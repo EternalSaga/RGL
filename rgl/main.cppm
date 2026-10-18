@@ -167,17 +167,12 @@ export std::optional<PreWindow> prepareWindow(const StartupConfigs& configs);
  */
 export void checkPushDataLimits(const DeviceContext& device);
 
-/**
- * Phase 5.5 IBL 风格契约：引用 model_pbr_ibl/model_vegetation/model_light 风格必须
- * 配 environment——frag 声明的 binding 4/5 无 mapping 烘焙 = 采样未写描述符（内容
- * 未定义；VVL 会抓 "no mapping for envSampler"，但启动期明确报错优于运行时未定义）。
- * 检查对象只取 styleMap 的值（风格真正引用的规格）：pipelines 表里存在未被引用的
- * ibl 条目是合法配置（addModelEntry 按引用建条目，无引用 = 不建，条目永不生效）；
- * 子串 contains 匹配还会误伤 model_pbr_ibl_v2 类未来命名（2026-09-03 教程拆解 ③：
- * 教程截图配置 styles.pbr="model_pbr" 但 pipelines 保留 ibl 条目被旧检查误杀）。
- * @note 违约 → 抛 std::runtime_error
+/** Phase 5.5 IBL 风格契约检查（validateEnvironmentContract）已删（2026-10-18 图变体
+ *  收敛刀②.2）：它检查的是「styles 表引用 model_pbr_ibl/model_vegetation/model_light
+ *  而未启用 environment」，这三条 forward 规格与 styles 表同刀删除；deferred 路的 env
+ *  消费在 light 条目侧本就有占位回落（env 未上传 = 槽 0 + mipRange=0 恒不采样），
+ *  无「声明未映射」形态可校验。
  */
-export void validateEnvironmentContract(const SceneConfig& scene);
 /** 按 file 去重的已上传模型（instancing：同文件一次解析一次上传，entities 共享资产）。 */
 export struct UploadedModel {
 	std::string file;
@@ -246,10 +241,10 @@ export void uploadEnvironment(Resources& resources, Environment& env, DeviceCont
  * C1：管线条目烘焙（per **unique 模型**——instancing 共享条目；addModelEntry 按
  * (规格,顶点 slot,base/normal/orm/emissive 纹理 slot,sampler slot) 组合去重兜底）。
  * 风格派生：primitive.unlit → "unlit"，否则 "pbr" 再经 scene.lua material_rules pattern
- * 匹配（有序首个命中）；forward 经 styles 表（缺失 = 启动抛错）、deferred 经 deferred_styles
- * 表（缺失回落 deferred_geometry）。DIAG style_dist/tex_dist：per-模型风格/纹理 slot 分布日志。
+ * 匹配（有序首个命中）→ deferred_styles 表（缺失回落 deferred_geometry）。forward 的
+ * styles 表半边已随刀②.2 删除。DIAG style_dist/tex_dist：per-模型风格/纹理 slot 分布日志。
  */
-export void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
+export void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene,
 								ShaderRegistry& pipelines, Resources& resources,
 								SamplerLibrary& samplers, AssetTable& assets,
 								RenderTargetCache& rtCache);
@@ -266,8 +261,8 @@ export void addDiagnosticCloneEntries(ShaderRegistry& pipelines);
 /**
  * C2/C2b：场景实体注册——per **entity**：模型 entity（rootTransform = T·Rx·Ry·Rz·S，
  * 旋转应用序 X→Y→Z）+ 独立实例矩阵槽；cube entity（内建资产 + 默认材质 + cube 管线条目，
- * 下标写回启动期一次幂等）；灯 entity（index = lights 列表位，正序契约：0 = 主光
- * forward @0 头，deferred 全数组按 index 落槽）。矩阵容量契约：实例槽超
+ * 下标写回启动期一次幂等）；灯 entity（index = lights 列表位，正序契约：deferred 全数组按
+ * index 落槽）。矩阵容量契约：实例槽超
  * kSceneMatrixCapacity → 抛 std::runtime_error（对象矩阵表越界写，启动期先拦截）。
  */
 export void registerSceneEntities(entt::registry& registry, const UploadedAssets& assets,
@@ -344,7 +339,7 @@ export struct MeshletAssembly {
 export MeshletAssembly wireMeshletOverlay(
 	Resources& resources, DeviceContext& device,
 	const MeshletGeometryStore& meshletGeometry, const UploadedAssets& uploaded,
-	const SceneConfig& scene, bool deferredMode, ShaderRegistry& pipelines, AssetTable& assets,
+	const SceneConfig& scene, ShaderRegistry& pipelines, AssetTable& assets,
 	SamplerLibrary& samplers, RenderTargetCache& rtCache, const RuntimeConfig& cfg,
 	SceneDataService& sceneData);
 
@@ -472,11 +467,10 @@ export void wireMeshletPostRegistration(entt::registry& registry, const Uploaded
  * **共用**——叠加与本体必须走同一 material_rules / deferred_styles 映射，否则 frag
  * 静默接错；原为 bakePipelineEntries 内 lambda，抬出 = 单一真相源）。
  * 风格 = prim.unlit ? "unlit" : "pbr" 再经 scene.lua material_rules pattern（有序首个
- * 命中）；deferred 经 deferred_styles（缺失回落 deferred_geometry）、forward 经 styles
- * 表（缺失 = 启动抛错，同原行为）。
+ * 命中）→ deferred_styles（缺失回落 deferred_geometry）。forward 的 styles 表半边
+ * （含「缺 style 启动抛错」分支）已随刀②.2 删除（docs/图变体收敛_plan.md §5）。
  */
-export std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool deferredMode,
-	const GltfPrimitive& prim);
+export std::string resolvePrimitiveSpecName(const SceneConfig& scene, const GltfPrimitive& prim);
 
 /**
  * 簇化轴 ★1-a1i：把簇产物的**逐 prim 簇区间**落到 per-objectSlot 表（registry ctx
@@ -549,17 +543,18 @@ export struct RenderBackEnd {
  * C3+deferred+HDR+DGC+Renderer 装配（时序关键；运行期辅助 heap 槽走运行时段）：GPU culling
  * 候选表（守卫/迭代序与 render_list CPU 路径**逐位一致**——重放序 BIT-IDENTICAL 前提，
  * 透明段不入候选）→ GpuCull 构造（静态 DGC 流条目数快照 = 此刻管线表条目数，sky/light
- * 条目其后加入非 candidate）→ skybox 条目（env 已上传才建 + SceneEnv 回填）→ deferred
+ * 条目其后加入非 candidate）→ deferred
  * G-buffer RT 堆槽 + light 条目（deferredMode）→ scene_hdr RT + tonemap 条目（无条件）
  * → DGC 命令生成（能力门控，构造异常回落读回重放路）→ 选路日志 → Renderer 构造（构造期
  * 校验 drawLight pass 有 light 条目）。
+ * （skybox 条目一步已随 forward 绘制机制删除，2026-10-18 刀②.2。）
  * @note G-buffer / scene_hdr RT 创建失败 → 抛 std::runtime_error
  */
 export RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
 									 SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
 									 RenderTargetCache& rtCache, AssetTable& assets,
 									 ShaderRegistry& pipelines, CompiledGraphResult&& graphResult,
-									 entt::registry& registry, const SceneConfig& scene,
+									 entt::registry& registry,
 									 bool fsrEnabled = false, bool fsrTemporal = false,
 									 bool fsrJitter = false);
 

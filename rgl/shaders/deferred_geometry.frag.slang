@@ -7,12 +7,12 @@ import normalmap;  // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解
 // Phase 7 D1：G-buffer 几何 pass fragment。复用 model.mesh.slang（同 ModelVertexOutput、
 // 同绑定 binding0 顶点/1 baseColorTex/2 sampler/3 空位/6 normalTex/7 ormTex），
 // **不做光照**——只把材质几何/外观属性写进 4 个 MRT，供 light pass 光照。材质数据与
-// forward 严格同源（albedo = baseColor.rgb × baseColorTexture；法线 = 导数 TBN 后世界
+// 与已删除的 forward 路严格同源（历史对偶；albedo = baseColor.rgb × baseColorTexture；法线 = 导数 TBN 后世界
 // 法线 oct 编码（Phase 8 ③a normal 贴图，DX flip-G + Z 重建）；metal/rough = 材质 factor
-// × ORM 贴图 B/G 通道（Phase 8 ③a））——故 D1 判据 = deferred 与 forward 单灯着色等价。
+// × ORM 贴图 B/G 通道（Phase 8 ③a））——D1 判据史 = deferred 与 forward 单灯着色等价（forward 已随刀②.2 删除）。
 //
-// Phase 8 批次 F：材质类别宏 → emissive.a 通道（light pass 按类分支复刻 forward 专属
-// shader 视觉：1=植被 wrap+透射、2=光源本色；light.frag 头注）。本文件 = 标准 PBR 本体
+// Phase 8 批次 F：材质类别宏 → emissive.a 通道（light pass 按类分支复刻已删除的 forward 专属
+// shader 视觉——历史对偶：1=植被 wrap+透射、2=光源本色；light.frag 头注）。本文件 = 标准 PBR 本体
 //（class 0）；类别变体 = deferred_geometry_vegetation/light.frag.slang 先 #define 再
 // #include 本文件（常量折叠进 SPV，实测包装器编译成立）。路由 = scene.lua
 // material_styles（材质名→风格）+ deferred_styles（风格→本组变体规格名），零 heap 契约改动。
@@ -22,8 +22,8 @@ import normalmap;  // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解
 // albedo 压暗）写进 metalrough/normal/albedo 三张 G-buffer，light.frag 与 ssr.frag 读
 // G-buffer 自动同源 ⟹ 结构上不可能出现「反射了但没压暗」「SSR 采了未扰动的法线」这类
 // 错配；若改在 light pass 做，SSR 就得自己再复制一遍同样的调制（两个真相源）。
-// **deferred-only**：forward 不经过本文件 ⟹ forward 无湿面 = phase15 §0.1 的同一 D1
-// 豁免（SSR 亦 deferred-only，两条路一起没有，不新增对等缺口）。
+// **deferred-only**：当年 forward 不经过本文件（无湿面 = phase15 §0.1 的同一 D1 豁免；
+// forward 已随刀②.2 删除，SSR 亦 deferred-only，对等缺口不再存在）。
 // **确定性**：噪声只吃世界 xz，**没有任何时间输入**——帧间静止是 `regress burst` 静止
 // 基线与 TAA 红线的前提；动画水膜不是本 phase 的事。
 // 已知边界：① 扰动后的法线同时进直接光 NdotL 与 AO（G-buffer 法线只有一套消费者）——
@@ -42,7 +42,7 @@ import normalmap;  // Phase 8 方案 A：normal 贴图标准 TBN + DX flip-G 解
 //                                              采样报 FORMAT_NOT_SUPPORTED 的规避——spec 上 RGB32 可采样，见 devlog 勘误)
 //   SV_Target3 metalRough  RGBA8_UNORM        (.r=metallic .g=roughness，[0,1] 直存 unorm)
 //   SV_Target4 emissive    RGBA16_SFLOAT      (Phase 8 剩余批次 B：HDR 自发光 = emissiveFactor ×
-//                                              emissiveTexture，与 forward 相加项同源；16F 保 HDR 域)
+//                                              emissiveTexture，与已删除的 forward 相加项同源；16F 保 HDR 域)
 
 // octahedral 编码（McTaggart **标准形 +signNotZero**——z<0 半区折进同象限菱形外区，
 // 码面连续；与 light.frag octDecode 同式自反——两端必须一致。旧 −signNotZero 乘子
@@ -111,7 +111,7 @@ void main(
     float4 texel = baseColorTexture.Sample(baseColorSampler, input.uv);
     const ObjectDraw od = readObjectDraw(drawArgs.objectIndex);  // Phase 7b+：材质进 heap
     float3 albedo = od.baseColor.rgb * texel.rgb;
-    // Phase 8 C1：MASK cutout（同 forward model_pbr_ibl；cutoff = od.emissive.w，0 = 不测）
+    // Phase 8 C1：MASK cutout（同已删除的 forward model_pbr_ibl；cutoff = od.emissive.w，0 = 不测）
     if (od.alphaDiscard(od.baseColor.a * texel.a))
         discard;
 
@@ -121,20 +121,20 @@ void main(
     float3 N = geoN;
 
     // Phase 8 ③a：ORM 贴图（G=roughness B=metallic，R=AO 采样不应用，白纹理回落 factor）
-    // + normal 贴图（导数 TBN，DX flip-G + Z 重建）——公式与 forward model_pbr_ibl 严格
-    // 同源（G-buffer 与 forward 等价性依赖此）
+    // + normal 贴图（导数 TBN，DX flip-G + Z 重建）——公式与已删除的 forward model_pbr_ibl
+    // 严格同源（历史对偶；当年 G-buffer 与 forward 的等价性依赖此）
     float4 orm = ormTexture.Sample(baseColorSampler, input.uv);
     float3 tangentNormal = decodeNormalDx(normalTexture.Sample(baseColorSampler, input.uv));
     // Phase 8 方案 A：标准 TBN（CPU 烘切线 + GS + 手性，无导数）——掠射角白噪点根治
     N = applyNormalMapTBN(N, worldTangent(M, input.tangentOS), tangentNormal);
-    // Phase 8 C1：doubleSided 背面法线翻向（同 forward；cull 开时恒真 = 无副作用）
+    // Phase 8 C1：doubleSided 背面法线翻向（同已删除的 forward 路；cull 开时恒真 = 无副作用）
     if (!frontFace)
         N = -N;
     // ObjectDraw.roughnessMetallic: x=roughness y=metallic（scene.slang readObjectDraw）
     float metallic = clamp(od.roughnessMetallic.y * orm.b, 0.0, 1.0);
     float roughness = clamp(od.roughnessMetallic.x * orm.g, 0.04, 1.0);
     // Phase 8 方案 C：geometric specular AA 写进 G-buffer（light pass 用过滤后 roughness，
-    // 与 forward 逐式同源保 D1；几何法线导数在 geometry pass 求，干净信号）
+    // 与已删除的 forward 路逐式同源（历史对偶）保当年 D1；几何法线导数在 geometry pass 求，干净信号）
     roughness = normalFiltering(roughness, geoN);
 
     // ── 湿面调制（Phase 15 批 15.2 子步 B；设计论证见文件头「湿面调制」小节）──

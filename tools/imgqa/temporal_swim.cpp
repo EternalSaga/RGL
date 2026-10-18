@@ -40,7 +40,7 @@
 //     明显升回去；搬对搬错一样低 = 算子没有区分力（box9 消融那次的教训：先确认被动的会动）。
 //   · **符号不猜**：±两个都试并回显命中哪个（引擎 y 口径若与本工具相反会在这里暴露）。
 //
-// 五组采集（全部真实 bistro：env/skybox/IBL/AO/shadow 全开；静止机位）：
+// 五组采集（全部真实 bistro：env/IBL/AO/shadow 全开；静止机位）：
 //   T0  TAA 关                       → 确定性地板（逐帧差须恰为 0）+ 提供「离基图多远」的 R
 //   T1  TAA 开 fb=1（只抖不滤）      → 输出 = 本帧（无累积、无糊）= 游动量的**下界参照**
 //   T2  TAA 开 fb=.12（现行）        → 被测量
@@ -593,7 +593,7 @@ int cmdTaaSwim(int pairs, int warm)
             "见 taa_plan §6 末）\n\n", kTaaJitterPeriod, pairs, nPairs, warm, nWarm);
     const int shots = nPairs + 1;
     const std::string root = projectRoot() + "/build";
-    std::printf("真实场景 TAA 游动量测：1280×720  bistro（env/skybox/IBL/AO/shadow 全开）  "
+    std::printf("真实场景 TAA 游动量测：1280×720  bistro（env/IBL/AO/shadow 全开）  "
         "静止机位  预热 %d 帧  帧对 %d\n"
         "假设：收敛后 out_i(uv) = F(uv − jitter_i) ⟹ 相隔 k 帧的两帧是精确平移 (j_{i+k} − j_i)\n\n",
         nWarm, nPairs);

@@ -27,7 +27,7 @@ namespace RGL::imgqa {
 inline constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 /// 参照 luma 低于 1 LSB ⟹ S = (L_none − L_arm)/L_none 的分母是黑的，S 无定义。
-/// 这条下限是判据 1 最要紧的反向：env/skybox 全关时**背景就是黑的**，没有下限会把整屏
+/// 这条下限是判据 1 最要紧的反向：env 关时**背景就是黑的**（skybox 标志已随刀②.2 删除），没有下限会把整屏
 /// 算成「有影」= 缺陷态刷绿。
 inline constexpr double kLumaUndefined = 1.0;
 

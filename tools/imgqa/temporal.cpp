@@ -109,7 +109,6 @@ RunResult runSequence(const std::string& dir, bool taa, double feedback, double 
     ProfileOpts o;
     o.entitiesLua = "{ type = \"aa_target\" }";  // 内存合成靶，无 glb 文件
     o.envIntensity = 0.0;                        // 背景 = 常量 clear 色，零时域噪声
-    o.skybox = false;
     o.exposure = 1.0;
     o.aoStrength = 0.0;   // strength=0 逐位旁路，不给差分添第二来源
     o.shadowPass = false;

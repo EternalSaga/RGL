@@ -420,7 +420,7 @@ export struct RenderState {
  * @param depthClipDynamic edS3 能力门：true = 设备支持 extendedDynamicState3DepthClipEnable，
  *        才 setDepthClipEnableEXT；false = 扩展缺失，保持管线默认（干净 no-op，不 set）
  * @param colorAttachmentCount 颜色附件数（多颜色附件须对 [0, count) 全部设 blend enable
- *        与 write mask，VVL 07476/07478；默认 1 = forward）。**0 = depth-only pass**
+ *        与 write mask，VVL 07476/07478；默认 1 = 单色附件 pass）。**0 = depth-only pass**
  *        （Phase 11 批 11.2 阴影图）：色态整段跳过——setColorBlendEnableEXT /
  *        setColorWriteMaskEXT 的 attachmentCount 必须 > 0，传空数组是 VVL 报错
  *        （2026-09-29 实测：`vkCmdSetColorBlendEnableEXT(): attachmentCount must be
@@ -469,7 +469,7 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& ar
 
 	// Color blending + 写掩码：多颜色附件（Phase 7 deferred geometry 4 MRT）须覆盖 [0, count)
 	//（VVL 07476/07478：shader object 动态色态要求所有 active color attachment 均已设 blend enable
-	// 与 write mask）。forward（count=1）与旧逐位一致。
+	// 与 write mask）。单色附件（count=1）与旧逐位一致（历史实测）。
 	if (state.colorBlend && colorAttachmentCount > 0) {
 		// hpp 包装类无聚合初始化（仅默认/拷贝/Vk* 构造）——裸 C 结构体逐字段填后包一层。
 		// 注意 v341 头：单 colorBlendOp/alphaBlendOp 字段（非 src/dst 各一，新版头才拆分）

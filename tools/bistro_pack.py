@@ -32,6 +32,8 @@ import sys, os, json, struct, subprocess, tempfile, math
 #   model_pbr_ibl.frag.slang 与共用的 model_vegetation.frag.slang 都是原样加，
 #   于是同一份资产在两条路径上自发光差 4 倍 = D1 对等破口（批 11.0c 修掉）。
 #   1.0 = 不加强（= glTF 原值语义），三条路径同值，对等成立。
+#   （注：forward 路已随图变体收敛刀②.2 删除，本段是当年 D1 对等修复的历史论证；
+#    今天 ×1/4 只剩 deferred light.frag 的光源类分支一处。）
 EMISSIVE_STRENGTH = 1.0   # engine loader premultiplies into emissiveFactor
 # Wet-pavement roughness 缩放（2026-09-29）：effective = 本值 × ORM.G(0.737) ≈ 0.12（水膜）。
 # 逐条依据见下方 roughnessFactor 处的注释。

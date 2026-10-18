@@ -181,7 +181,7 @@ export inline bool sphereInFrustum(const Frustum& f, const glm::vec3& c, float r
  * 光源（组件，Phase 7 灯 entity 化，ECS 规范 3：画不画 = 实体有无）。每灯一个 entity + 本组件，
  * main 启动期 C2b 段按 sceneConfig.lights 顺序创建（scene_config 保证非空：lights 段缺 → 回落
  * [light]）。index = scene.lua lights 列表位（正序契约，显式钉死不靠 view 迭代序）：
- * forward 只读 index 0 = 主光（写 scene data @0 头单灯，diff0）；延迟 light pass 按 index
+ * index 0 = 主光（写 scene data @0 头单灯）；deferred light pass 按 index
  * 落槽遍历全灯（≤ kMaxLights）。type=0 定向（direction 有效，世界空间，消费时归一化）；
  * type=1 点光（position 有效，range 线性衰减）。color×intensity 预乘进 GpuLight.color。
  */
@@ -477,7 +477,8 @@ export inline bool casterInShadowVolume(const ShadowVolume& v, const glm::vec3& 
  * environment 段 + env cubemap 上传结果 emplace，仿 Light）。renderListSystem 每帧
  * 写进 scene data 头 @48（SceneFrameData.envParams），env.slang readEnvParams 消费。
  * mipRange = cubemap mipLevels−1（上传期才知道，故 main 在 loadEnvCubeMapFiles 后填）；
- * 默认全 0 = 无环境（IBL 风格下环境项黑，direct light 不受影响）。
+ * 默认全 0 = 无环境（env 镜面/漫反射项黑、天穹关；deferred 的天穹总闸 = intensity，
+ * docs/图变体收敛_plan.md §6.2）。
  */
 export struct SceneEnv {
 	float intensity = 0.0f;
@@ -545,11 +546,9 @@ export struct SceneEnv {
 	// → `git:调试历史` 2026-10-06；档位全量语义 → `scene_data.cppm` TaaParamsBlock::clipControl。
 	float taaClipMode = 0.0f;
 	float taaClipSoft = 1.0f;
-	// Phase 5.5 批次 4 天空盒：enabled = env 已上传且 scene.lua environment.skybox=true；
-	// pipeline = ShaderRegistry "skybox" 条目下标（main 启动期 addSkyEntry 后回填；
-	// 0xFFFFFFFF = 未建条目——renderListSystem 见 enabled 但 pipeline 无效 = 契约漂移）
-	bool skybox = false;
-	uint32_t skyboxPipeline = 0xFFFFFFFF;
+	// Phase 5.5 批次 4 天空盒（skybox / skyboxPipeline 两字段）已随 forward 绘制机制删除
+	// （2026-10-18 图变体收敛刀②.2，docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物
+	//  = env.intensity 总闸）。
 };
 
 /**

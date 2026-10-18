@@ -1,6 +1,7 @@
-// Phase 7 D1：light pass mesh shader —— 单 group 全屏大三角（仿 skybox.mesh.slang）。
-// 覆盖 [0,1] uv 的屏幕，不读任何 buffer——管线 binding 0/1（textured=false 基础映射的
-// vertex/index）在 shader 不声明 = 空转无副作用（skybox 既证）。groupCount=1。
+// Phase 7 D1：light pass mesh shader —— 单 group 全屏大三角（仿 skybox.mesh.slang，
+// 该文件已随刀②.2 删除）。覆盖 [0,1] uv 的屏幕，不读任何 buffer——管线 binding 0/1
+// （textured=false 基础映射的 vertex/index）在 shader 不声明 = 空转无副作用
+// （skybox 条目既证，同其一并删除，结论留在 git history）。groupCount=1。
 // z=1（far）、w=1：light pass 无深度测试/写入（终图直写 swapchain），深度值不参与。
 
 struct LightVertexOutput

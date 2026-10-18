@@ -58,17 +58,12 @@ void readBool(sol::table table, const char* key, bool& into) {
 		into = *v;
 }
 
-/** defaultSceneConfig 定义（接口注释见 scene_config.cppm）：内建管线集 + styles {unlit,pbr} + spin。 */
+/** defaultSceneConfig 定义（接口注释见 scene_config.cppm）：内建管线集 + material_rules + spin。
+ *  原 styles 表（风格→forward 规格）与 forward/skybox 规格已随刀②.2 删除。 */
 SceneConfig defaultSceneConfig() {
 	SceneConfig cfg;
 	cfg.pipelines = {
 		{"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"},
-		{"model", "generated_shaders/model.mesh.spv", "generated_shaders/model.frag.spv"},
-		{"model_pbr", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr.frag.spv"},
-		{"model_phong", "generated_shaders/model.mesh.spv", "generated_shaders/model_phong.frag.spv"},
-		{"model_pbr_ibl", "generated_shaders/model.mesh.spv", "generated_shaders/model_pbr_ibl.frag.spv"},
-		{"model_vegetation", "generated_shaders/model.mesh.spv", "generated_shaders/model_vegetation.frag.spv"},
-		{"model_light", "generated_shaders/model.mesh.spv", "generated_shaders/model_light.frag.spv"},
 		{"deferred_geometry", "generated_shaders/model.mesh.spv", "generated_shaders/deferred_geometry.frag.spv"},
 		{"deferred_geometry_vegetation", "generated_shaders/model.mesh.spv",
 			"generated_shaders/deferred_geometry_vegetation.frag.spv"},
@@ -76,10 +71,7 @@ SceneConfig defaultSceneConfig() {
 			"generated_shaders/deferred_geometry_light.frag.spv"},
 		{"deferred_geometry_unlit", "generated_shaders/model.mesh.spv",
 			"generated_shaders/deferred_geometry_unlit.frag.spv"},
-		{"skybox", "generated_shaders/skybox.mesh.spv", "generated_shaders/skybox.frag.spv"},
 	};
-	cfg.styleMap = {{"unlit", "model"}, {"pbr", "model_pbr"},
-		{"vegetation", "model_vegetation"}, {"light", "model_light"}};
 	cfg.materialRules = {{"Emissive", "light"}, {"Foliage", "vegetation"}};
 	// unlit 必须上榜（2026-10-18）：缺表回落 deferred_geometry = KHR_materials_unlit
 	// 材质被静默打光（D1 破口本体，见 deferred_geometry_unlit.frag.slang 头注）。
@@ -95,7 +87,7 @@ namespace {
 /**
  * 键表 = 「解析器认识哪些键」的单一真相源（diagnostics 的 kGateEcho 同角色，债-11）：
  * ① 未知键 lint 的判据表；② tests 里「读过的键集合 == 键表键集合」双向覆盖率断言的输入。
- * 子表字段用 `表名.字段`；map 段（styles/deferred_styles）键名任意只记表名——债-129
+ * 子表字段用 `表名.字段`；map 段（deferred_styles）键名任意只记表名——债-129
  * 第三刀起这同时是**下钻豁免声明**（未知键 lint 只钻键表声明了 `块.` 点分前缀的块，
  * 裸表名 = 不钻，见 declaresNestedKeys）；数组段（entities/pipelines/lights）按条目
  * 字段记 `表名.字段`（条目内字段名固定）。
@@ -140,10 +132,8 @@ constexpr std::string_view kSceneKeys[]{
 	"environment.dir",
 	"environment.faces",
 	"environment.intensity",
-	"environment.skybox",
 	"environment.hdr",
 	"environment.hdr_size",
-	"styles",
 	"material_styles.pattern",
 	"material_styles.style",
 	"deferred_styles",
@@ -152,8 +142,8 @@ constexpr std::string_view kSceneKeys[]{
 /**
  * 键表是否声明了 `块.` 前缀的点分键（= 该块是**固定字段块**，可下钻；债-129 第三刀，
  * runtime_config_impl 同构）。🔴 本 loader 是这条前缀条件存在的理由：scene.lua 的
- * styles/deferred_styles 是**开放 map**（子键 = 用户自起的材质名，键表里没有），
- * 键表只有裸表名 ⟹ false ⟹ 不钻——无条件下钻会把 `styles.pbr` 报成未知键。
+ * deferred_styles 是**开放 map**（子键 = 用户自起的材质名，键表里没有），
+ * 键表只有裸表名 ⟹ false ⟹ 不钻——无条件下钻会把 `deferred_styles.my_style` 报成未知键。
  * 数组段（entities/pipelines/material_styles）虽声明了点分前缀，但条目子键是数字
  * 不是字符串键 ⟹ 下钻天然不贡献。
  * @param block 顶层键名（候选块名）
@@ -171,7 +161,7 @@ bool declaresNestedKeys(std::string_view block) {
  * 「文件里实际出现的键」采集（diagnostics 的 collectPresentKeys 同构，未知键 lint
  * 的输入；present 来自文件本体不来自读取动作）。顶层键照旧记；债-129 第三刀：键表声明了
  * `块.` 点分前缀的块（ao/taa/entities/pipelines/light/lights/environment/material_styles）
- * **下钻一层**，字符串子键以 `块.子键` 追加；开放 map（styles/deferred_styles）不钻
+ * **下钻一层**，字符串子键以 `块.子键` 追加；开放 map（deferred_styles）不钻
  * （判据见 declaresNestedKeys）。
  * @param root 配置根表
  * @param trace 键轨迹（present 追加目标）
@@ -385,7 +375,9 @@ void parseLights(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
 /**
  * environment 段解析（Phase 5.5；缺段 = 不启用）。faces 按 Vulkan 层序 0-5 排列。
  * Phase 8 ②b 新增 hdr（.hdr 环境路径，非空优先于 faces）+ hdr_size（重投影面边长，
- * 必须 2 的幂，默认 2048）。键轨迹在段入口无条件记全六个字段键（同 parseEntities 口径，
+ * 必须 2 的幂，默认 2048）。原 skybox 布尔（背景天穹开关，forward draw 侧 knob）已随
+ * 刀②.2 删除（docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物 = intensity 总闸）。
+ * 键轨迹在段入口无条件记全五个字段键（同 parseEntities 口径，
  * 记录先于一切早退分支）。
  * @param root 配置根表
  * @param cfg 目标配置（写 environment）
@@ -397,7 +389,6 @@ std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg,
 	trace.read.emplace_back("environment.dir");
 	trace.read.emplace_back("environment.faces");
 	trace.read.emplace_back("environment.intensity");
-	trace.read.emplace_back("environment.skybox");
 	trace.read.emplace_back("environment.hdr");
 	trace.read.emplace_back("environment.hdr_size");
 	sol::table envTable = root["environment"];
@@ -414,7 +405,6 @@ std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg,
 		}
 	}
 	readFloat(envTable, "intensity", cfg.environment.intensity);
-	readBool(envTable, "skybox", cfg.environment.skybox);
 	readStr(envTable, "hdr", cfg.environment.hdr);
 	if (!envTable["hdr_size"].valid())
 		return {};
@@ -429,17 +419,8 @@ std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg,
 	return {};
 }
 
-/** styles 表解析（风格名→管线规格名，Phase 4 批次 3；非空覆盖默认 {unlit,pbr}）。
- *  map 段键名任意 ⟹ 键轨迹只记表名（与 lint 的「`.` 前缀」判据一致）。 */
-void parseStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
-	trace.read.emplace_back("styles");
-	sol::table styles = root["styles"];
-	if (!(styles.valid() && styles.is<sol::table>()))
-		return;
-	cfg.styleMap.clear();
-	for (auto [key, value] : styles)
-		cfg.styleMap[key.as<std::string>()] = value.as<std::string>();
-}
+/** 原 parseStyles（styles 表 → styleMap，Phase 4 批次 3）已随刀②.2 删除——forward 的
+ *  风格路由半边消失（docs/图变体收敛_plan.md §5）。 */
 
 /** material_styles 解析（Phase 8 批次 F，材质名连连看：数组 { pattern=..., style=... }，
  * 有序首个命中；非空覆盖默认）。键轨迹在段入口无条件记 pattern/style 两键。 */
@@ -475,7 +456,7 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace
 
 }  // namespace
 
-/** loadSceneConfig 定义（接口注释见 scene_config.cppm）：沙箱 dofile + 段调度（entities/pipelines/lights/environment/styles 各 parse* helper，Phase ②b 拆债）；缺文件回落默认。键轨迹 + 未知键 lint 同 diagnostics（债-11）。 */
+/** loadSceneConfig 定义（接口注释见 scene_config.cppm）：沙箱 dofile + 段调度（entities/pipelines/lights/environment/material_styles/deferred_styles 各 parse* helper，Phase ②b 拆债；原 styles 段随刀②.2 删除）；缺文件回落默认。键轨迹 + 未知键 lint 同 diagnostics（债-11）。 */
 [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(
 	std::string_view path, SceneKeyTrace* trace) {
 	auto* logger = RLLogger::getInstance();
@@ -569,7 +550,6 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace
 		parseLights(root, cfg, *trace);
 		if (auto r = parseEnvironment(root, cfg, *trace); !r)
 			return std::unexpected(r.error());
-		parseStyles(root, cfg, *trace);
 		parseMaterialStyles(root, cfg, *trace);
 		parseDeferredStyles(root, cfg, *trace);
 

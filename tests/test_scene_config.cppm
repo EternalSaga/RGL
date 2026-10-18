@@ -136,16 +136,17 @@ bool hasUnknownKeyWarn(const std::string& delta, std::string_view prefix, std::s
 // scene_config
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("scene_config：缺文件回落默认（warn 不报错）——默认 = 12 管线 + 4 styles + 空 entities") {
+TEST_CASE("scene_config：缺文件回落默认（warn 不报错）——默认 = 5 管线 + 3 deferred_styles + 空 entities") {
 	// 缺文件路径：temp 目录下不存在的名
 	std::string missing = (std::filesystem::temp_directory_path() / "rgl_cfg_no_such_scene.lua").string();
 	auto r = loadSceneConfig(missing);
 	REQUIRE(r.has_value());
-	// 默认画像（defaultSceneConfig，scene_config_impl.cppm:62-91）。
+	// 默认画像（defaultSceneConfig，scene_config_impl.cppm）。原 12 管线里的 forward/skybox
+	// 规格与 styles 表已随刀②.2 删除（docs/图变体收敛_plan.md §5），剩下的 = cube + 四条
+	// deferred 规格。
 	// **实际行为**：缺文件路径**不经 parseEntities**，entities 保持**空**——
 	// 与"存在但空的 lua"不同（下一条），这个不对称是既有语义，钉住防"顺手统一"。
-	CHECK(r->pipelines.size() == 12);
-	CHECK(r->styleMap.size() == 4);
+	CHECK(r->pipelines.size() == 5);
 	CHECK(r->materialRules.size() == 2);
 	CHECK(r->deferredStyleMap.size() == 3);
 	// unlit 2026-10-18 起**必须在榜**（.at 缺键即抛 = 断言）：KHR_materials_unlit 材质
@@ -169,10 +170,10 @@ TEST_CASE("scene_config：空表 return {} → 各字段 = 默认值，且 entit
 	CHECK(r->showCube == true);
 	expectNear(r->exposure, 1.0, 0.0, 1e-6);
 	expectNear(r->aoStrength, 0.0, 0.0, 1e-6);
-	// 管线/styles = 默认集（parsePipelines 缺段不覆盖）
-	CHECK(r->pipelines.size() == 12);
-	CHECK(r->styleMap.size() == 4);
-	CHECK(r->styleMap.at("pbr") == "model_pbr");
+	// 管线/deferred_styles = 默认集（parsePipelines 缺段不覆盖）
+	CHECK(r->pipelines.size() == 5);
+	CHECK(r->deferredStyleMap.size() == 3);
+	CHECK(r->deferredStyleMap.at("vegetation") == "deferred_geometry_vegetation");
 	// **实际行为**（parseEntities 缺段合成，scene_config_impl.cppm:138-144）：
 	// entities 空 + showCube 默认 true → 合成 [cube]。"空配置 ≠ 空场景"，空配置 =
 	// 一个旋转的 cube。这条不对称同样被上一条钉着（缺文件 = 真空）。
@@ -507,7 +508,7 @@ TEST_CASE("scene_config：environment 段（缺段不启用；faces 层序；hdr
 	{  // **实际行为**：environment 段存在即 enabled=true（无显式 enabled 字段）
 		TempLua f("sc_env_on", R"lua(
 return { environment = { dir = "sky", faces = { "px", "nx", "py", "ny", "pz", "nz" },
-  intensity = 0.5, skybox = false, hdr_size = 1024 } }
+  intensity = 0.5, hdr_size = 1024 } }
 )lua");
 		auto r = loadSceneConfig(f.pathStr());
 		REQUIRE(r.has_value());
@@ -517,7 +518,8 @@ return { environment = { dir = "sky", faces = { "px", "nx", "py", "ny", "pz", "n
 		CHECK(r->environment.faces[0] == "px");
 		CHECK(r->environment.faces[5] == "nz");
 		expectNear(r->environment.intensity, 0.5, 0.0, 1e-6);
-		CHECK(r->environment.skybox == false);
+		// 原 skybox 布尔（背景天穹开关，forward draw 侧 knob）已随刀②.2 删除——键表里
+		// 也没有它了，配置里再写它会被未知键 warn（键表对账 = 本文件「键覆盖」那组用例）。
 		CHECK(r->environment.hdrSize == 1024u);
 	}
 	{  // hdr_size 非 2 的幂 = 报错（parseEnvironment:252-254）
@@ -528,19 +530,21 @@ return { environment = { dir = "sky", faces = { "px", "nx", "py", "ny", "pz", "n
 	}
 }
 
-TEST_CASE("scene_config：pipelines/styles 非空覆盖默认；pipeline 缺 name 报错；语法错误报错") {
+TEST_CASE("scene_config：pipelines/deferred_styles 非空覆盖默认；pipeline 缺 name 报错；语法错误报错") {
 	{
+		// 原 styles 表（风格→forward 规格）已随刀②.2 删除，本用例的 map 段半边换喂
+		// deferred_styles——两段的「非空 = 覆盖而非追加」语义同源（parseDeferredStyles 先 clear）。
 		TempLua f("sc_pipe",
 			R"lua(return { pipelines = { { name = "mine", mesh = "m.spv", frag = "f.spv" } },
-  styles = { pbr = "mine" } })lua");
+  deferred_styles = { pbr = "mine" } })lua");
 		auto r = loadSceneConfig(f.pathStr());
 		REQUIRE(r.has_value());
 		REQUIRE(r->pipelines.size() == 1);  // 覆盖而非追加
 		CHECK(r->pipelines[0].name == "mine");
 		CHECK(r->pipelines[0].meshSpv == "m.spv");
 		CHECK(r->pipelines[0].fragSpv == "f.spv");
-		REQUIRE(r->styleMap.size() == 1);
-		CHECK(r->styleMap.at("pbr") == "mine");
+		REQUIRE(r->deferredStyleMap.size() == 1);  // 覆盖而非追加（map 段半边）
+		CHECK(r->deferredStyleMap.at("pbr") == "mine");
 	}
 	{
 		TempLua f("sc_pipe_noname", R"lua(return { pipelines = { { mesh = "m.spv" } } })lua");
@@ -2072,7 +2076,7 @@ TEST_CASE("债-11 扫描面非空 + 交付 configs 零 warn：configs/{scene,run
 // collectPresentKeys 对**键表声明了 `块.` 点分前缀**的块下钻一层记 `块.子键`；
 // lint 对点分名走键表精确成员、无点名保持顶层前缀语义。五个 loader 同治。
 // 🔴 变异红线（整组）：① 下钻段注释掉 → 五条阳性锚点全红；② 前缀条件去掉（无条件钻）
-// → 「开放 map 不钻」用例红（styles.pbr 被喊）；③ 精确成员判据弱化回前缀 → 五条
+// → 「开放 map 不钻」用例红（deferred_styles.pbr 被喊）；③ 精确成员判据弱化回前缀 → 五条
 // 阳性锚点全红（meshlet.ovrelay 会被 meshlet.mode 之外的同块键前缀命中而漏喊）。
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2259,28 +2263,28 @@ TEST_CASE("债-129 shadow 嵌套阳性锚点：pcss 块内拼错 → warn 点名
 	}
 }
 
-TEST_CASE("债-129 开放 map 不钻（前缀条件的判据本体）：scene styles/deferred_styles 用户自起子键**不得** warn") {
-	// 🔴 本用例 = declaresNestedKeys 前缀条件存在的理由：styles/deferred_styles 的键表
-	// 条目是**裸表名**（无 `styles.` 点分名）⟹ 不钻。变异红线：前缀条件去掉（无条件钻）
-	// → styles.pbr / styles.my_style_z1 / deferred_styles.whatever_z1 全被喊 → 红。
+TEST_CASE("债-129 开放 map 不钻（前缀条件的判据本体）：scene deferred_styles 用户自起子键**不得** warn") {
+	// 🔴 本用例 = declaresNestedKeys 前缀条件存在的理由：deferred_styles 的键表条目是
+	// **裸表名**（无 `deferred_styles.` 点分名）⟹ 不钻。变异红线：前缀条件去掉（无条件钻）
+	// → deferred_styles.pbr / deferred_styles.my_style_z1 全被喊 → 红。
+	// （原 styles 表是本判据的第二个样本，已随刀②.2 删除；scene.lua 里剩下的开放 map 只有
+	//  deferred_styles 一枚——样本少一枚，判据本体不变。）
 	LogTailer log;
 	TempLua f("sc_openmap",
-		"return { styles = { pbr = \"model_pbr_ibl\", my_style_z1 = \"model\" }, "
-		"deferred_styles = { whatever_z1 = \"deferred_geometry\" } }\n");
+		"return { deferred_styles = { pbr = \"deferred_geometry\", "
+		"my_style_z1 = \"deferred_geometry_unlit\" } }\n");
 	SceneKeyTrace trace;
 	auto r = loadSceneConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
-	// 零 warn 断言在**全 delta** 上（不只钉"没喊 styles.pbr"——任何一条未知键 warn 都算违反红线）
+	// 零 warn 断言在**全 delta** 上（不只钉"没喊 deferred_styles.pbr"——任何一条未知键 warn 都算违反红线）
 	CHECK(log.delta().find("未知键") == std::string::npos);
 	// 解析照常：开放 map 的子键真的被吃进映射（否则"不 warn"是假绿）
-	CHECK(r->styleMap.size() == 2u);
-	CHECK(r->styleMap.at("my_style_z1") == "model");
-	CHECK(r->deferredStyleMap.size() == 1u);
-	// 判据本体：present 里只有裸表名，没有任何 styles.* 点分名
-	CHECK(containsKey(trace.present, "styles"));
-	CHECK_FALSE(containsKey(trace.present, "styles.pbr"));
-	CHECK_FALSE(containsKey(trace.present, "styles.my_style_z1"));
-	CHECK_FALSE(containsKey(trace.present, "deferred_styles.whatever_z1"));
+	CHECK(r->deferredStyleMap.size() == 2u);
+	CHECK(r->deferredStyleMap.at("my_style_z1") == "deferred_geometry_unlit");
+	// 判据本体：present 里只有裸表名，没有任何 deferred_styles.* 点分名
+	CHECK(containsKey(trace.present, "deferred_styles"));
+	CHECK_FALSE(containsKey(trace.present, "deferred_styles.pbr"));
+	CHECK_FALSE(containsKey(trace.present, "deferred_styles.my_style_z1"));
 }
 
 }  // namespace RGL

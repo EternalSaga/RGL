@@ -23,7 +23,7 @@ SamplerState envSampler;
 
 struct EnvParams
 {
-    // 环境强度（scene.lua environment.intensity）。**作用点在 GPU 端**：model_pbr_ibl.frag
+    // 环境强度（scene.lua environment.intensity）。**作用点在 GPU 端**：light.frag
     // 采样后乘（env 颜色只存在于 GPU，无法像定向光那样 CPU 预乘进 SceneLight::color）。
     // 与定向光 intensity（CPU 预乘，scene.slang SceneLight::color 注释）是同一字段的两种落地形态——
     // 调光时两条路线各只改自己 config 里的那一个 intensity（docs/archive/教程拆解发现_20260902.md ⑤）

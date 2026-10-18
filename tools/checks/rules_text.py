@@ -881,8 +881,8 @@ def meshlet_spec_checks() -> list[Warning]:
        `main_meshlet_tables.cppm::checkMeshletDeviceFit` 永远是该常量的 C++ 侧消费者、它恒
        "被使用" ⟹ 构建全绿，而 NV 上 `vkCreateShadersEXT` 启动就撞
        VUID-RuntimeSpirv-MeshEXT-07295/07298（本批修的就是这个 bug）。本条把**声明的线程数
-       本身**纳入射程。取 ≤ 而非 =：其余六枚 mesh shader 本来就远低于上限（`cube` / `model` /
-       `shadow` / `izb_mask` = 32，`light` / `skybox` = 3），它们不需要恰好等于。
+       本身**纳入射程。取 ≤ 而非 =：其余 mesh shader 本来就远低于上限（`cube` / `model` /
+       `shadow` / `izb_mask` = 32，`light` = 3；`skybox` 已随刀②.2 删除），它们不需要恰好等于。
        🔴 **失效必须出声**（同 `rules_layers` 的纪律：失效不出声，"零警告"会被读成"分层干净"）：
        schema 常量缺失、某枚 `.mesh.slang` 解析不到 `[numthreads(…)]`、线程数是个还原不出数值
        的标识符 ⟹ 三种情形都出警告，不许静默跳过本条。

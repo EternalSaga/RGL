@@ -68,10 +68,12 @@ struct ObjectMatrix
 // §9.2 / §9.4）。与 C++ 写入侧 vkrenderer_impl.cppm writeSceneStaging 的头区三段 memcpy
 // **逐字段对账**（SceneLight / envParams / skyInvVP 各一段，偏移由 scene_data.cppm 的
 // kSceneDataEnvOffset / kSceneDataSkyOffset 派生并 static_assert 钉死）：
-//   · light @0        —— 主光（forward 直接光 + 各 pass 的 eyePos 同源）
+//   · light @0        —— 主光（各 pass 的 eyePos 同源；count=0 时 light.frag 回落本单灯；
+//     当年 forward 直接光亦吃它，已随刀②.2 删除）
 //   · envParams @48   —— x=envIntensity y=envMipRange z=exposure w=aoStrength
-//   · skyInvVP @64    —— inverse(proj·view) 列主序 4 列（skybox 反投影 / SSR 反投影 /
-//                        shadow 级联选级取 camRight·camUp 三处同源）
+//   · skyInvVP @64    —— inverse(proj·view) 列主序 4 列（天穹反投影 / SSR 反投影 /
+//                        shadow 级联选级取 camRight·camUp 三处同源；字段名 skybox 的来历
+//                        = 已删的 forward skybox pass，契约字段名不动）
 // 头区总 128B（= kSceneDataHeaderBytes，后 16B 是 128B 对齐填充：写入侧不写、读取侧不读）。
 struct SceneHeaderBlock
 {
@@ -156,7 +158,7 @@ struct ObjectDraw
     uint vertexOffset;
     float2 roughnessMetallic;  // x=roughness y=metallic（@8，声明序 = 内存序，勿与 baseColor 对调）
     float4 baseColor;
-    float4 emissive;  // Phase 8 ③：xyz=emissiveFactor（model_pbr_ibl.frag 叠加自发光）
+    float4 emissive;  // Phase 8 ③：xyz=emissiveFactor（deferred 侧由 light.frag 叠加自发光）
 
     // Phase 8 C1：alpha-test cutout（MASK 材质 w=alphaCutoff>0；其余材质 w=0 = 恒不 discard，
     // 非 MASK 路径逐位不变）。采样后、着色前调用（discard 后 derivatives 仅余存活 lane）。
@@ -212,7 +214,8 @@ float4 worldTangent(ObjectMatrix m, float4 t)
     return float4(normalize(m.c0.xyz * t.x + m.c1.xyz * t.y + m.c2.xyz * t.z), t.w);
 }
 
-// ── Phase 8 批次 ④a：完整版 IBL 辅助（forward model_pbr_ibl 与 deferred light.frag 共用）──
+// ── Phase 8 批次 ④a：完整版 IBL 辅助（当年 forward model_pbr_ibl 与 deferred light.frag
+//    共用；forward 已随刀②.2 删除，现消费者 = light.frag）──
 //
 // 漫反射辐照度 = CPU 投影的 radiance SH9（scene data 尾区辐照度区）做辐照度余弦卷积。
 // 卷积常数（Karis/Green 辐照度 A 因子：π·l0 + 2π/3·l1 + π/4·l2）在求值里施加，CPU 侧只投影

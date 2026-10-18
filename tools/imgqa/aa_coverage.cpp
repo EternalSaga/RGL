@@ -193,7 +193,6 @@ int cmdAaCoverage(int warm, double feedback, bool baseSpace,
         ProfileOpts o;
         o.entitiesLua = "{ type = \"aa_target\" }";
         o.envIntensity = 0.0;
-        o.skybox = false;
         o.exposure = 1.0;
         o.aoStrength = 0.0;
         o.shadowPass = false;

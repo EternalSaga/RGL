@@ -353,9 +353,9 @@ export enum class RgPassKind : uint8_t {
 export inline constexpr std::string_view kDepthName = "depth";
 
 /**
- * Phase 8 批次 ①：HDR 累加链附件契约（单一真相源）——forward/deferred 图的颜色目标
+ * Phase 8 批次 ①：HDR 累加链附件契约（单一真相源）——内建 deferred 图的颜色目标
  * scene_hdr（rgba16_sfloat offscreen RT），tonemap pass 采样后写 swapchain。
- * 消费方 = render_graph_builtin 两图描述 + Resources::ensureSceneHdrSlot（启动期建
+ * 消费方 = render_graph_builtin 图描述 + Resources::ensureSceneHdrSlot（启动期建
  * RT + 采样堆槽）+ addTonemapEntry（烘焙 binding 4）。
  */
 export inline constexpr std::string_view kSceneHdrName = "scene_hdr";
@@ -363,7 +363,7 @@ export inline constexpr std::string_view kSceneHdrFormat = "rgba16_sfloat";
 
 /**
  * Phase 11 批 11.4：SSAO 附件契约（单一真相源）——ao 遮蔽量 RT（r8_unorm offscreen），
- * ao pass（state="ao"）写、tonemap pass 采样施加。消费方 = forward/deferred 图描述 +
+ * ao pass（state="ao"）写、tonemap pass 采样施加。消费方 = 内建 deferred 图描述 +
  * ensureAoSlot（启动期建 RT + 采样堆槽）+ addTonemapEntry（烘焙 binding 6）。
  */
 export inline constexpr std::string_view kAoName = "ao";
@@ -463,8 +463,9 @@ export struct RgPassDesc {
 	// 默认 {0,0,0,0} = 跟随本 pass 的渲染区域（交易窗口尺寸，或写 depthOffscreen 时
 	// 该 RT 自己的 extent）——**既有 pass 逐位不变**。
 	// 用途：阴影图集的 4 个分块（各一级一个 pass）同临一张图、各只渲染自己那一块
-	// 子矩形——每个 pass 一张图 = 4 张独立图 + 4 套附件/堆槽/绑定（而 forward/deferred
-	// 两路要各绑 4 个 = 8 个端）。子矩形同时是 **renderArea**（限定 clear 与渲染区）。
+	// 子矩形——每个 pass 一张图 = 4 张独立图 + 4 套附件/堆槽/绑定（立项时 forward/deferred
+	// 两路还要 ×2 = 8 个端；forward 已随刀②.2 删除，图集决策不受影响）。子矩形同时是
+	// **renderArea**（限定 clear 与渲染区）。
 	std::array<uint32_t, 4> viewport{0u, 0u, 0u, 0u};  // {x, y, w, h}；w == 0 = 跟随渲染区域
 	std::vector<RgPassAttachment> outputs;
 	std::vector<RgPassAttachment> inputs;
@@ -482,7 +483,7 @@ export struct RgPassDesc {
  * 而那个值只有在** pristine desc 上**才问得到（补丁一旦落下就再也问不到原值）。所以它由
  * `planHighlightDecoration` 在算计划时读出、随补丁一起携带，并由两处的试落盘**核对**：
  * 落盘时目标当前值 ≠ 申报的原值 = 图在算计划与落计划之间被人改过 ⟹ 拒落（不是照改）。
- * 还原成常量 `dontCare` 在 deferred/forward 图上**恰好也对**（那里本来就是 store）——
+ * 还原成常量 `dontCare` 在内建 deferred 图上**恰好也对**（那里本来就是 store）——
  * 恰好对 = 判据抓不到写错的那一种。
  *
  * ⚠ **按名字定位，绝不按下标**：动态插拔会让 pass 下标漂移，而名字不会——与
@@ -650,11 +651,12 @@ export struct CompiledRenderGraph {
  * **图事实层**判据：编译图里是否有 deferred 光照 pass（`kind == drawLight` 且
  * `state == kDeferredLightState`）。
  *
- * 它与配置层的 `RgGraphVariant::deferred` **是两件事**（2026-10-02 收口：此前
+ * 它与已删除的配置层 `RgGraphVariant::deferred` **从来是两件事**（2026-10-02 收口：此前
  * IZB 与 EVSSM 各写一份逐字相同的 `any_of` 现推）：消费方要的是"有没有人在跑 deferred
  * 光照 / 有没有 G-buffer 可消费"，不是"配置里 variant 写了什么"——自定义 Lua 图可以在
- * forward 变体下手写 light pass。两个真相源的分歧交给 gate_lint 交叉校验
- * （docs/gate_lint_plan.md §3-A），**不在这里抹平**。
+ * 内建 deferred 之外手写（或不写）light pass。原「两个真相源的分歧交给 gate_lint 交叉
+ * 校验」随 variant 枚举删除（2026-10-18 刀②.1，docs/图变体收敛_plan.md §4/§6.1-2：
+ * 没有消费者的真相源）——**图事实自此是这一判据的唯一来源**。
  * @param passes 编译图 pass 序列（`CompiledRenderGraph::passes`）
  * @return true = 图里有 deferred 光照 pass
  */
@@ -806,16 +808,11 @@ export vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkI
  */
 export [[nodiscard]] std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& desc);
 
-/**
- * 缺省图 = forward HDR 链（Phase 8 批次 ①）：opaque/skybox/transparent 三段渲入
- * scene_hdr（rgba16_sfloat，中间 attachment store 保内容、末段 depth DontCare）+
- * tonemap pass（drawLight）ACES 上屏 swapchain。原三段直写 swapchain 的 diff=0
- * 基准随 ACES 换 baseline。进程内静态单例，首次调用时编译（失败抛 runtime_error）。
- * @return 编译好的默认图（引用，生命周期进程级）
+/** 缺省图 = forward HDR 链（defaultRenderGraph / defaultRenderGraphDesc）已删
+ *  （2026-10-18 图变体收敛刀②.2，`docs/图变体收敛_plan.md` §5：选路只剩「文件有
+ *  attachments/passes = 自定义图，否则 = 内建 deferred」，forward 图在生产侧不可达后
+ *  连本体一起删除；原 5-pass 图声明见本文件的 2026-10-18 之前版本，git history 可查）。
  */
-export const CompiledRenderGraph& defaultRenderGraph();
-/** defaultRenderGraph 对应的图声明（静态单例；测试/变体构造的参照）。 */
-export const RgGraphDesc& defaultRenderGraphDesc();
 
 /**
  * offscreen 图变体已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §0/§2：三段渲
@@ -844,9 +841,9 @@ export const RgGraphDesc& deferredRenderGraphDesc();
  * 调用点 = main 装配层且 `diagnostics.picking` 门控（默认关 = 不调用 = 图逐位同，D10）。
  * 🔴 债-129 S3-C：调用点拿到 false = **抛 std::runtime_error 拒启动**（旧行为是 warn 后继续跑 =
  * 点选静默不可用）。本装饰的返回契约不变（false = 「落没落」的单一来源，单测直接吃它）。
- * ⚠ 内建两图（forward / deferred，2026-10-18 刀①后 offscreen 已删）**都有**这种 pass
- * ⟹ 两条路线都支持本装饰。缺它的只有自定义 passes（blit 上屏图 = transferRead ≠
- * sampleRead 必无落点）。
+ * ⚠ 内建 deferred 图（offscreen 变体 2026-10-18 刀①已删、forward 图本体刀②.2 已删）
+ * **有**这种 pass ⟹ 本装饰支持它。缺它的只有自定义 passes（无带 depth 输出的 opaque
+ * drawMesh pass = 必无落点）。
  * @param desc 图声明（原地修改：追加 attachment + pass）
  * @return true = 已装饰；false = 图形态不支持（desc 未被修改）
  */
@@ -861,11 +858,12 @@ export bool decoratePickingPass(RgGraphDesc& desc);
  *  1. **不新增附件**——写既有场景色附件（loadOp=load 保留已渲画面）+ 既有 depth
  *     （loadOp=load，depthWrite=false 见 state_kit highlightState），高亮以 alpha
  *     混合叠加在成片上。故格式/尺寸天然与被高亮内容一致，无 RT 分配开销。
- *  2. **插在「首个采样场景色附件的 pass」之前**（forward/deferred = tonemap 前，
+ *  2. **插在「首个采样场景色附件的 pass」之前**（内建 deferred 图 = tonemap 前，
  *     自定义 blit 上屏图 = composite blit 前），而非图末——图末会落在 tonemap 之后，此时色附件
  *     已无人采样，高亮画了也不可见。附件名由消费 pass 的 sampleRead 输入反查，不硬编码。
- *  3. 借 depth 前把上一个写 depth 的 pass 的 storeOp 从 dontCare 改成 store（forward 图
- *     transparent 段按「depth 后续无人用」声明 dontCare）——否则高亮读到未定义内容。
+ *  3. 借 depth 前把上一个写 depth 的 pass 的 storeOp 从 dontCare 改成 store（自定义图可按
+ *     「depth 后续无人用」声明 dontCare；内建 deferred 图本来就是 store，补丁幂等）——
+ *     否则高亮读到未定义内容。
  *
  * 本函数算计划、`applyHighlightPlan` 落图（B2-5 拆两步；类型与"为什么拆 plan/apply"见
  * `RgHighlightPlan`）。消费方 = main_impl::compileGraphOrThrow（启动期装饰，且
@@ -994,7 +992,7 @@ export bool graphDecoratedTooLate(const RgGraphDesc& desc);
 /**
  * **TAA 图装饰（批 12.6）**：往图里插入时域历史链的三件套，返回 false = 图形态不支持。
  *
- * 产物形状（角色反查，forward / deferred 两变体通用，纪律同本模块 picking / highlight）：
+ * 产物形状（角色反查，内建 deferred 图与自定义图通用，纪律同本模块 picking / highlight）：
  *  ① 两个附件：`taa_out`（offscreen rgba16_sfloat，本帧 TAA 结果）+
  *     `taa_hist`（同上但 **history=true**，跨帧历史）；
  *  ② `taa` pass（kind=drawLight、state="taa"）插在**最终上屏消费者之前**——即"写 swapchain
@@ -1070,7 +1068,8 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  *  2. 找不到「写 swapchain 且 sampleRead 色附件」的消费者（自定义 blit 上屏图用 blit
  *     上屏，transferRead ≠ sampleRead）——与 taa / velocity / ao_apply 同一锚点判据。
  *  3. 图里没有 **kGBufferAttachments 契约表的全部通道**（缺一即跳过）。**这就是 SSR 的
- *     deferred-only 边界**：D1 对等豁免已拍板（forward 不跟，`docs/phase15_plan.md` §0.1）。
+ *     deferred-only 边界**：当年 D1 对等豁免拍板 forward 不跟（`docs/phase15_plan.md` §0.1；
+ *     forward 图已随刀②.2 删除，这条边界自此是唯一形态）。
  *     🔴 **查全表（含不被采样的 `emissive`）而不是只查 trace 真正引用的那四个**，理由是
  *     「契约表就是契约」：缺任何一通道 ⟹ 这张图**不是 `deferredRenderGraphDesc` 产出的那张**，
  *     本装饰就不该往上贴。注意它**不是**在防编译错误 —— `emissive` 不被任何 pass 引用，
@@ -1257,8 +1256,8 @@ export std::expected<uint32_t, Error> ensureVelocitySlot(
  * 推荐顺序是先建实现。这与 ensureAoSlot / ensureSceneHdrSlot 同轴（启动期先领槽，每帧
  * ensure 命中缓存复用）。
  *
- * 消费方 = 全部光照管线条目（forward 模型条目 + deferred light 条目）的 binding 12/13，
- * 与 shadow.slang 的声明成对。
+ * 消费方 = deferred light 条目（含 IZB/PCSS/EVSSM 变体）的 binding 12/13（forward 模型条目
+ * 已随刀②.2 删除），与 shadow.slang 的声明成对。
  * @param rts RT 缓存（ensure/heapSlot）
  * @param mapSize 单块边长（图集整幅 = 2·mapSize）
  * @return 阴影图的 SAMPLED_IMAGE heap 槽；Error = RT 创建 / 槽分配失败

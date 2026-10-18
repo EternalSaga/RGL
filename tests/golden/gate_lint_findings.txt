@@ -1,6 +1,6 @@
 ### factory/def-happy
-### factory/fwd-dark
-### factory/fwd-happy
+### factory/no-light-dark
+### factory/no-light-happy
 ### factory/def-headless
 ### pcss/owner-on
 pcss.min_footprint_texels	1
@@ -53,13 +53,13 @@ pcss.search_radius	0
 pcss.sun_degrees	0
 ### izb/on-def
 izb.on	1
-### izb/on-fwd
+### izb/on-no-light
 izb.on	1
 izb.on	2
 ### izb/on-none
 izb.on	1
 izb.on	2
-### izb/on-none-fwd
+### izb/on-none-no-light
 izb.on	1
 izb.on	2
 izb.on	2
@@ -71,7 +71,7 @@ izb.on	1
 izb.grid	0
 ### izb/grid-on
 izb.on	1
-### izb/evssm-fwd
+### izb/evssm-no-light
 mode	2
 ### pp/frame-off-nopicking
 picking_probe.frame	2
@@ -119,7 +119,7 @@ imgui	1
 ### imgui/window
 ### gbuf/nollm
 dump_gbuf	2
-### gbuf/llm-fwd
+### gbuf/llm-no-light
 dump_gbuf	2
 ### gbuf/ok
 ### rt/factory

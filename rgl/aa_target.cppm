@@ -41,8 +41,8 @@ namespace RGL {
 // `target = (0, 0, -1)`、fov 45°、1280×720 ⇒ 画板平面 ≈435 px/m ⇒ ①的最细杆 0.65px。
 //
 // 两个 primitive 按颜色分（黑白两值高对比，材质 baseColor 给色，unlit ⇒ 像素判据
-// 只反映几何采样，无光照变量）。forward / deferred 两条路都画得出（deferred 经
-// deferred_geometry 落 G-buffer，受光 ⇒ 判据仍跑 forward，理由同上）。
+// 只反映几何采样，无光照变量）。判据跑 deferred（经 deferred_geometry 的 unlit 入口落
+// G-buffer，无受光项 ⇒ 上面的「无光照变量」前提照旧成立）。
 
 /** 细线靶的全部常量（单测按名钉死，改动 = 显式决定）。 */
 namespace aaTarget {
@@ -237,8 +237,8 @@ GltfModel toGltfModel(const TargetShape& shape) {
 		prim.bounds = boundsOf(prim.vertices);
 		prim.baseColor = color;
 		prim.materialIndex = matIndex;
-		prim.unlit = true;  // forward 走 styles.unlit → model.frag；deferred 走
-		                    // deferred_styles.unlit → deferred_geometry_unlit（class 3，本色直出）
+		prim.unlit = true;  // deferred_styles.unlit → deferred_geometry_unlit（class 3，
+		                    // 本色直出；forward 的 styles.unlit 路已随刀②.2 删除）
 		prim.doubleSided = true;
 		prim.metallic = 0.0f;
 		prim.roughness = 1.0f;

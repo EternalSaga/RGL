@@ -20,7 +20,7 @@ namespace RGL {
 
 	// 簇化轴 ★18-B1：阴影段簇路径条目（契约见接口注释）。全场景 1 条目 = 簇 buffer 是全局
 	// 单例（§10.2）⟹ addShadowEntry 的 vertexSlot 去重键在这里没有对应物；幂等靠条目名
-	// （同 addSkyEntry / addLightEntry 的 `pipelineIndex("...")` 写法），装配层逐 prim 调它。
+	// （同 addLightEntry 的 `pipelineIndex("...")` 写法），装配层逐 prim 调它。
 	uint32_t ShaderRegistry::addShadowMeshletEntry(std::array<uint32_t, 4> clusterSlots) {
 		if (auto idx = pipelineIndex("shadow_meshlet"))
 			return *idx;
@@ -31,7 +31,7 @@ namespace RGL {
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		// binding 0/1 = 合法占位槽号（本管线 mesh/frag 两 stage 都不声明它们：mesh 不 import model、
 		// frag 是 depth-only 空壳）⟹ 批 M 过滤不烘（批 M 前是「烘了空转无害」，现在根本不烘），
-		// 方向与 addSkyEntry/addLightEntry 的 0/1 占位同（「声明未映射」才是 VVL 错误，
+		// 方向与 addLightEntry 的 0/1 占位同（「声明未映射」才是 VVL 错误，
 		// 过滤只敢滤没声明的）。取 0/1 两个真实存在的低段槽号。
 		b.slotVertex = 0;
 		b.slotIndex = 1;

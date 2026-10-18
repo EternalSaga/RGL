@@ -12,7 +12,7 @@ namespace RGL {
 /**
  * pass 动态状态表（Phase 10 批次 0 手术 1：自 Renderer 摘出）。
  *
- * 持有十种命名状态的**值集合** + edS3 能力门。状态名 = pass_vocabulary 的
+ * 持有全部命名状态的**值集合**（名单不在本注释抄写，真相源 = kAllPassStates）+ edS3 能力门。状态名 = pass_vocabulary 的
  * `kAllPassStates`（单一真相源：名字与类别都在那张表，本类的键集合由
  * `stateNamesCoverAll` 在编译期与它绑定）；图侧"哪些名字合法"按类别分档校验
  * （Renderer 构造期 validateRenderGraphForExecutor）。viewport/scissor 依赖窗口尺寸，
@@ -43,10 +43,8 @@ export class StateKit {
 		transparentState.depthWrite = false;
 		transparentState.colorBlend = true;
 		transparentState.cullMode = vk::CullModeFlagBits::eBack;
-		// 天空盒段状态（Phase 5.5 批次 4）：大三角 z=1（far 平面）+ LEQUAL + 不写深度——
-		// 只在未被几何占据的像素（深度 = clear 1.0）通过测试画天空；绕序不剔（cull None）
-		skyboxState.depthWrite = false;
-		skyboxState.depthCompareOp = vk::CompareOp::eLessOrEqual;
+		// 天空盒段状态（skyboxState，大三角 z=1 + LEQUAL + 不写深度）已随 forward 绘制
+		// 机制删除（2026-10-18 图变体收敛刀②.2）。
 		// Phase 7 D1：deferred light pass —— 全屏终图，无深度附件（depth 无关）、cull none
 		//（大三角绕序不剔）、不混合。depthTest 显式关：全屏终图语义（light pass 无深度
 		// 附件、大三角 z=1 不测深）
@@ -154,7 +152,6 @@ export class StateKit {
    private:
 	RenderState opaqueState{};      // 默认值 = cube 的 opaque 状态（全默认）
 	RenderState transparentState{}; // 不写深度 + 混合 + 剔背面（见 ctor 注）
-	RenderState skyboxState{};      // 大三角 z=1 只在空像素通过（见 ctor 注）
 	RenderState lightState{};       // deferred light 全屏终图（见 ctor 注）
 	RenderState tonemapState{};     // Phase 8 ①：HDR→LDR tonemap 全屏终图（与 light 同形，见 ctor 注）
 	RenderState aoState{};          // Phase 11 批 11.4：SSAO 全屏终图（与 tonemap 同形，见 ctor 注）
@@ -183,7 +180,6 @@ export class StateKit {
 	 */
 	static constexpr std::array<StateSlot, kAllPassStates.size()> kStateSlots{{
 		{"opaque", &StateKit::opaqueState},
-		{"skybox", &StateKit::skyboxState},
 		{"transparent", &StateKit::transparentState},
 		{"picking", &StateKit::pickingState},
 		{"highlight", &StateKit::highlightState},

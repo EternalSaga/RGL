@@ -151,8 +151,8 @@ uint32_t evssmMomentsSlotOf(Resources& resources) {
  * G-buffer 领槽 + light 条目（Phase 7 D1；批 15.1 前半把领槽条件放宽到
  * `deferredMode || ssrDecorated` 后抽成 helper 控 assembleBackEnd 行数）。
  * 领槽 = ensureDeferredGBufferSlots（幂等，light / ssr 条目复用同一组槽号）；light
- * 条目仅 deferred 建（forward 图没有 G-buffer 附件，ssr 装饰器的跳过条件 3 也保证
- * ssrDecorated ⟹ 图里 kGBufferAttachments 契约表全部通道都在 ⟹ 槽可领）。
+ * 条目仅 deferred 建（无 G-buffer 附件的自定义图接不了 light pass，ssr 装饰器的跳过条件 3
+ * 也保证 ssrDecorated ⟹ 图里 kGBufferAttachments 契约表全部通道都在 ⟹ 槽可领）。
  */
 std::optional<std::array<uint32_t, 5>> gBufferSlotsAndLightEntry(
 	Resources& resources, SamplerLibrary& samplers, RenderTargetCache& rtCache,
@@ -279,9 +279,11 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 }
 
 /** 风格 → 管线规格名派生（契约见 main.cppm 声明；★1-a1ii-α 起 bakePipelineEntries 与
- *  bakeMeshletEntries 共用——原为 bakePipelineEntries 内 lambda，逐字搬出零行为变化）。 */
-std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool deferredMode,
-	const GltfPrimitive& prim) {
+ *  bakeMeshletEntries 共用——原为 bakePipelineEntries 内 lambda，逐字搬出零行为变化）。
+ *  forward 半边（styleMap + 缺 style 抛错）已随刀②.2 删除（docs/图变体收敛_plan.md §5）：
+ *  风格派生只剩 unlit/pbr 起点 → material_rules 连连看 → deferred_styles 落规格名，
+ *  缺表回落 deferred_geometry（语义不变）。 */
+std::string resolvePrimitiveSpecName(const SceneConfig& scene, const GltfPrimitive& prim) {
 	std::string style = prim.unlit ? "unlit" : "pbr";
 	if (!prim.unlit) {
 		for (const auto& [pattern, styleKey] : scene.materialRules)
@@ -290,18 +292,12 @@ std::string resolvePrimitiveSpecName(const SceneConfig& scene, bool deferredMode
 				break;
 			}
 	}
-	if (deferredMode) {
-		const auto defIt = scene.deferredStyleMap.find(style);
-		return defIt == scene.deferredStyleMap.end() ? std::string("deferred_geometry") : defIt->second;
-	}
-	const auto styleIt = scene.styleMap.find(style);
-	if (styleIt == scene.styleMap.end())
-		throw std::runtime_error(fmt::format("style not in scene.lua styles: {}", style));
-	return styleIt->second;
+	const auto defIt = scene.deferredStyleMap.find(style);
+	return defIt == scene.deferredStyleMap.end() ? std::string("deferred_geometry") : defIt->second;
 }
 
 /** C1 管线条目烘焙（per unique 模型；风格派生 + 条目去重 + DIAG 分布日志）。 */
-void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, bool deferredMode,
+void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene,
 						 ShaderRegistry& pipelines, Resources& resources, SamplerLibrary& samplers,
 						 AssetTable& assetTable, RenderTargetCache& rtCache) {
 	const uint32_t samplerSlot = samplers.ensureShared();
@@ -322,18 +318,19 @@ void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& scene, boo
 		// orm slot,emissive slot) 六元组组合去重——同模型全 primitive 共享一个拼接顶点
 		// slot，仅纹理槽差异决定条目拆分；纹理/sampler slot 烘焙进 binding mapping，每帧
 		// 零成本；Phase 8 ③a 扩 normal/orm 槽、③ 扩 emissive 槽）。批次 3：风格派生（loader unlit
-		// 字段即数据源，与 MaterialAsset 一致性由 registerScene 金丝雀保证）→ scene.lua
-		// styles 表映射到管线规格名（缺失 = 启动报错，同现有 config 错误路径）。
+		// 字段即数据源，与 MaterialAsset 一致性由 registerScene 金丝雀保证）→ 风格键经
+		// deferred_styles 表映射到管线规格名（缺表回落 deferred_geometry；forward 的 styles 表
+		// 半边已随刀②.2 删除）。
 		// Phase 8 批次 F：材质风格 = scene.lua material_styles 连连看（材质名含 pattern →
-		// 风格键，有序首个命中；默认规则 {Emissive→light, Foliage→vegetation}）。forward 经
-		// styleMap、deferred 经 deferredStyleMap 落各自规格名（植被/光源两路专属视觉对齐；
-		// deferred 变体把类别写进 G-buffer emissive.a，light.frag 分支复刻 forward 视觉）。
+		// 风格键，有序首个命中；默认规则 {Emissive→light, Foliage→vegetation}）。deferred 经
+		// deferredStyleMap 落规格名（植被/光源两路专属视觉对齐；deferred 变体把类别写进
+		// G-buffer emissive.a，light.frag 分支复刻已删除的 forward 视觉——历史对偶）。
 		// 风格 → 管线规格名 = resolvePrimitiveSpecName 共享函数（★1-a1ii-α：派生逻辑抬出，
 		// 叠加条目与本体条目同源；原 lambda 删除——独立计分注释随宿主一并搬至定义处）。
 		auto addPrimitiveEntry = [&](const GltfPrimitive& prim, size_t i) {
 			const uint32_t id = um.assetIds[i];
 			const uint32_t entryIdx = pipelines.addModelEntry(
-				resolvePrimitiveSpecName(scene, deferredMode, prim),
+				resolvePrimitiveSpecName(scene, prim),
 				assetTable.get(id).heapSlot,  // = 模型拼接顶点 slot（同模型全 primitive 相同）
 				assetTable.getTexture(texIds.base[i]).heapSlot,
 				assetTable.getTexture(texIds.normal[i]).heapSlot,
@@ -462,7 +459,7 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 	// C2b：灯 entity 注册（Phase 7 灯 entity 化，ECS 规范 3：画不画 = 实体有无）。
 	// 数据源 = scene.lights（scene_config 保证非空：lights 段缺 → 回落 [light]）。
 	// 每灯一个 entity + Light 组件；index = lights 列表位（正序契约：index 0 = 主光
-	// forward @0 头，全数组按 index 落槽 deferred）。灯无资产/上传/矩阵槽，逻辑内联最简。
+	// 进 scene data @0 头单灯，全数组按 index 落灯数组区）。灯无资产/上传/矩阵槽，逻辑内联最简。
 	for (uint32_t i = 0; i < scene.lights.size(); ++i) {
 		auto e = registry.create();
 		auto& L = registry.emplace<Light>(e);
@@ -483,7 +480,8 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
  *      ao 不能用共享 sampler：共享那份是 LINEAR + mipmap LINEAR，而 D32Sfloat 深度图
  *      不可过滤（invalid usage），且深度插值无物理意义——见 SamplerLibrary::ensurePointSampler。
  *
- * 为何无条件建（不分 forward/deferred）：内建两图都含 ao + tonemap pass；
+ * 为何无条件建（不分图形态）：内建 deferred 图含 ao + tonemap pass（forward 图已随刀②.2
+ * 删除）；
  * 自定义图可能两者都不含，条目闲置无害（管线表条目不绑定即零成本）。
  *
  * 槽号契约：RT 槽与深度槽都在两个 add*Entry **之前**领——槽号一经 bake 进管线 binding
@@ -699,13 +697,13 @@ bool resolveFsrTemporal(bool fsrUsable, bool fsrTemporal, bool taaDecorated) {
 	return false;
 }
 
-/** C3 候选表 + GpuCull + skybox + deferred + HDR + DGC + Renderer（装配时序见接口注释）。 */
+/** C3 候选表 + GpuCull + deferred + HDR + DGC + Renderer（装配时序见接口注释）。 */
 RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resources& resources,
 	SceneDataService& sceneData, SamplerLibrary& samplers, Environment& env,
 	RenderTargetCache& rtCache, AssetTable& assets,
 							  ShaderRegistry& pipelines, CompiledGraphResult&& graphResult,
-							  entt::registry& registry, const SceneConfig& scene,
-	bool fsrEnabled, bool fsrTemporal, bool fsrJitter) {
+							  entt::registry& registry,
+							  bool fsrEnabled, bool fsrTemporal, bool fsrJitter) {
 	const bool deferredMode = graphResult.deferredMode;
 	const bool taaDecorated = graphResult.taaDecorated;
 	const bool velocityDecorated = graphResult.velocityDecorated;
@@ -753,21 +751,17 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	const bool dgcStaticEnabled = !dgcSup.graphicsIndirect && dgcSup.staticGraphicsIndirect
 		&& diagnostics().dgcStatic && !cullEntries.empty();
 	// GpuCull 堆分配（Renderer 持其指针，聚合返回时局部析构会悬空——见 RenderBackEnd
-	// 注释）；先构造（skybox 条目其后加入，见上 N 快照契约）
+	// 注释）；先构造（sky/light 条目等杂项条目其后加入，见上 N 快照契约）
 	auto cull = std::make_unique<GpuCull>(device, resources, sceneData, cullEntries,
 		dgcStaticEnabled ? dgcStaticEntryCount : 0u);
 
-	// Phase 5.5 批次 4：天空盒管线条目（env 已上传才建——addSkyEntry 契约）+
-	// SceneEnv 回填（renderListSystem 经 ctx 生成 skybox draw，画不画 = 配置有无）
-	if (env.get()) {
-		auto& envCtx = registry.ctx().get<SceneEnv>();
-		envCtx.skyboxPipeline = pipelines.addSkyEntry();
-		envCtx.skybox = scene.environment.skybox;
-	}
+	// 天空盒管线条目（addSkyEntry + SceneEnv 回填）已随 forward 绘制机制删除
+	// （2026-10-18 图变体收敛刀②.2，docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物
+	//  = env.intensity 总闸）。
 
 	// Phase 7 D1：deferred 资源。装配序——env/models 已分配，此处才分配
 	// G-buffer RT 堆槽（运行时段）+ 建 light 管线，再构造
-	// Renderer（其构造期校验 drawLight pass 有 light 条目）。forward 全跳过
+	// Renderer（其构造期校验 drawLight pass 有 light 条目）。图无 deferred 光照 pass 时全跳过
 	// （批 15.1 前半：领槽条件放宽到 ssr 也要槽，本体见 gBufferSlotsAndLightEntry）。
 	const auto gbSlots = gBufferSlotsAndLightEntry(resources, samplers, rtCache, swapchain,
 		pipelines, deferredMode, ssrDecorated);

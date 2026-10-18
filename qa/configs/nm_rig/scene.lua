@@ -1,10 +1,13 @@
 -- nm_rig（normal map 受控靶）场景配置。生成器 = tools/qa_scenes.py 的 scene_nm_rig，
--- env = tools/env_band_hdr.py。**一个配置一个进程**：normal map 的幅度/频率与 roughness
+-- env = tools/env_band_hdr.py（已随图变体收敛刀②.2 删除，env_band 靶归档；重生成窄带
+-- .hdr 的脚本见 git history @ < 2026-10-18 的该文件，参数口径不变）。
+-- **一个配置一个进程**：normal map 的幅度/频率与 roughness
 -- 全部烘在 glb 里（材质只有一个），所以自变量换一档 = 换 glb 文件 = 起一个新进程。
 --
 -- ## 本靶存在的理由（一条构造性事实，不是"想多测一个场景"）
 --
--- rgl/shaders/model_pbr_ibl.frag.slang:52-53：无 normal map 时
+-- rgl/shaders/deferred_geometry.frag.slang（原 forward 的 model_pbr_ibl.frag 已随刀②.2
+-- 删除）：无 normal map 时
 --   geoN = worldNormal(M, normalize(input.normal));  N = geoN
 -- ⟹ **shading 法线与 specular AA 的输入是同一个量**。而 specular AA（normalmap.slang 的
 -- normalFiltering，variance 0.15 / threshold 0.2，与 Filament surface_shading_lit.fs:220
@@ -16,11 +19,11 @@
 --
 --   light.intensity = 0 / light.ambient = 0  → 直射光与平环境光全关。留下的着色链只有
 --       color = envSpec(R, roughness·mipRange) × envBrdfFactor(NoV, r, F0) × env.intensity
---       （forward model_pbr_ibl.frag.slang:79-82 与 deferred light.frag 该式逐字相同）
+--       （deferred light.frag 该式；与已删除的 forward model_pbr_ibl 路逐字相同——历史对偶）
 --       ——这是本靶能做单调性归因的全部底气。
 --   ao.strength = 0     → AO 已三次排除，lerp(1,ao,0) ≡ 1.0 逐位旁路
---   skybox = false      → 本靶画幅里本来就没有天穹像素（俯角 25° 把地平线推到画外），
---                         这条只是与 env_band 保持同一形态；deferred 不读它，也不受影响
+--   （原 skybox = false 键已随刀②.2 删除：本靶画幅里本来就没有天穹像素（俯角 25° 把
+--     地平线推到画外），deferred 的天穹总闸 = intensity，见 docs/图变体收敛_plan.md §6.2）
 --   exposure = 1.0      → ACES 前中性倍率
 --   shadow.lua 的 mode = "none" + izb = { on = false }（同目录 shadow.lua，批 N6b 起阴影键在此）
 --   metallic = 1（在 glb 里）→ 漫反射项天然为 0 ⟹ 画面里**每一个亮像素都来自 env 镜面项**
@@ -33,14 +36,15 @@
 --     共用同一个数，**任何跨 cell 比较都不许改它**；
 --   · 换分辨率即换口径（speck 逐像素计数），全套数字绑 1280×720。
 --
--- ## env 的几何（改任何一个数都要同步改 tools/env_band_hdr.py 的参数）
+-- ## env 的几何（改任何一个数都要同步重生成窄带 .hdr；生成脚本已归档，见文件头）
 --
 -- 带子仰角 25.0° **必须等于相机俯角 25.0°**（camera.lua），否则镜像线跑出主点行。
 -- 布局 = 等距柱状（W=2H，行 0 = 天顶），出处 rgl/texture_pool.cppm::loadEnvCubeMapHdr。
 -- hdr_size = 重投影立方图**面边长**（不是源图边长；scene_config.cppm:44 + texture_pool
 -- 形参 faceSize）。取 1024 ⟹ mip 级数 11、mipRange = 10 ⟹ roughness 0.12 落在 lod 1.2。
 --
--- ⚠ **源图必须是 1024×512**（`--width 1024 --height 512`，即 0.3516°/行）。生成命令：
+-- ⚠ **源图必须是 1024×512**（生成参数 `--width 1024 --height 512`，即 0.3516°/行）。
+-- 生成命令（脚本已随刀②.2 归档，git history 可查）：
 --   python3 tools/env_band_hdr.py --out build/rgl/env/band_e25_w0.6_i4000.hdr \
 --       --elev 25 --band 0.6 --intensity 4000
 -- 源图若是 64×32（5.625°/行），"0.6° 窄带"实际是 **11.25° 宽带**：画面亮区宽到 10° 且
@@ -49,7 +53,6 @@
 -- 复核一条命令：python3 /tmp/opencode/nm/hdr_rows.py <该 .hdr>（应回 1024x512、2 行、
 -- 仰角中心 25.137°）。
 return {
-    styles = { unlit = "model", pbr = "model_pbr_ibl" },
     entities = {
         -- harness 按 cell 改这一行（幅度/频率/roughness 全在文件名里）。
         -- ⚠ `file` 必须**独占一行**：harness 的补丁正则锚在行首（NP.patch 的 ^[ \t]*key=），
@@ -69,7 +72,6 @@ return {
         -- 11.25° 宽）期间标的，源带修回 0.703° 后通量差 16 倍，故整表重标。
         -- 饱和会把高频削平成 255 平台 ⟹ speck 恒 0 属**测量无效**而非"机制不存在"。
         intensity = 0.003,
-        skybox = false,
     },
     light = {
         direction = { 0.0, -1.0, 0.0 },

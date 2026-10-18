@@ -146,9 +146,10 @@ struct ProfileOpts {
     /// 就是这么假绿了一整轮——合成 profile + 默认机位上残差 0.016/255（绿），同一判据换到
     /// 交付配置 + 用户机位上是 **mad 1.688/255、逐像素最大 37、10.37% 像素 >2LSB**（红）。
     /// 差异不是噪声而是**另一个场景**：交付配置是 deferred + `scale = 0.01`
-    /// + izb_shadow + env/skybox/AO 全开，合成 profile（刀② 起同为 deferred）是默认机位。
-    /// ⚠ 本模式生效时 `glb` / `skybox` / `shadowPass` / `lightDir` / `lightIntensity` /
-    ///   `exposure` **全部被忽略**（真相在交付配置里，工具再抄一份就是第二份真相）。
+    /// + izb_shadow + env/AO 全开，合成 profile（刀② 起同为 deferred）是默认机位。
+    /// ⚠ 本模式生效时 `glb` / `shadowPass` / `lightDir` / `lightIntensity` /
+    ///   `exposure` **全部被忽略**（真相在交付配置里，工具再抄一份就是第二份真相；
+    ///   原 `skybox` 字段已随刀②.2 删除，deferred 的天穹总闸 = envIntensity）。
     ///
     /// **例外**（`overridePicking` / `overrideEnvIntensity` / `overrideAoStrength` /
     /// `overrideShadowRoute` / `overrideLlmShot`）：这几件事不是"工具再抄一份真相"，而是
@@ -204,8 +205,7 @@ struct ProfileOpts {
     std::array<double, 3> cameraTarget{0.0, 0.0, 0.0};
     double cameraFov = 45.0;
     std::string glb;                       // models/ 下的场景文件
-    double envIntensity = 0.0;
-    bool skybox = false;
+    double envIntensity = 0.0;               // 环境总闸（=0 连 deferred 天穹一起关，§6.2）
     std::array<double, 3> ambient{0.0, 0.0, 0.0};
     double exposure = 1.0;
     double aoStrength = 0.0;
@@ -1115,7 +1115,7 @@ struct ShadowScanSample {
     double hi);
 
 /// 影覆盖率 = frac(L_ref ≥ 1 LSB 且 (L_ref − L_arm)/L_ref > 0.5)，分母 = **全幅**像素。
-/// 参照下限不是可有可无：分母接近 0 时 S 会爆到 1，背景（env/skybox 全关 = 黑）会被
+/// 参照下限不是可有可无：分母接近 0 时 S 会爆到 1，背景（env 关 = 黑；skybox 随刀②.2 删除）会被
 /// 整片算成「有影」——那正是本判据要抓的反面。
 [[nodiscard]] double shadowUmbraFraction(const cv::Mat& refLuma, const cv::Mat& armLuma);
 

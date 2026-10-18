@@ -35,7 +35,7 @@ export class Environment {
 	 * 与材质纹理集（AssetTable::textures）分离——env 绑定场景而非材质，不占纹理 id 空间
 	 *（白纹理 id 0 / 首槽契约不受影响）。
 	 * @param asset env 纹理资产（移动入；其 heapSlot / mipLevels 供 addModelEntry /
-	 *   addSkyEntry 烘焙 binding 4/5）
+	 *   addLightEntry 烘焙 binding 4/5）
 	 * @return 入库的 env 资产引用（optional 内部存储地址稳定——Environment = main 栈
 	 *   对象永不 move，描述符指针链自引用在 emplace 之后设置即稳定）
 	 */
@@ -44,7 +44,7 @@ export class Environment {
 		return *envAsset;
 	}
 	/** @return env cubemap 资产指针（nullptr = 未上传环境）；addModelEntry /
-	 * addSkyEntry 据此烘焙 binding 4/5（env 槽全局单例，不进组合去重 key）。 */
+	 * addLightEntry 据此烘焙 binding 4/5（env 槽全局单例，不进组合去重 key）。 */
 	[[nodiscard]] const TextureAsset* get() const {
 		return envAsset ? &*envAsset : nullptr;
 	}

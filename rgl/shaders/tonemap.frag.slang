@@ -15,9 +15,9 @@
 //   最后一格，CPU 真相源 scene_data.cppm kSceneDataAoOffset；configs/scene.lua 的
 //   ao.strength 每帧经 SceneFrameData 上传）。**strength=0 时 lerp 位级 = 1.0**，
 //   故默认配置逐位等于加 AO 之前（BIt-IDENTICAL 基线不受影响）。
-//   施加点选在合成（此处）而非材质着色器：forward 无 G-buffer，AO 只在 opaque+skybox
-//   之后产出，写在 tonemap 是唯一能对两变体一视同仁的位置（D1 对等）。代价 = AO 会
-//   连直接光一起压（见 docs/phase11_plan.md 批 11.4 的偏差说明）。
+//   施加点选在合成（此处）而非材质着色器：当年 forward 无 G-buffer，AO 只在 opaque+skybox
+//   之后产出，写在 tonemap 是唯一能对两变体一视同仁的位置（D1 对等；forward 已随刀②.2
+//   删除，施加点形态不变）。代价 = AO 会连直接光一起压（见 docs/phase11_plan.md 批 11.4 的偏差说明）。
 //
 // ── 批 13.5：本 pass **不再**做 un-jitter（批 13.2 的 `taa.base_space` 已删除）──
 // 批 13.2 曾在这里按 `+c_t` 偏移采样 `taa_out` 与 `aoTex`，把 TAA 输出从抖动空间搬回基空间。

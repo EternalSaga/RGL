@@ -14,7 +14,7 @@
 // 输入 = `light` pass 写好的 `scene_hdr`（反射源，全分辨率）+ G-buffer 现成量，输出 =
 // `ssr_trace`（半分辨率 RGBA16F）。图内不可能读同帧 SSR 结果（`light` 正在写 `scene_hdr`），
 // 所以形态唯一（论证 → `docs/phase15_plan.md` §2.1）。**deferred-only**：权重全从 G-buffer
-// 算，forward 图没有 G-buffer（D1 对等豁免 → §0.1，装饰器跳过条件保证本 shader 只在 deferred 跑）。
+// 算，当年 forward 图没有 G-buffer（D1 对等豁免 → §0.1；forward 已随刀②.2 删除，装饰器跳过条件保证本 shader 只在带 G-buffer 的图跑）。
 //
 // ── premultiplied 约定（两 pass 之间的契约，改任何一侧都要同步）──
 //     rgb = weight * (F * reflected - iblSpec)      a = weight
@@ -179,8 +179,8 @@ static const int kRefineIters = 4;
 // 命中点离屏幕边界多近开始淡出（**全分辨率**像素——edgeFade 用全分辨率 px 算，视觉宽度与
 // 拆 pass 前一致）。边界外的内容根本没画，越靠边反射越不可信。
 static const float kEdgeFadePx = 24.0;
-// 天空判据：深度 = 远平面清值（skybox 大三角 z=1 靠 depth clear + LEQUAL，不写深度）。
-// 阈值与 ao.frag:106 同值同因——两处必须一起改，否则 AO 当天空而 SSR 当几何（或反之）。
+// 天空判据：深度 = 远平面清值（天穹像素无几何，深度停在 clear 值；原 forward skybox 机制
+// 已随刀②.2 删除）。阈值与 ao.frag 同值同因——两处必须一起改，否则 AO 当天空而 SSR 当几何（或反之）。
 static const float kFarDepth = 0.9999;
 
 // 沿射线求交的一个采样结果。

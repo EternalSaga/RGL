@@ -11,9 +11,9 @@ import vkerror;
 namespace RGL {
 
 // 内建图描述 + 编译期自检（2026-09-11 Phase 8 批次 ①自 render_graph_impl 拆出：
-// impl 文件超 500 行阈值，内置两图描述属"数据"、compileRenderGraph 属"算法"，
-// 分单元各管一头）。本单元 = default/deferred 两图声明 + defaultRenderGraph
-// 单例 + renderGraphSelfCheck；算法与 usage 推导留 render_graph_impl。
+// impl 文件超 500 行阈值，内置图描述属"数据"、compileRenderGraph 属"算法"，
+// 分单元各管一头）。本单元 = deferred 图声明 + renderGraphSelfCheck；算法与 usage
+// 推导留 render_graph_impl。
 
 namespace {
 
@@ -24,9 +24,8 @@ RgPassAttachment writeAtt(std::string name, RgUsage usage, RgLoadOp load, RgStor
 		.storeOp = store, .clear = clear};
 }
 
-/** tonemap pass 速构（Phase 8 ①：forward/deferred 共用拓扑尾段——采 scene_hdr + ao 写
- * swapchain）。ao 输入对无 ao pass 的图（自定义图可不装配）无害：本速构只被
- * forward/deferred 使用，二者都有 ao pass。 */
+/** tonemap pass 速构（Phase 8 ①：拓扑尾段——采 scene_hdr + ao 写 swapchain）。ao 输入对
+ * 无 ao pass 的图（自定义图可不装配）无害：本速构只被内建 deferred 图使用，它有 ao pass。 */
 RgPassDesc tonemapPass() {
 	return RgPassDesc{.name = "tonemap", .kind = RgPassKind::drawLight, .state = "tonemap",
 		.outputs = {writeAtt("swapchain", RgUsage::colorWrite, RgLoadOp::clear, RgStoreOp::store)},
@@ -36,7 +35,7 @@ RgPassDesc tonemapPass() {
 				RgStoreOp::store)}};
 }
 
-/** ao pass 速构（Phase 11 批 11.4：forward/deferred 共用——采 depth 写 ao RT，置 tonemap 前）。 */
+/** ao pass 速构（Phase 11 批 11.4：采 depth 写 ao RT，置 tonemap 前）。 */
 RgPassDesc aoPass() {
 	return RgPassDesc{.name = "ao", .kind = RgPassKind::drawLight, .state = "ao",
 		.outputs = {writeAtt(std::string{kAoName}, RgUsage::colorWrite, RgLoadOp::clear,
@@ -46,63 +45,10 @@ RgPassDesc aoPass() {
 
 }  // namespace
 
-/**
- * defaultRenderGraphDesc 定义（接口注释见 render_graph.cppm）。Phase 8 ①：三段渲入
- * scene_hdr（rgba16_sfloat HDR 累加）+ tonemap pass 上屏——原直写 swapchain 的
- * diff=0 基准随 ACES 换 baseline（docs/phase8_plan.md 批次 ①）。与单 render pass
- * 实例的等价性靠"中间 scope store 保内容"实现：depth 仅末段 DontCare（中途 store
- * 是多 pass 拆分的必要代价，像素结果不受影响）。
- */
-const RgGraphDesc& defaultRenderGraphDesc() {
-	static const RgGraphDesc desc = [] {
-		auto hdrOut = [](RgLoadOp load, RgStoreOp store) {
-			return writeAtt(std::string{kSceneHdrName}, RgUsage::colorWrite, load, store);
-		};
-		auto depthOut = [](RgLoadOp load, RgStoreOp store) {
-			return writeAtt("depth", RgUsage::depthWrite, load, store);
-		};
-		return RgGraphDesc{
-			.attachments =
-				{
-					RgAttachmentDesc{.name = "swapchain", .kind = RgAttachmentKind::swapchain},
-					RgAttachmentDesc{.name = "depth", .kind = RgAttachmentKind::depth},
-					RgAttachmentDesc{.name = std::string{kSceneHdrName},
-						.kind = RgAttachmentKind::offscreen,
-						.format = std::string{kSceneHdrFormat}},
-					RgAttachmentDesc{.name = std::string{kAoName},
-						.kind = RgAttachmentKind::offscreen, .format = std::string{kAoFormat}},
-				},
-			.passes =
-				{
-					RgPassDesc{.name = "opaque", .state = "opaque", .drawSource = "opaque",
-						.outputs = {hdrOut(RgLoadOp::clear, RgStoreOp::store),
-							depthOut(RgLoadOp::clear, RgStoreOp::store)}},
-					RgPassDesc{.name = "skybox", .state = "skybox", .drawSource = "skybox",
-						.outputs = {hdrOut(RgLoadOp::load, RgStoreOp::store),
-							depthOut(RgLoadOp::load, RgStoreOp::store)}},
-					RgPassDesc{.name = "transparent", .state = "transparent",
-						.drawSource = "transparent",
-						.outputs = {hdrOut(RgLoadOp::load, RgStoreOp::store),
-							depthOut(RgLoadOp::load, RgStoreOp::store)}},
-					aoPass(),
-					tonemapPass(),
-				},
-		};
-	}();
-	return desc;
-}
-
-/** defaultRenderGraph 定义：进程内静态单例，首次调用时编译默认图（编译失败抛 runtime_error——默认图是硬契约，失败 = 工程自身 bug）。 */
-const CompiledRenderGraph& defaultRenderGraph() {
-	static const CompiledRenderGraph graph = [] {
-		auto compiled = compileRenderGraph(defaultRenderGraphDesc());
-		if (!compiled)
-			throw std::runtime_error(
-				fmt::format("defaultRenderGraph: {}", compiled.error().describe()));
-		return *compiled;
-	}();
-	return graph;
-}
+/** forward 图本体（defaultRenderGraphDesc / defaultRenderGraph，5-pass HDR 链）已删
+ *  （2026-10-18 图变体收敛刀②.2，`docs/图变体收敛_plan.md` §5：生产侧选路在刀②.1 已改成
+ *  「文件有 attachments/passes = 自定义图，否则 = 内建 deferred」，forward 图自此不可达；
+ *  forward-only frag 与 skybox 绘制机制同刀删除，原图声明见本文件的 2026-10-18 之前版本）。 */
 
 /** offscreen 图变体已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §2：零使用者）。
  *  blit pass 机制与 `RgAttachmentKind::offscreen` 固有能力**都不在本刀射程**——前者仍被
@@ -241,10 +187,9 @@ void selfCheckTopology(std::vector<std::string>& failures) {
 	};
 	auto scAtt = [] { return RgAttachmentDesc{.name = "swapchain"}; };
 
-	expectOk("default", defaultRenderGraphDesc());
-
 	// Phase 7 D1 + Phase 8 ①：deferred 图（geometry 4 G-buffer + light 采 GB 渲 scene_hdr
-	// + tonemap 采 scene_hdr 上屏）应编译通过
+	// + tonemap 采 scene_hdr 上屏）应编译通过（原 forward 默认图的 expectOk("default") 样本
+	// 随图本体删除，2026-10-18 刀②.2）
 	expectOk("deferred 3-pass", deferredRenderGraphDesc());
 
 	// blit 图：offscreen RT 渲三段 + blit 上屏（批次 4 的转正拓扑）
@@ -326,50 +271,78 @@ void selfCheckTopology(std::vector<std::string>& failures) {
 	});
 }
 
-/** selfCheck：默认图首 pass（opaque）帧首 barrier 与 color load 断言（scene_hdr tracked + depth discard 两条；首 color = Clear）。 */
-void selfCheckDefaultFirstPass(const RgPassPlan& first, std::vector<std::string>& failures) {
-	if (first.barriers.size() != 2 || first.barriers[0].oldLayoutDiscard ||
-		first.barriers[0].aspect != vk::ImageAspectFlagBits::eColor ||
-		!first.barriers[1].oldLayoutDiscard ||
-		first.barriers[1].aspect != vk::ImageAspectFlagBits::eDepth)
+/** selfCheck：内建 deferred 图首 pass（geometry）帧首 barrier 与 color load 断言
+ *  （kGBufferAttachments 全部 color tracked + depth discard 一条；首 color = Clear）。
+ *  原 forward 默认图的首 pass 断言（scene_hdr tracked + depth discard）随图本体删除
+ *  （2026-10-18 刀②.2），机制覆盖搬到这里——帧首「offscreen 追踪 / depth 丢弃」这条
+ *  编译器不变式对 deferred 图同样承重。 */
+void selfCheckDeferredFirstPass(const RgPassPlan& first, std::vector<std::string>& failures) {
+	constexpr uint32_t kGbCount = static_cast<uint32_t>(kGBufferAttachments.size());
+	if (first.barriers.size() != kGbCount + 1u
+		|| std::ranges::any_of(std::span(first.barriers).first(kGbCount),
+			[](const RgBarrierPlan& b) {
+				return b.oldLayoutDiscard
+					|| b.aspect != vk::ImageAspectFlagBits::eColor;
+			})
+		|| !first.barriers.back().oldLayoutDiscard
+		|| first.barriers.back().aspect != vk::ImageAspectFlagBits::eDepth)
 		failures.push_back(
-			"default: first pass should carry scene_hdr tracked + depth discard barriers");
+			"deferred: first pass should carry gbuffer tracked + depth discard barriers");
 	if (!first.colors.empty() && first.colors[0].loadOp != vk::AttachmentLoadOp::eClear)
-		failures.push_back("default: first color load should be Clear");
+		failures.push_back("deferred: first color load should be Clear");
 }
 
-/** selfCheck：默认图中段（skybox）identity barrier 与 color load 断言（color/depth 各一条追踪 barrier；mid color = Load）。 */
-void selfCheckDefaultMidPass(const RgPassPlan& mid, std::vector<std::string>& failures) {
-	if (mid.barriers.size() != 2 || mid.barriers[0].oldLayoutDiscard ||
-		mid.barriers[1].oldLayoutDiscard)
-		failures.push_back("default: mid pass should carry 2 tracked identity barriers");
-	if (!mid.colors.empty() && mid.colors[0].loadOp != vk::AttachmentLoadOp::eLoad)
-		failures.push_back("default: mid color load should be Load");
+/** selfCheck：内建 deferred 图 light 段——G-buffer 全部 sampleRead 必须被转到
+ *  eShaderReadOnlyOptimal（light.frag 采样不报 VVL 的硬前提，同阴影消费侧 lit 断言）。
+ *  原 forward 中段（skybox）identity barrier 断言随图本体删除（2026-10-18 刀②.2）。
+ *  @param attachments 编译图附件表（按名解析 GB 槽号——barrier.attachment = 附件下标）
+ *  @param light       light pass 计划
+ */
+void selfCheckDeferredLightPass(std::span<const RgCompiledAttachment> attachments,
+	const RgPassPlan& light, std::vector<std::string>& failures) {
+	if (light.kind != RgPassKind::drawLight || light.state != "light")
+		failures.push_back("deferred: mid pass should be drawLight/light");
+	for (const auto& gb : kGBufferAttachments) {
+		const auto att = std::ranges::find_if(attachments,
+			[&gb](const RgCompiledAttachment& a) { return a.name == gb.name; });
+		if (att == attachments.end()) {
+			failures.push_back(fmt::format("deferred: {} missing from compiled graph", gb.name));
+			continue;
+		}
+		const size_t slot = static_cast<size_t>(att - attachments.begin());
+		const bool read = std::ranges::any_of(light.barriers, [slot](const RgBarrierPlan& b) {
+			return b.attachment == slot
+				&& b.newLayout == vk::ImageLayout::eShaderReadOnlyOptimal;
+		});
+		if (!read)
+			failures.push_back(fmt::format(
+				"deferred: light pass lacks a ShaderReadOnly transition for {}", gb.name));
+	}
 }
 
-/** selfCheck：默认图 ao 段（Phase 11 批 11.4）kind/state + **深度转换**断言。
+/** selfCheck：deferred 图 ao 段（Phase 11 批 11.4）kind/state + **深度转换**断言。
  *
  * 深度那条是 SSAO 能工作的硬前提：ao pass 以 sampleRead 读 depth，编译器须把布局从
  * eDepthStencilAttachmentOptimal 转到 eShaderReadOnlyOptimal。漏这条转换 = ao 采到未
  * 转换的深度（RADV 上表现为整屏 AO 恒 0 或校验层报错），且像素结果不会崩、很难目检发现。 */
-void selfCheckDefaultAoPass(const RgPassPlan& ao, std::vector<std::string>& failures) {
+void selfCheckDeferredAoPass(const RgPassPlan& ao, std::vector<std::string>& failures) {
 	if (ao.kind != RgPassKind::drawLight || ao.state != "ao")
-		failures.push_back("default: ao pass should be drawLight/ao");
+		failures.push_back("deferred: ao pass should be drawLight/ao");
 	if (ao.colors.size() != 1)
-		failures.push_back("default: ao pass should have exactly one color target");
+		failures.push_back("deferred: ao pass should have exactly one color target");
 	const auto depth = std::ranges::find_if(ao.barriers, [](const auto& b) {
 		return b.aspect == vk::ImageAspectFlagBits::eDepth;
 	});
 	if (depth == ao.barriers.end())
-		failures.push_back("default: ao pass lacks a depth layout transition");
+		failures.push_back("deferred: ao pass lacks a depth layout transition");
 	else if (depth->newLayout != vk::ImageLayout::eShaderReadOnlyOptimal)
-		failures.push_back("default: ao pass depth must transition to ShaderReadOnly");
+		failures.push_back("deferred: ao pass depth must transition to ShaderReadOnly");
 }
 
-/** selfCheck：默认图末段（tonemap）kind/state 断言。 */
-void selfCheckDefaultLastPass(const RgPassPlan& last, std::vector<std::string>& failures) {
+/** selfCheck：deferred 图末段（tonemap）kind/state 断言。 */
+void selfCheckDeferredLastPass(const RgPassPlan& last, std::vector<std::string>& failures) {
 	if (last.kind != RgPassKind::drawLight || last.state != "tonemap")
-		failures.push_back("default: last pass should be drawLight/tonemap");
+		failures.push_back("deferred: last pass should be drawLight/tonemap");
 }
 
 /** selfCheck：格式词表断言——inherit→fallback、具名→映射值（表拼错 = Phase 7 静默错图，编译校验查不出，回读值守卫）；membership 判定与 resolve 一致。 */
@@ -387,27 +360,36 @@ void selfCheckFormats(std::vector<std::string>& failures) {
 		failures.push_back("format: isKnownRgFormat membership broken");
 }
 
-/** selfCheck 后半：默认图结构断言（barrier 形态/present 转换）+ 格式词表断言（各段拆 selfCheckDefault* / selfCheckFormats，本函数只做编排、保 push 顺序）。 */
+/** selfCheck 后半：内建 deferred 图结构断言（barrier 形态/present 转换）+ 格式词表断言
+ *  （各段拆 selfCheckDeferred* / selfCheckFormats，本函数只做编排、保 push 顺序）。
+ *  原「默认图 = 5 pass」那组 forward 结构断言已随图本体删除（2026-10-18 刀②.2，
+ *  docs/图变体收敛_plan.md §5）；帧首 barrier / ao 深度转换 / tonemap 尾段 / present
+ *  转换这些**活机制**的断言本体改喂内建 deferred 图（= 今天唯一内建图）。 */
 void selfCheckStructure(std::vector<std::string>& failures) {
-	// 结构断言（Phase 11 批 11.4 后默认图 = 5 pass：opaque → skybox → transparent →
-	// **ao** → tonemap）：首 pass（opaque）两条帧首转换—— scene_hdr（offscreen = 追踪
-	// 布局非 discard，声明序在前）+ depth（discard）；skybox 段对 color/depth 各一条
-	// identity barrier（跨 render pass 实例 LOAD 执行依赖，old==new 合法）；present
-	// 转换来自 tonemap 段的 swapchain colorWrite（CAO→PresentSrc）。
-	// ao 段（index 3）额外断言 depth 走 sampleRead 转换（eDepthStencilAttachmentOptimal
+	// 结构断言（deferred 图 = 4 pass：geometry → light → **ao** → tonemap）：首 pass
+	// （geometry）帧首转换—— G-buffer 全部（offscreen = 追踪布局非 discard）+ depth
+	// （discard）；light 段对 5 张 G-buffer 各一条 → ShaderReadOnly 转换（light.frag
+	// 采样的硬前提）；present 转换来自 tonemap 段的 swapchain colorWrite（CAO→PresentSrc）。
+	// ao 段（index 2）额外断言 depth 走 sampleRead 转换（eDepthStencilAttachmentOptimal
 	// → eShaderReadOnlyOptimal）——这条是 SSAO 能工作的前提，漏了 = ao 读到未转换的深度。
-	const auto& g = defaultRenderGraph();
-	if (g.passes.size() != 5)
-		failures.push_back("default: expected 5 passes");
-	if (g.passes.size() == 5) {
-		selfCheckDefaultFirstPass(g.passes[0], failures);
-		selfCheckDefaultMidPass(g.passes[1], failures);
-		selfCheckDefaultAoPass(g.passes[3], failures);
-		selfCheckDefaultLastPass(g.passes[4], failures);
+	auto compiled = compileRenderGraph(deferredRenderGraphDesc());
+	if (!compiled) {
+		failures.push_back(fmt::format("deferred: self-check graph failed to compile: {}",
+			compiled.error().describe()));
+		return;
+	}
+	const auto& g = *compiled;
+	if (g.passes.size() != 4)
+		failures.push_back("deferred: expected 4 passes");
+	if (g.passes.size() == 4) {
+		selfCheckDeferredFirstPass(g.passes[0], failures);
+		selfCheckDeferredLightPass(g.attachments, g.passes[1], failures);
+		selfCheckDeferredAoPass(g.passes[2], failures);
+		selfCheckDeferredLastPass(g.passes[3], failures);
 	}
 	if (!g.presentTransition ||
 		g.presentTransition->newLayout != vk::ImageLayout::ePresentSrcKHR)
-		failures.push_back("default: missing present transition");
+		failures.push_back("deferred: missing present transition");
 	// 格式词表断言：inherit→fallback、具名→映射值（表拼错 = Phase 7 静默错图，
 	// 编译校验查不出，回读值守卫）；membership 判定与 resolve 一致
 	selfCheckFormats(failures);
@@ -507,15 +489,16 @@ void selfCheckShadowCompiled(const CompiledRenderGraph& graph,
 			"(sampleRead input missing from lighting pass -> sampling would trip VVL)");
 }
 
-/** selfCheck 驱动：装饰 → 编译 → 两侧断言（拆两半是为守住单函数认知复杂度红线）。 */
+/** selfCheck 驱动：装饰 → 编译 → 两侧断言（拆两半是为守住单函数认知复杂度红线）。
+ *  基图 = 内建 deferred 图（原 forward 默认图随刀②.2 删除，装饰通路的样本换喂 deferred）。 */
 void selfCheckShadowPass(std::vector<std::string>& failures) {
-	auto desc = defaultRenderGraphDesc();
+	auto desc = deferredRenderGraphDesc();
 	decorateShadowPass(desc, kSelfCheckShadowSize);  // 无失败分支（返回 void，见其接口注释）
 	if (!selfCheckShadowDecorate(desc, failures))
 		return;
 	auto compiled = compileRenderGraph(desc);
 	if (!compiled) {
-		failures.push_back(fmt::format("shadow: decorated default graph failed to compile: {}",
+		failures.push_back(fmt::format("shadow: decorated deferred graph failed to compile: {}",
 			compiled.error().describe()));
 		return;
 	}

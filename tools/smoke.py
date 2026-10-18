@@ -743,8 +743,9 @@ def verdicts(code: int, log: str, cfg: VerdictCfg, *,
     ssrTraceRt = re.search(r"ssr_trace \(RGBA16F[^)]*\): (\d+)x(\d+) slot (\d+)", log)
     if ssrRequested and not (ssrRt and ssrTraceRt):
         # 🔴 债-129 S3-C：同 velocity，「ssr: 图形态不支持」那条逃生门已删——三条 skip（顺序 /
-        # 锚点 / G-buffer 契约表）现在全部由 decorateSsrOrWarn 抛异常拒启动，其中 ③（forward 图）
-        # 是 compile **放过**的那条，以前只有 warn，现在缺 G-buffer 契约的图配 ssr 起不来。
+        # 锚点 / G-buffer 契约表）现在全部由 decorateSsrOrWarn 抛异常拒启动，其中 ③（缺 G-buffer
+        # 契约表的图 = 当年 forward 图的形态，该变体已随刀②.2 删除）是 compile **放过**的那条，
+        # 以前只有 warn，现在缺 G-buffer 契约的图配 ssr 起不来。
         fail("请求 ssr（--ssr 或 --set ssr.enabled=true）但日志里 trace/apply 两行 RT 不齐"
              f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}）"
              " ⟹ 装饰器静默没落图或只落了一半"
@@ -1191,7 +1192,7 @@ def selftest(quiet: bool = False) -> list[str]:
     SHOT_GBUF_TAILORED = ("[0] [info] [ecs_frame_diag.cppm:89] llm_debug: 截图已保存 "
                           "(/abs/screenshots/gbuffer_3.png — 1280x720) — render 1280x720")
     GATE_NO_VVL = "[0] [warning] [gate_lint_impl.cppm:354] gate_lint[no_vvl]: 本门 inert（验证层被关）"
-    DEGRADE_OTHER = "[0] [warning] [main_impl.cppm:463] ssr: 图形态接不起来（forward 图，文案改了）"
+    DEGRADE_OTHER = "[0] [warning] [main_scene.cppm:644] ssr: 图形态接不起来（缺 G-buffer 契约的自定义图，文案改了）"
 
     def vrun(code: int, log: str, cfg: VerdictCfg) -> tuple[str, list[str], list[str]]:
         """跑一遍判据（读数全接进内存），返回 (FAIL 消息, error 行, warning 行)。
@@ -1305,8 +1306,9 @@ def selftest(quiet: bool = False) -> list[str]:
               0, vlog(VEL), vcfg(overrides=["velocity_field=true"]))
 
     # ⑨ ssr：门开必须 trace + apply **两行都在**（只缺一行 = 半条链，单行判据抓不住）。
-    #    🔴 债-129 S3-C：同 ⑧，「图形态不支持」的 must_pass 反转成 must_fail（forward 图配 ssr
-    #    现在是引擎拒启动，走 ② 的「引擎非零退出」；旧文案不再构成放行理由）。
+    #    🔴 债-129 S3-C：同 ⑧，「图形态不支持」的 must_pass 反转成 must_fail（缺 G-buffer 契约
+    #    的图配 ssr = 当年 forward 图的形态，现在是引擎拒启动，走 ② 的「引擎非零退出」；
+    #    旧文案不再构成放行理由）。
     must_fail("请求 ssr 只建了一半必须红", "请求 ssr（", 0, vlog(SSR), vcfg(ssr=True))
     must_fail("旧「图形态不支持」warn 不再放行 ssr（S3-C 删逃生门）", "请求 ssr（",
               0, vlog(SSR_NO), vcfg(ssr=True))

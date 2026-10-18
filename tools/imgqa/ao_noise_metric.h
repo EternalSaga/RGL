@@ -201,7 +201,7 @@ void keep(const std::string& src, const std::string& outDir, const std::string& 
 AbPair captureAb(Engine& eng, const Engine::Camera* cam, double strength,
     const std::string& outDir, const std::string& prefix, bool withId = true);
 
-/// 建一个本工具的合成 profile 并返回目录（ao/env/skybox 的口径只有一份）。
+/// 建一个本工具的合成 profile 并返回目录（ao/env 的口径只有一份；skybox 随刀②.2 删除）。
 std::string profileOf(const Ctx& ctx, const std::string& name, double aoStrength, bool taa,
     double feedback);
 

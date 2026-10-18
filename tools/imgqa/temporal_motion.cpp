@@ -97,7 +97,7 @@
 //     luma 再 2×2 面积平均」与「先降 RGB 再求 luma」**严格相等**（这是本文件敢直接缩 luma 的依据）。
 //  2. **分辨率钉死 1280×720**（参考组 2560×1440 后降回）且**回显实际帧尺寸**：偏差是逐像素
 //     均值，换分辨率 = 换口径。参考组回显「渲染尺寸 + 统计尺寸」两个数。
-//  3. **配置 = 交付配置**（`deliveryConfigDir`，env/skybox/IBL/AO/shadow 全开、deferred）。
+//  3. **配置 = 交付配置**（`deliveryConfigDir`，env/IBL/AO/shadow 全开、deferred）。
 //     合成 profile 上没有用户报的那些 1px 高亮细线（激励源），在它上面量到的「没效果」不算数。
 //
 // ⚠ **AO 带来的公共偏差地板（读跨组数字前必读）**：AO 是屏幕空间螺旋采样，1440p 参考的 AO
@@ -232,7 +232,7 @@ void printMotionHeader(const std::string& cameraName, bool cameraMode, double an
 {
     std::printf("=== temporal-motion：%s运动下 TAA 的抗锯齿效果（机位 %s）===\n",
         cameraMode ? "相机" : "场景 spin（相机静止）", cameraName.c_str());
-    std::printf("  配置 = 交付 configs/（deferred + env/skybox/IBL/AO/shadow 全开，红线 3）\n");
+    std::printf("  配置 = 交付 configs/（deferred + env/IBL/AO/shadow 全开，红线 3）\n");
     std::printf("  运动 = %s：angle = %.4f°/帧 × 帧号（纯函数），绕 up 轴 yaw\n",
         cameraMode ? "相机帧驱动 yaw（camera.lua frame_yaw，= 用户报障的运动源）"
                    : "场景帧驱动 spin（scene.lua spin_frame_angle，相机不动 = 债-49 鬼影仪器）",

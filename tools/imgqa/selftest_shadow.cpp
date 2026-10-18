@@ -330,7 +330,7 @@ void testShadowSoftnessMetrics(Checker& c)
             measureSoftArm(flat(100.0), flat(92.0)).coverage == 0.0
                 && measureSoftArm(flat(100.0), flat(60.0)).core == 0.0
                 && measureSoftArm(flat(100.0), flat(60.0)).band == 1.0);
-        // 反向用例：变亮不得计入"影"（否则 skybox 变化之类的整体提亮会伪装成覆盖率暴涨）
+        // 反向用例：变亮不得计入"影"（否则天穹/曝光变化之类的整体提亮会伪装成覆盖率暴涨）
         const SoftArmMetrics bright = measureSoftArm(flat(100.0), flat(120.0));
         c.chk("softness 度量：变亮不计入覆盖、平均变暗恒非负",
             bright.coverage == 0.0 && bright.meanDark == 0.0);
@@ -404,7 +404,7 @@ void testShadowKernelScale(Checker& c)
     cv::Mat bright = grayLuma(sz, 200.0);
     c.chk("kernelscale 覆盖率：变亮不计入影（反向用例，否则整体提亮伪装成覆盖率暴涨）",
         shadowUmbraFraction(ref, bright) == 0.0);
-    // 🔴 分母下限是本判据最要紧的一条反向：env/skybox 全关时**背景就是黑的**，
+    // 🔴 分母下限是本判据最要紧的一条反向：env 全关（天穹随 env.intensity=0 一起关）时**背景就是黑的**，
     // S = (0−0)/0 会爆成 1 ⟹ 整屏算成「有影」= 缺陷态刷绿。变异红线：删掉 `>= 1 LSB`
     // 这个下限 → 下面两条同时红。
     c.chk("kernelscale 覆盖率：参照全黑（背景）不得算成影",
