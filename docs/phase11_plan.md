@@ -5,7 +5,7 @@
 > （用户 2026-09-29 提出，调查结论见 §2）；② **阴影主体**——原编号 Phase 10，
 > 2026-09-27 因调试交互插队顺延为 Phase 11，其大纲沿用 `next_roadmap.md` §Phase 11 原条目，
 > 本文件不重复展开。
-> 结论回写 [next_roadmap.md](next_roadmap.md) 与 git:调试历史。
+> 结论回写 [next_roadmap.md](archive/next_roadmap.md) 与 git:调试历史。
 
 ---
 

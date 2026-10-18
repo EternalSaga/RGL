@@ -131,7 +131,7 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "相同），但**绝对**的「相当于几帧过期历史」不许读成「画面真实变化了几帧」\n"
             "（→ `phase13_plan.md` §1.17 结论 6 / 结论 8）。",
             {"tools/imgqa/temporal_tail_camera.cpp `cmdTemporalTailCamera` 判决线 2 与「运动归因」表；"
-              "`SmearAngle::oneFrameFrac` 注释；docs/phase13_plan.md §1.17 结论 2 + 本轮 α 轴重设计"},},
+              "`SmearAngle::oneFrameFrac` 注释；docs/archive/phase13_plan.md §1.17 结论 2 + 本轮 α 轴重设计"},},
         {"temporal-tail-static-collapse", JudgmentFamily::TemporalMotion,
             "**零点锚**（`--motion camera`）：相机静止（δ=0）的 **Z 组**（`jitter_scale=0` +\n"
             "`feedback=1` ⟹ 输出 ≡ 本帧）喂进同一个算子，frac 必须塌到 ≈0。\n"
@@ -150,7 +150,7 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "⟹ 本条同时输出地板读数 `A0(δ=0)`：它是主角度各臂的**同口径加性底**——报臂间差"
             "时用它，报绝对份额时减掉它。",
             {"tools/imgqa/temporal_tail_camera.cpp `cmdTemporalTailCamera` 判决线 3 的实现处注释"
-             "（含首轮 0.1286 地板误读）；docs/phase13_plan.md §1.16 第 6 条"},},
+             "（含首轮 0.1286 地板误读）；docs/archive/phase13_plan.md §1.16 第 6 条"},},
         {"temporal-tail-gate-breakpoint", JudgmentFamily::TemporalMotion,
             "**阳性锚点，且是这台仪器存在的唯一理由**（`--motion camera`）。\n"
             "臂 11 的记忆门 `gate = saturate(2 − motion)` 里 `motion` 是**每帧**位移，而鬼影是整个"
@@ -181,7 +181,7 @@ const std::vector<JudgmentInfo>& temporalTailCameraJudgments()
             "⚠ 门关侧不判「残差必须小」——机位运动快的时候长窗本来就糊，判的是"
             "**臂 11 与臂 0 的比**退回 1，即门确实在起作用。",
             {"tools/imgqa/temporal_tail_camera.cpp `cmdTemporalTailCamera` 头注释「判决线」第 4 条；"
-             "docs/phase13_plan.md §1.14 缺陷 2、§1.15 第 3 条、§1.16「13.14 拆 a/b」"},},
+             "docs/archive/phase13_plan.md §1.14 缺陷 2、§1.15 第 3 条、§1.16「13.14 拆 a/b」"},},
     };
     return kPart;
 }
@@ -265,7 +265,7 @@ const std::vector<JudgmentInfo>& temporalTailStepJudgments()
             "同会话双构建。本条是**量级**检查：要抓的是「某个像素上 α 被换了个数」那种 1e-1 错。\n"
             "⚠ 同样只在 ①②③ 三条守卫全绿时才有意义。",
             {"tools/imgqa/temporal_step.cpp `emitStepVerdicts` 第 5 条与 tools/imgqa/temporal_motion_metric.cpp `staticDiff`；"
-             "rgl/shaders/taa.frag.slang 臂 13 分支；docs/phase13_plan.md §1.21"},},
+             "rgl/shaders/taa.frag.slang 臂 13 分支；docs/archive/phase13_plan.md §1.21"},},
         {"temporal-tail-step-fsr-floor", JudgmentFamily::TemporalMotion,
             "**升频臂的下界锚 = 无历史臂必须鬼影为零**（批 14.5）。\n"
             "B75（双线性 @0.75）与 S75（FSR 纯空间 @0.75，vendor 每帧 reset）**都没有历史**"

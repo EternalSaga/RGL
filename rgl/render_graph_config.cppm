@@ -11,7 +11,7 @@ namespace RGL {
 // 与 camera_config/scene_config 同构：本模块只做"文本 → 声明数据"的解析，
 // 校验与编译归 render_graph::compileRenderGraph（main 启动期串接）。
 //
-// **选路语义（2026-10-18 刀②，`docs/图变体收敛_plan.md` §6.1-2）**：
+// **选路语义（2026-10-18 刀②，`docs/archive/图变体收敛_plan.md` §6.1-2）**：
 // `variant` 键与 `RgGraphVariant` 枚举**已删除**——它是"没有消费者的真相源"
 // （消费方要的是图事实 `graphHasDeferredLight`，不是配置里写了什么；两个真相源
 // 的对账 lint 只是维护税）。现在只有一条规则：

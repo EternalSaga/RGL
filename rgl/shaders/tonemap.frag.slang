@@ -25,7 +25,7 @@
 // 「固定频率 + 固定位置」的 16 帧周期 shimmer 原样留在交付画面里（实测 9.22% 像素 >2LSB）。
 // 批 13.5 把 un-jitter **前移到 taa pass 的输入侧** ⟹ `taa_out` 天然就是基空间 ⟹ 本 pass
 // 回到朴素 `input.uv`。**若在此处重新加偏移 = 双重 un-jitter，比 13.2 之前更糟。**
-// 全案 → `docs/taa_history_space_plan.md`；核选型实测数据 → `taa.frag.slang` 输入侧注释。
+// 全案 → `docs/archive/taa_history_space_plan.md`；核选型实测数据 → `taa.frag.slang` 输入侧注释。
 //
 // **纹理空间现状**（批 13.6 起本 pass **不再需要**空间概念——两条路径各自都同空间）：
 //   ┌ 纹理（binding）  ─ 空间 ─────────────────────────────────────────────┐

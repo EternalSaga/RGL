@@ -21,7 +21,7 @@ export import gbuffer_contract;
 // （执行层）在录制期消费。barrier 自动推导 = 本模块核心：attachment 的布局链
 // 从 pass 声明的读写 usage 推导，执行器不再手写布局转换（Frostbite 第一代
 // 全自动图的唯一保留核心；aliasing/pass fusion/多线程录制明确不做，见
-// docs/next_roadmap.md Phase 6）。
+// docs/archive/next_roadmap.md Phase 6）。
 //
 // 图的边界（哪些同步**不**进图）：
 //   - descriptor heap / sampler heap 的 host-write barrier 与 scene data
@@ -655,7 +655,7 @@ export struct CompiledRenderGraph {
  * IZB 与 EVSSM 各写一份逐字相同的 `any_of` 现推）：消费方要的是"有没有人在跑 deferred
  * 光照 / 有没有 G-buffer 可消费"，不是"配置里 variant 写了什么"——自定义 Lua 图可以在
  * 内建 deferred 之外手写（或不写）light pass。原「两个真相源的分歧交给 gate_lint 交叉
- * 校验」随 variant 枚举删除（2026-10-18 刀②.1，docs/图变体收敛_plan.md §4/§6.1-2：
+ * 校验」随 variant 枚举删除（2026-10-18 刀②.1，docs/archive/图变体收敛_plan.md §4/§6.1-2：
  * 没有消费者的真相源）——**图事实自此是这一判据的唯一来源**。
  * @param passes 编译图 pass 序列（`CompiledRenderGraph::passes`）
  * @return true = 图里有 deferred 光照 pass
@@ -664,7 +664,7 @@ export bool graphHasDeferredLight(std::span<const RgPassPlan> passes);
 
 // ── 图事实查询面（债-129 S1a）──────────────────────────────────────────────────
 // 「图里有没有 X」「X 的槽位是几」由本面**唯一**提供：配置层 / 装配层 / 工具层是消费者，
-// 不是申报点（裁决句 → `docs/配置正交性_plan.md` §5.2）。此前 6 处消费者各写一份
+// 不是申报点（裁决句 → `docs/archive/配置正交性_plan.md` §5.2）。此前 6 处消费者各写一份
 // `find_if(attachments, name==…)`，两份 FSR 判据的条件集已经漂到不同（4 条 vs 3 条）。
 // 🔴 收口的是**编译图**上的现查；本模块自己的分区（`decorate` / `dynamic_render_graph`）另有
 // 吃 `RgAttachmentDesc` 的同族扫描——那是提供方看自己的数据，不是重复申报（要收得先把谓词
@@ -826,13 +826,13 @@ export vk::ImageMemoryBarrier2 materializeBarrier(const RgBarrierPlan& plan, VkI
 export [[nodiscard]] std::expected<CompiledRenderGraph, Error> compileRenderGraph(const RgGraphDesc& desc);
 
 /** 缺省图 = forward HDR 链（defaultRenderGraph / defaultRenderGraphDesc）已删
- *  （2026-10-18 图变体收敛刀②.2，`docs/图变体收敛_plan.md` §5：选路只剩「文件有
+ *  （2026-10-18 图变体收敛刀②.2，`docs/archive/图变体收敛_plan.md` §5：选路只剩「文件有
  *  attachments/passes = 自定义图，否则 = 内建 deferred」，forward 图在生产侧不可达后
  *  连本体一起删除；原 5-pass 图声明见本文件的 2026-10-18 之前版本，git history 可查）。
  */
 
 /**
- * offscreen 图变体已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §0/§2：三段渲
+ * offscreen 图变体已删（2026-10-18 刀①，`docs/archive/图变体收敛_plan.md` §0/§2：三段渲
  * scene_rt + composite blit 的呈现图全仓零使用者；blit **机制**保留——Lua 词表仍可
  * 声明 blit pass，自定义图是它的生产者。原图声明见 `git show HEAD~:本文件`）。
  */

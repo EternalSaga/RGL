@@ -752,7 +752,7 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	for (const auto& p : opaque)
 		fresh.calls.push_back(p.call);
 	// Phase 5.5 批次 4 天空盒段（opaque 之后、透明之前的单 draw）已随 forward 绘制机制
-	// 删除（2026-10-18 图变体收敛刀②.2，docs/图变体收敛_plan.md §6.2）。
+	// 删除（2026-10-18 图变体收敛刀②.2，docs/archive/图变体收敛_plan.md §6.2）。
 	fresh.transparentStart = static_cast<uint32_t>(fresh.calls.size());
 	// 稳定排序：同距离保持实体迭代序（确定性输出，截图可复现）
 	std::ranges::stable_sort(transparent,

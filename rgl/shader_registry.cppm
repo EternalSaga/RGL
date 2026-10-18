@@ -319,7 +319,7 @@ export class ShaderRegistry {
 
 	/**
 	 * 天空盒管线条目（addSkyEntry）已随 forward 绘制机制删除（2026-10-18 图变体收敛
-	 * 刀②.2，docs/图变体收敛_plan.md §6.2：执行 skybox DrawCall 的 pass 只存在于已删的
+	 * 刀②.2，docs/archive/图变体收敛_plan.md §6.2：执行 skybox DrawCall 的 pass 只存在于已删的
 	 * forward 图；deferred 的天穹对应物 = env.intensity 总闸）。
 	 */
 
@@ -674,7 +674,7 @@ export class ShaderRegistry {
 		if (it != styles.end())
 			return &it->second;
 		// forward 规格回落链（cube 之外的 model/model_pbr/model_phong/model_pbr_ibl/skybox）
-		// 已随刀②.2 删除（docs/图变体收敛_plan.md §5）；cube 保留（内建几何 + deferred 共用）。
+		// 已随刀②.2 删除（docs/archive/图变体收敛_plan.md §5）；cube 保留（内建几何 + deferred 共用）。
 		if (std::strcmp(name, "cube") == 0) {
 			static const RGL::PipelineSpec defaultCube{
 				"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"};

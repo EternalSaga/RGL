@@ -34,7 +34,7 @@ export struct PipelineSpec {
  * git:phase5_5_plan.md 素材定案；nightSky 层序 1,3,5,6,2,4 / rainbow 方案 B
  * ft,bk,up,dn,rt,lf），完整路径 = dir + "/" + faces[i]。intensity 进 scene data
  * @48（pbr.slang readEnvParams）；原 skybox 背景天穹开关已随 forward 绘制机制删除
- * （2026-10-18 刀②.2，docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物 = intensity
+ * （2026-10-18 刀②.2，docs/archive/图变体收敛_plan.md §6.2：deferred 的天穹对应物 = intensity
  * 总闸，light.frag sky 分支门控 mipRange>0 && intensity>0）。
  *
  * Phase 8 批次 ②b：`hdr` 非空 = 走 Radiance .hdr 环境路径（image_codec::decodeHdr →
@@ -76,7 +76,7 @@ export struct SceneConfig {
 	std::vector<SceneEntityDesc> entities; // Phase 6 批次 5：entity 列表（非空 = 权威场景构成）
 	std::vector<PipelineSpec> pipelines;   // pipeline 规格列表
 	// 原 styleMap（Phase 4 批次 3：风格名→forward 管线规格名）已随刀②.2 删除——
-	// forward 规格与 styles 配置键同刀消失（docs/图变体收敛_plan.md §5）。
+	// forward 规格与 styles 配置键同刀消失（docs/archive/图变体收敛_plan.md §5）。
 	// Phase 8 批次 F：材质名连连看规则表（有序，首个命中生效）——材质名含 pattern → 风格键。
 	// 风格键经 deferredStyleMap 落规格名；空 = 全走 pbr。
 	std::vector<std::pair<std::string, std::string>> materialRules;
@@ -128,8 +128,8 @@ export struct SceneConfig {
 	// 门判定只有一处 = `render_list_impl.cppm::fillTaaData`（shader 侧无门逻辑）：
 	//   门关 ⇒ 两个载荷恒 0 ⇒ 逐位回到**改前的 `base_space = false` 形态**（输出在抖动空间
 	//   + 历史每帧重采样）⟹ 门开/门关之差 = 本次架构改造的净效果，**同一构建可 A/B**。
-	// 默认 **true**。改前的拍板依据（游动 0.643→0.060px 等）见 docs/phase13_plan.md §1.10；
-	// 本批改义后的实测 → docs/taa_history_space_plan.md §5（待回填）。全案 → 同文件。
+	// 默认 **true**。改前的拍板依据（游动 0.643→0.060px 等）见 docs/archive/phase13_plan.md §1.10；
+	// 本批改义后的实测 → docs/archive/taa_history_space_plan.md §5（待回填）。全案 → 同文件。
 	bool taaBaseSpace = true;
 	// ── 重投影消融门（scene.lua `taa.reprojection`，默认 true = 逐位今天）──
 	// false = **完全不重投影**：历史按「同基位置」采样（载荷 prevViewProj := 本帧抖动后
@@ -145,7 +145,7 @@ export struct SceneConfig {
 	// 1=本帧无历史），经 `POST /shot {"attachment":"taa_out"}` 回读取数。
 	// RGB 一个 bit 不动（tonemap 只读 rgb、历史采样只读 rgb）⟹ 交付图逐位不变；
 	// 门关 = alpha 恒 1.0 = 今天。要回答的问题：「α 调多小都不用的像素，是不是历史被
-	// 邻域盒拒收了」（docs/phase13_plan.md §1.7 的 98.3% 恒拒有前科，根因 CR 核奇偶性）。
+	// 邻域盒拒收了」（docs/archive/phase13_plan.md §1.7 的 98.3% 恒拒有前科，根因 CR 核奇偶性）。
 	bool taaDiagReject = false;
 	// ── 输入侧 un-jitter 的**重建核选择**（scene.lua `taa.input_kernel`，批 13.8，默认 0）──
 	// 0 = 双线性（4 抽头，权重恒 ∈[0,1]，**= 改前行为，逐位不变**）/ 1 = Catmull-Rom 4×4
@@ -164,7 +164,7 @@ export struct SceneConfig {
 };
 
 /**
- * 解析器键轨迹（`DiagnosticsKeyTrace` 同形，债-11：docs/gate_lint_plan.md §3-B 的
+ * 解析器键轨迹（`DiagnosticsKeyTrace` 同形，债-11：docs/archive/gate_lint_plan.md §3-B 的
  * 未知键 lint + 覆盖率护栏回灌 scene.lua）。键名书写与 Lua 路径一致，子表字段用
  * `表名.字段`（如 `ao.strength`）。本 loader 没有门回显行 ⟹ 判据表叫 KnownKeys 而非
  * EchoKeys：与 kGateEcho 同角色（未知键 lint 的判据表 + 覆盖率断言的输入），只是无回显输出。
@@ -188,7 +188,7 @@ export std::vector<std::string> sceneConfigKnownKeys();
  * 默认 deferred_styles：unlit/vegetation/light → 对应 deferred 规格（缺表风格回落
  * deferred_geometry 本体）。原 forward 规格（model/model_pbr/model_phong/model_pbr_ibl/
  * model_vegetation/model_light）、skybox 规格与 styles 表已随刀②.2 删除
- * （docs/图变体收敛_plan.md §5）。
+ * （docs/archive/图变体收敛_plan.md §5）。
  * @return 默认 SceneConfig（值）
  */
 export SceneConfig defaultSceneConfig();

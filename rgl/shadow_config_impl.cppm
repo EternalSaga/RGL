@@ -192,7 +192,7 @@ std::optional<std::string> applyIzbKey(sol::table& root, ShadowConfig& cfg,
 	return std::nullopt;
 }
 
-// ———— 门回显（kGateEcho 同派生化，docs/gate_lint_plan.md §3-B）————
+// ———— 门回显（kGateEcho 同派生化，docs/archive/gate_lint_plan.md §3-B）————
 
 /** 回显表条目：lua 键名 + 取值器（非捕获 lambda → 函数指针，格式化用 fmt）。 */
 struct ShadowGateEcho {
@@ -233,7 +233,7 @@ const ShadowGateEcho kShadowEcho[]{
  * `izb.on`，扁平布尔双读已删——「扁平键双读 = 两个真相源」红线的活体违反，2026-10-17
  * 主 agent 裁）。`csm` 是预留空块（键表无 `csm.` 声明）⟹ 不钻。已知存量：`scene.lua`
  * 的 `taa.enabled`（键随批 14.6 已删，env_band / nm_rig 两靶残留）会被本护栏 warn——
- * 已知存量，待裁决，见 docs/配置正交性_plan.md；为凑「存量零告警」删靶或改 `aa` 是禁手。
+ * 已知存量，待裁决，见 docs/archive/配置正交性_plan.md；为凑「存量零告警」删靶或改 `aa` 是禁手。
  * @param block 顶层键名（候选块名）
  */
 bool declaresNestedKeys(std::string_view block) {

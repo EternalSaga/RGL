@@ -23,7 +23,7 @@
 --       ——这是本靶能做单调性归因的全部底气。
 --   ao.strength = 0     → AO 已三次排除，lerp(1,ao,0) ≡ 1.0 逐位旁路
 --   （原 skybox = false 键已随刀②.2 删除：本靶画幅里本来就没有天穹像素（俯角 25° 把
---     地平线推到画外），deferred 的天穹总闸 = intensity，见 docs/图变体收敛_plan.md §6.2）
+--     地平线推到画外），deferred 的天穹总闸 = intensity，见 docs/archive/图变体收敛_plan.md §6.2）
 --   exposure = 1.0      → ACES 前中性倍率
 --   shadow.lua 的 mode = "none" + izb = { on = false }（同目录 shadow.lua，批 N6b 起阴影键在此）
 --   metallic = 1（在 glb 里）→ 漫反射项天然为 0 ⟹ 画面里**每一个亮像素都来自 env 镜面项**

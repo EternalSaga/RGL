@@ -74,7 +74,7 @@
 - `tools/imgqa/` **46 处**：删 `runEngineOnce`、`applyLlmShotGate`、`overrideLlmShot` 三字段；
   `shadow-softness` / `shadow-kernel-scale` / `probe` 三台仪器改 RPC 形态。
   ⚠ `just analytic`（闭式解探针）走 `runEngineOnce` = llm 形态，**在删除射程内**——
-  与 `docs/图变体收敛_plan.md` §6 那条"删 forward 前要先重立探针"**撞同一处代码**，两件事要合排。
+  与 `docs/archive/图变体收敛_plan.md` §6 那条"删 forward 前要先重立探针"**撞同一处代码**，两件事要合排。
 - `qa/configs/{analytic,ssr_rig}/runtime.lua` 改 `llm_debug=false` + `rpc=true`。
 
 ## 4. 🔴 已知代价（明确接受，不许假装能补齐）
@@ -113,5 +113,5 @@
 - `qa/configs/{nm_rig,env_band}/runtime.lua:5` 指 `/shotburst` 的 409 在 `:365`，实际在 `:376-378`
   （`/shot` 的在 `:300-303`）。
 - `docs/技术概念.md:377-385` 端点表缺 `/resize`、`/pass`；`/shotburst` 参数缺 `attachment`、`start_frame`。
-- `docs/gate_lint_plan.md:89-96` 的 `GateEnv` 列 6 字段，代码 `gate_lint.cppm:37-41` 只有 3 个。
+- `docs/archive/gate_lint_plan.md:89-96` 的 `GateEnv` 列 6 字段，代码 `gate_lint.cppm:37-41` 只有 3 个。
 - `tools/imgqa/imgqa.h:176`「单张精确钉帧仍只有它」（§1 已述）。

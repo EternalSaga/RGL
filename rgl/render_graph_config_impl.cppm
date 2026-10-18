@@ -338,7 +338,7 @@ std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path) {
 		// 同 scene_config：此版本 sol2 的 stack_proxy→sol::table 隐式转换有坑，用 .as<>
 		sol::table root = result[0].as<sol::table>();
 
-		// variant 键已删除（2026-10-18 刀②，docs/图变体收敛_plan.md §4/§6.1-2）：
+		// variant 键已删除（2026-10-18 刀②，docs/archive/图变体收敛_plan.md §4/§6.1-2）：
 		// 它本是没有消费者的真相源。出现即拒——静默忽略 = 用户以为切了路线而实际没有。
 		if (root["variant"].valid())
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,

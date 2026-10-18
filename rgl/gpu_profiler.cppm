@@ -1,4 +1,4 @@
-// gpu_profiler.cppm — Phase 9.2 GPU 时间戳 profiler（docs/phase9_plan.md 批 9.2）。
+// gpu_profiler.cppm — Phase 9.2 GPU 时间戳 profiler（docs/archive/phase9_plan.md 批 9.2）。
 // 数据通路：帧槽 timestamp query pool（kGpuSlots × kQueriesPerFrame，槽内**双段不相交**：
 // 主段 [0,kMainQueries) = gpu.frame+pass，cull 段 [kMainQueries,+) = cull）+ 成对
 // vkCmdWriteTimestamp2 区域（配对栈嵌套）→ 槽复用时（drawFrame 在 session.beginFrame

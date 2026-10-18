@@ -9,7 +9,7 @@ import render_graph;         // RgPassPlan / graphHasDeferredLight
 namespace RGL {
 
 /**
- * 门组合自检（docs/gate_lint_plan.md §3-C）：**纯函数**申报式规则表——「配了但无效」
+ * 门组合自检（docs/archive/gate_lint_plan.md §3-C）：**纯函数**申报式规则表——「配了但无效」
  * 的判定从每帧录制路径（passrec warn-once）搬到启动期一次跑完。
  * 不碰设备、不碰单例（一切事实作入参 → `just test` 毫秒级可测）。
  *
@@ -68,7 +68,7 @@ export struct GateFinding {
  * @param runtimeDefaults 运行配置比较基准（正常调用方传 `RuntimeConfig{}` = 出厂态）
  * @param passes 编译图 pass 序列（deferred 判据 = graphHasDeferredLight，图事实层——
  *   2026-10-18 刀② 起这是**唯一**的 deferred 真相源：原 `variant` 参数（配置层路线意图）
- *   与它的交叉校验随 `RgGraphVariant` 枚举一起删除，见 docs/图变体收敛_plan.md §4）
+ *   与它的交叉校验随 `RgGraphVariant` 枚举一起删除，见 docs/archive/图变体收敛_plan.md §4）
  * @param env 设备/模式事实
  * @return findings（error 排前不保证——由 logGateFindings 按级别分发）
  */

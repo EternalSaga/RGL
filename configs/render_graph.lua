@@ -6,7 +6,7 @@
 --      light 逐灯 GGX→scene_hdr + tonemap 上屏）。`variant` 键与 RgGraphVariant 枚举
 --      **已删除**——它是「没有消费者的真相源」：装配与判据吃的都是图事实
 --      `graphHasDeferredLight`，两个真相源的对账 lint 只是维护税
---      （docs/图变体收敛_plan.md §4）。本文件写 variant 键 = 启动报错（不静默忽略）。
+--      （docs/archive/图变体收敛_plan.md §4）。本文件写 variant 键 = 启动报错（不静默忽略）。
 --   ② 出现 `attachments` / `passes` 任一键 → **自定义图**（"图是数据"路）。
 --      只写一键的半截配置 = compile 报结构错误，不静默回落内建图。
 --   文件整体缺失 → warn + 内建 deferred（不再静默换渲染路线——旧「缺文件 = forward

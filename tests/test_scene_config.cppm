@@ -142,7 +142,7 @@ TEST_CASE("scene_config：缺文件回落默认（warn 不报错）——默认 
 	auto r = loadSceneConfig(missing);
 	REQUIRE(r.has_value());
 	// 默认画像（defaultSceneConfig，scene_config_impl.cppm）。原 12 管线里的 forward/skybox
-	// 规格与 styles 表已随刀②.2 删除（docs/图变体收敛_plan.md §5），剩下的 = cube + 四条
+	// 规格与 styles 表已随刀②.2 删除（docs/archive/图变体收敛_plan.md §5），剩下的 = cube + 四条
 	// deferred 规格 + 四条透明规格（透明混合管线刀1）。
 	// **实际行为**：缺文件路径**不经 parseEntities**，entities 保持**空**——
 	// 与"存在但空的 lua"不同（下一条），这个不对称是既有语义，钉住防"顺手统一"。
@@ -1641,7 +1641,7 @@ bool containsKey(const std::vector<std::string>& v, std::string_view k) {
 
 TEST_CASE("diagnostics 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）") {
 	// 回显此前是手写子集（38 门只列 ~11 个，连默认开的阴影总开关都不出现）。
-	// 本用例是防漂移护栏（docs/gate_lint_plan.md §3-B）：两个方向都断——
+	// 本用例是防漂移护栏（docs/archive/gate_lint_plan.md §3-B）：两个方向都断——
 	//   回显表删一行 / 解析器漏记一键 / 两处任一侧改拼写 → set 相等立刻红。
 	// 探针子表字段只在表存在时才被读 → 测试文件写全三张探针表。
 	// 变异红线：kGateEcho 删任一条目或 readBool/readI64 删记录行 → 本用例红。
@@ -1909,7 +1909,7 @@ TEST_CASE("shadow_config：izb 子表形态（on+grid+dump_frame；grid clamp [6
 }
 
 TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）+ 未知键判据") {
-	// diagnostics 同形护栏（docs/gate_lint_plan.md §3-B）：回显表删一行 / 解析器漏记一键 /
+	// diagnostics 同形护栏（docs/archive/gate_lint_plan.md §3-B）：回显表删一行 / 解析器漏记一键 /
 	// 两处任一侧改拼写 → set 相等立刻红。变异红线：kShadowEcho 删任一条目 → 本用例红。
 	TempLua f("sh_keys", "return { mode = \"csm\", izb = { on = true }, csm = { }, pcss = { }, evssm = { } }\n");
 	ShadowKeyTrace trace;

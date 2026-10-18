@@ -61,7 +61,7 @@ void noteKeyEventCapture(bool swallowed, const ImGuiIO& io) {
 		logger->debug("imgui: 键盘事件被吞没（主动控件交互，预期）");
 }
 
-// ─── 面板字体（Phase 10b 批 11b.1；docs/phase10b_plan.md §2/§4）──────────────────
+// ─── 面板字体（Phase 10b 批 11b.1；docs/archive/phase10b_plan.md §2/§4）──────────────────
 
 /**
  * 系统字体探测链（D2，命中即停；仅运行时读系统字体，**不进仓库**）：

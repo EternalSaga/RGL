@@ -23,7 +23,7 @@ export struct CameraConfig {
 //（键名映射仅 loadCameraConfig 内部使用，定义随实现单元迁出）
 
 /**
- * 解析器键轨迹（`DiagnosticsKeyTrace` 同形，债-11：docs/gate_lint_plan.md §3-B 的
+ * 解析器键轨迹（`DiagnosticsKeyTrace` 同形，债-11：docs/archive/gate_lint_plan.md §3-B 的
  * 未知键 lint + 覆盖率护栏回灌 camera.lua）。键名书写与 Lua 路径一致，子表字段用
  * `表名.字段`（如 `keys.forward`）。本 loader 没有门回显行 ⟹ 判据表叫 KnownKeys 而非
  * EchoKeys：与 kGateEcho 同角色（未知键 lint 的判据表 + 覆盖率断言的输入），只是无回显输出。
@@ -50,7 +50,7 @@ export std::vector<std::string> cameraConfigKnownKeys();
  * 与 tools/schema_loader 一致。🔴 它买的是**被加载文件自足 + 是纯数据**——工具的单文件文本补丁与
  * 「改了没生效要响亮失败」那一类护栏靠这条前提；**它不是安全边界**（`base` 里的 `load`/`pcall`
  * 没禁 ⟹ chunk 内任意计算本来就能做，真正关掉的只有文件与模块可达性）。要组合走**生成器**
- * （tools/ 铺目录），不要在 Lua 里 require → 裁决全文 `docs/配置正交性_plan.md` §3.7。
+ * （tools/ 铺目录），不要在 Lua 里 require → 裁决全文 `docs/archive/配置正交性_plan.md` §3.7。
  * @param path 配置文件路径
  * @param trace 可选出参：键轨迹（覆盖率护栏与未知键 lint 的输入；传 nullptr = 不记录）
  * @return 解析好的 CameraConfig；失败返回 ConfigLoadFailed

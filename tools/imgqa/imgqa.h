@@ -90,7 +90,7 @@ struct Vec3 {
 /// 线性 HDR → 屏幕字节（曝光 → ACES → sRGB → 8bit）。这是「该是多少」的最终答案。
 [[nodiscard]] std::array<int, 3> toBytes(Vec3 linear, double exposure = 1.0);
 
-// ── G-buffer 8bit 量化往返（deferred 路线，2026-10-18 探针重立，docs/图变体收敛_plan.md §6.1-1）──
+// ── G-buffer 8bit 量化往返（deferred 路线，2026-10-18 探针重立，docs/archive/图变体收敛_plan.md §6.1-1）──
 // deferred 的着色输入过两张 8bit 通道（gbuffer_contract.cppm：albedo = rgba8_srgb、
 // metalrough = rgba8_unorm .r=metal .g=rough），最终像素闭式必须吃**往返后**的值；
 // 法线 rg16_snorm 在探针场景（轴对齐 N）往返精确无损，不建模。

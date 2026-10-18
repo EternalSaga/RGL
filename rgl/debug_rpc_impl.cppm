@@ -12,7 +12,7 @@ namespace RGL {
 
 namespace {
 
-/** 超时表（docs/phase10b_plan.md D12）：`/shot` 帧首请求 → 下帧结算，给 10s；其余 2s。
+/** 超时表（docs/archive/phase10b_plan.md D12）：`/shot` 帧首请求 → 下帧结算，给 10s；其余 2s。
  * `/shotburst` 的应答要等**整批**交齐才兑现（n 上限 1024 帧 + 逐张写盘），故单独一档。 */
 constexpr std::chrono::milliseconds kTimeoutShot{10000};
 constexpr std::chrono::milliseconds kTimeoutBurst{120000};

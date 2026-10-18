@@ -1,7 +1,7 @@
 # TAA 时域抗锯齿（批 12.6）——调研与实施计划
 
 状态：**T0–T4 判据收口**（2026-10-02 立项，2026-10-03 判据全绿）。**后续收口与画质 →
-`docs/phase13_plan.md`**（本文 = 设计与踩坑账的权威载体，不再是"下一步做什么"）。作业参考 = 本地 Filament
+`docs/archive/phase13_plan.md`**（本文 = 设计与踩坑账的权威载体，不再是"下一步做什么"）。作业参考 = 本地 Filament
 （`/home/robin/program/filament`，本机核到非二手）。目标 = 给 deferred/forward 两条路加
 时域抗锯齿，**默认关 = 画面逐位不变**（与 shadow/PCSS/EVSSM/IZB 同款红线）。
 
@@ -130,7 +130,7 @@ cull 候选、picking、IZB、shadow 级联 near/far。
 ## 4. 配置与门（红线）
 
 - **默认全关**：`configs/diagnostics.lua` 加 `taa = false`（38→39 门：`kGateRules` +
-  `kGateEcho` + `tests/test_gate_lint.cppm` 覆盖率钉死；分级判据按 `docs/gate_lint_plan.md` §4）。
+  `kGateEcho` + `tests/test_gate_lint.cppm` 覆盖率钉死；分级判据按 `docs/archive/gate_lint_plan.md` §4）。
 - 关 = **零 jitter + 图里没有 taa pass/commit pass + TAA 管线不建**（装饰器不调用）
   → 与基线**逐位不变**，走同会话双构建 BIT-IDENTICAL 验收。
 - 运行参数进 `configs/scene.lua` 的 `taa` 段（仿 `ao.strength`，非门）：

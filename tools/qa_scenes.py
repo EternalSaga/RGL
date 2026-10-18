@@ -69,7 +69,7 @@
 #   Cornell box 基准，不要拿它跟经典 radiance 参考图对比。
 # - shadow_rig：最重要。按 skill rgl-verify「阴影验收判据」硬要求 1-3 设计（阳性锚点 /
 #   跨级联分布 / 远景取景），逐物体的失效模式在场景函数注释里。
-# - d1_parity / env_band：已随图变体收敛刀②.2 删除（docs/图变体收敛_plan.md §6.1-3：
+# - d1_parity / env_band：已随图变体收敛刀②.2 删除（docs/archive/图变体收敛_plan.md §6.1-3：
 #   d1_parity = forward/deferred 两路对拍，forward 已不存在；env_band = 实验已结案的
 #   「带边」靶，零自动化消费者，冻结归档，现场见 git history @ < 2026-10-18）。
 # - izb_rig：FTIZB/IZB 硬阴影 spike 装置（docs/hfts_izb_plan.md 批 1a）——厚度梯
@@ -1092,7 +1092,7 @@ def scene_izb_rig() -> Scene:
 # 三条硬收益：
 #   ① deferred 路线可用（画幅里没有天穹像素 ⟹ light.frag 的天穹分支根本不被触发，
 #      它与 env.intensity 的口径关系怎么定都不影响本靶；2026-10-18 起 intensity=0 连天穹
-#      一起关，定案见 docs/图变体收敛_plan.md §6.2）；
+#      一起关，定案见 docs/archive/图变体收敛_plan.md §6.2）；
 #   ② 可用像素从 env_band 的 49 行涨到整窗；
 #   ③ 不需要掩膜，也不需要原 forward 的背景天穹开关（environment.skybox 键已随刀②.2 删除）。
 # 窄带的镜像线 = 反射仰角等于带仰角的那一行；带仰角取 25°（= 俯角）⟹ 镜像线落在主点行。

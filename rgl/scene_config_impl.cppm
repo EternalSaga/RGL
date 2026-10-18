@@ -412,7 +412,7 @@ void parseLights(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
  * environment 段解析（Phase 5.5；缺段 = 不启用）。faces 按 Vulkan 层序 0-5 排列。
  * Phase 8 ②b 新增 hdr（.hdr 环境路径，非空优先于 faces）+ hdr_size（重投影面边长，
  * 必须 2 的幂，默认 2048）。原 skybox 布尔（背景天穹开关，forward draw 侧 knob）已随
- * 刀②.2 删除（docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物 = intensity 总闸）。
+ * 刀②.2 删除（docs/archive/图变体收敛_plan.md §6.2：deferred 的天穹对应物 = intensity 总闸）。
  * 键轨迹在段入口无条件记全五个字段键（同 parseEntities 口径，
  * 记录先于一切早退分支）。
  * @param root 配置根表
@@ -456,7 +456,7 @@ std::expected<void, Error> parseEnvironment(sol::table root, SceneConfig& cfg,
 }
 
 /** 原 parseStyles（styles 表 → styleMap，Phase 4 批次 3）已随刀②.2 删除——forward 的
- *  风格路由半边消失（docs/图变体收敛_plan.md §5）。 */
+ *  风格路由半边消失（docs/archive/图变体收敛_plan.md §5）。 */
 
 /** material_styles 解析（Phase 8 批次 F，材质名连连看：数组 { pattern=..., style=... }，
  * 有序首个命中；非空覆盖默认）。键轨迹在段入口无条件记 pattern/style 两键。 */

@@ -1,7 +1,7 @@
 # Phase 10b 调试交互增补批：imgui 中文字体 + HTTP POST RPC
 
-> **状态**：现行（2026-09-28 全落地，§6 验收清单实测全过；覆盖两件事：① imgui 面板中文显示为问号的修复、
-> ② 轻量 loopback HTTP POST RPC（= [archive/phase10_plan.md](archive/phase10_plan.md) 决策表
+> **状态**：历史（归档 2026-10-18；2026-09-28 全落地，§6 验收清单实测全过；覆盖两件事：① imgui 面板中文显示为问号的修复、
+> ② 轻量 loopback HTTP POST RPC（= [archive/phase10_plan.md](phase10_plan.md) 决策表
 > **D12 翻案落地**，翻案条件"≥2 次因无编程驱动通道而绕路"已由用户 2026-09-28 主动提出达成）。
 > 本批是 Phase 11（阴影）开工前的插队小批；结论回写 [next_roadmap.md](next_roadmap.md) 与
 > git:调试历史。
@@ -187,7 +187,7 @@ catch 分支空句柄 → 异常请求 504。两者均已修 + 复测。
 - [x] git:调试历史：imgui 中文字体根因条目（默认字体无 CJK + stb 不吃 CFF +
   imgui 1.92 字形按需烘焙）+ RPC 两个 bug（error handler 覆盖 / responder move）
   + "并行双实例污染测量"无关，勿混
-- [x] [技术概念.md](技术概念.md)：§RPC 调试通道（协议表 + 帧边界时序 + 线程模型 + 配置键）
+- [x] [技术概念.md](../技术概念.md)：§RPC 调试通道（协议表 + 帧边界时序 + 线程模型 + 配置键）
 - [x] [next_roadmap.md](next_roadmap.md)：Phase 10 收口处补"2026-09-28 增补批（中文 + RPC，
   D12 翻案）"；`archive/phase10_plan.md` 不动（已归档）
 - [x] AGENTS.md：运行要点加 RPC 一行（门/端口/端点速查）

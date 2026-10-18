@@ -23,7 +23,7 @@
 //   高频处响应 ⟹ 钉死在几何边缘 = 用户报障的「固定频率 + 固定位置」shimmer（实测交付相邻帧
 //   9.22% 像素 >2LSB）；老贡献被反复重采样 ⟹ 比理想 16 相位超采样还糊 1.5 倍（梯度比 0.671）。
 //   改后：抖动在进入累积**之前**被消化 ⟹ 混合发生在基空间 ⟹ 静止机位历史零重采样。
-//   Filament 同构（输入侧 Lanczos un-jitter + 两侧无抖矩阵），全案 → `docs/taa_history_space_plan.md`。
+//   Filament 同构（输入侧 Lanczos un-jitter + 两侧无抖矩阵），全案 → `docs/archive/taa_history_space_plan.md`。
 //
 // ── 算法出处（抄 Filament antiAliasing/taa/taa.mat，逐项对齐）──
 //   · 邻域 min/max（box5 十字邻域）+ 历史点沿线段裁到 AABB（Lottes line clip，
@@ -419,7 +419,7 @@ float4 main(TaaInput input) : SV_Target
     //   它的工具。改前 AO 乘在 tonemap（本 pass **之后**）⟹ 一点没被平均：实测占残余 shimmer
     //   62%（AO 开 6.899% / AO 关 2.639%），且按梯度分层 **100% 住在边缘**（边缘带 29.6% /
     //   平坦区 0.088%）。Filament 同构：AO 在 color pass 内（`details/Renderer.cpp:1190` SSAO
-    //   → `:1370` Color Pass → `:1426` 才起后处理/TAA）。全案 → docs/taa_history_space_plan.md。
+    //   → `:1370` Color Pass → `:1426` 才起后处理/TAA）。全案 → docs/archive/taa_history_space_plan.md。
     // 【两条采样纪律，少一条 = 白搬】
     //   ① **采 baseUv 不采 input.uv**：aoTex 纹素 q 装的是**抖动像素 q** 的遮蔽量 = 基位置
     //      q − c_t 的遮蔽量 ⟹ 要基位置 p 的 AO 必须采 p + c_t。采 input.uv 会引入一个**随相位

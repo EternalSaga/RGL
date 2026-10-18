@@ -1,6 +1,6 @@
 module;
 /**
- * test_gate_lint —— 门组合自检（gate_lint 立项批，docs/gate_lint_plan.md）
+ * test_gate_lint —— 门组合自检（gate_lint 立项批，docs/archive/gate_lint_plan.md）
  *
  * 被测 = rgl/gate_lint.cppm（rlscene 成员）：申报式规则表（三方来源 = diagnostics 回显表 +
  * shadow 回显表 + runtime.lua **meshlet 块**，债-106 整块接管；债-129 S2 把 debug+tint 两枚
@@ -85,7 +85,7 @@ constexpr GateEnv kHappyEnv{.headless = false, .llmCapture = true, .staticGraphi
 
 /**
  * 「非 deferred 图」臂的样本（原出厂 forward 图已随 2026-10-18 图变体收敛刀②.2 删除，
- * `docs/图变体收敛_plan.md` §5）：自建一张**没有 drawLight "light"** 的最小合法图 ——
+ * `docs/archive/图变体收敛_plan.md` §5）：自建一张**没有 drawLight "light"** 的最小合法图 ——
  * opaque（drawMesh）写 scene_hdr + depth，tonemap（全屏）采 scene_hdr 写 swapchain。
  * 规则表从 pass 序列里只消费 `graphHasDeferredLight` 这一条图事实，故样本取最小形态即可；
  * 仍走 `compileRenderGraph` 而不是手搓 `RgPassPlan`，是为了让样本保持「真编译产物」性质

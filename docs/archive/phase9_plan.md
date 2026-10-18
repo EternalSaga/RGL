@@ -1,12 +1,12 @@
 # Phase 9 实施计划：性能观测（Profiler）
 
-> **状态**：现行——**批 9.1/9.2/9.3a/9.3b/9.4 全部落地**（2026-09-27，判定见 §10，
-> 本计划转 archive 的唯一前置 = 跨机复测未闭环，见 §11）。起草时三决策见 §9；
+> **状态**：历史（归档 2026-10-18——§11 的跨机复测前置经用户拍板豁免）——
+> **批 9.1/9.2/9.3a/9.3b/9.4 全部落地**（2026-09-27，判定见 §10）。起草时三决策见 §9；
 > 实施期偏差与勘误集中在 §3.4 / §4.4。
 > 依据 = [next_roadmap.md](next_roadmap.md) Phase 9 ①–⑤（:184-194）+ 2026-09-27 方案讨论
 > （CPU/GPU/present_timing 2.5 问 + ECS/AOP 取舍）。完成后本文件转 `archive/`，进度回写 next_roadmap。
 > **阶段号消歧（2026-09-27）**：文中"Phase 10 阴影"现指 **Phase 11**——Phase 10 已被调试交互
-> （[phase10_plan.md](archive/phase10_plan.md)）接管，正文历史指称不改。
+> （[phase10_plan.md](phase10_plan.md)）接管，正文历史指称不改。
 
 ## 0. 定位与目标
 
@@ -56,7 +56,7 @@ Phase 9 只回答问题，不做优化：**CPU-bound 还是 GPU-bound（还是 s
 | `timestampComputeAndGraphics=true`，`timestampPeriod=10.019`，图形队列 `timestampValidBits=64` | ✅ |
 | 系统头 `VK_HEADER_VERSION 357`，`VK_EXT_present_timing` 完整定义（`vulkan_core.h:18454` 起，4 入口点 PFN :18571-18574） | ✅ |
 
-**闭环归档遗留**：[archive/present_timing_research.md](archive/present_timing_research.md) §3.3
+**闭环归档遗留**：[archive/present_timing_research.md](present_timing_research.md) §3.3
 的两个 ❓ 中 **RADV 侧今日确认支持**（当年决策"暂不引入"的前提 = 驱动支持未验证，已解除）；
 NVIDIA/Intel 侧仍 ❓（本机无卡，跨机补测，见 §4.3）。
 
@@ -436,6 +436,6 @@ cull。此项列为**批 9.5（可选，插桩-only）**。
 - 批 9.1 ✅ `dc2ab50`｜9.2 ✅ `3b1f9c0`｜9.3a ✅ `bdaa097`｜9.3b ✅ `1d0fbbe`｜
   9.4 ✅ 本节（+ profiler `logBoundVerdict` 与 stats `present_ms` 段）。
 - 按 §8 红线 5 本文可转 archive；**唯一未闭环 = 跨机复测**（§4.3 风险表末行），故暂留
-  `docs/phase9_plan.md`，状态头标注"待跨机复测后转 archive"。
+  `docs/archive/phase9_plan.md`，状态头标注"待跨机复测后转 archive"。
 - ②（gprof / perf 函数级深挖）全程未做，判定不依赖它；将来要 CPU 细分时优先走结论 4 的
   补 zone 路线（零第三方依赖、与既有 trace 同轴），gprof/perf 作后备。

@@ -65,7 +65,7 @@ triangles 索引用全局顶点索引（`base=(firstTriangle+ti)*3` 应为组内
 DrawArgs 超集 + 零 AssetKind 分支）；④ 管线表 392 条未去重（Phase 4 批次 2：组合去重
 → 12 条 / 6 heap slot）；⑤ 无统一 slot 分配器（统一 allocSlot + 契约断言）。
 **全文**：[ecs_compliance_review.md](ecs_compliance_review.md) §处置记录 +
-[next_roadmap.md](../next_roadmap.md) 对应 Phase 完成情况。
+[next_roadmap.md](next_roadmap.md) 对应 Phase 完成情况。
 
 ## 2026-08-28 · 交互模式 GPUVM fault（状态漂移 + per-process）= TexturePool 生命周期 UAF
 

@@ -30,7 +30,7 @@ rgl_shader_defined(meshlet.mesh MESHLET_MESH_DEBUG_SPV MESHLET_DEBUG_OFFSET mode
 rgl_shader_defined(meshlet.mesh MESHLET_MESH_TINT_SPV MESHLET_TINT model material scene scene_tables)
 # forward-only frag（model/model_pbr/model_phong/model_pbr_ibl/model_vegetation/model_light）
 # 与天空盒（skybox.mesh/skybox.frag）已删（2026-10-18 图变体收敛刀②.2，
-# docs/图变体收敛_plan.md §5：forward 图本体删除，绘制机制随刀②消失）。
+# docs/archive/图变体收敛_plan.md §5：forward 图本体删除，绘制机制随刀②消失）。
 # Phase 7 D1：deferred G-buffer 几何 frag（mesh 复用 model.mesh.spv，写 4 MRT，import scene 对象矩阵）
 # Phase 8 ③a：normal 贴图导数 TBN + ORM（normalmap.slang 契约，与已删除的 forward 路
 # 严格同源——历史对偶，见 git history @ < 2026-10-18）

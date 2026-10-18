@@ -461,7 +461,7 @@ std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cfg,
 	appendBlockFindings(findings, ctx);  // 块级宿主声明（判据见 appendBlockFindings 注释）
 	// （原此处的 variant×图事实交叉校验已随 RgGraphVariant 枚举删除，2026-10-18 刀②：
 	//  装配与判据全部只吃 ctx.deferredLight 一个真相源，对账失去存在前提——
-	//  docs/图变体收敛_plan.md §4「两个真相源 + 一条对账判据」的维护税到此清零）
+	//  docs/archive/图变体收敛_plan.md §4「两个真相源 + 一条对账判据」的维护税到此清零）
 	return findings;
 }
 

@@ -254,7 +254,7 @@ void testJudgmentFamilies(Checker& c)
     // 62 → 63：★0.5-b1 的 `diffblock` 一条（U(r) 恰 0 = 差异处处够薄没有整块），见
     // judgments_table_block.cpp。
     // 63 → 65：探针重立到 deferred 的两条 G-buffer 编码锚（`probe-gbuffer-albedo` /
-    // `probe-gbuffer-metalrough`，2026-10-18 图变体收敛刀①，docs/图变体收敛_plan.md §6.1-1）。
+    // `probe-gbuffer-metalrough`，2026-10-18 图变体收敛刀①，docs/archive/图变体收敛_plan.md §6.1-1）。
     // 65 → 69：债-132 结案的 `blend-sort` 四条（背景区钉显示链 / 两个 α 各钉一次非预乘 over /
     // 重叠区钉合成次序），见 judgments_table_blend.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。

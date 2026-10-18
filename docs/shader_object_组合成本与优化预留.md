@@ -182,7 +182,7 @@ v1.4.360 与系统头 v357 均含全部取值）：
 
 类比：constant offset = 静态链接（每纹理组合一个"二进制"，运行期零解析）；push index =
 动态链接/PLT（draw 时查一次）。选 constant offset 的理由：本机 CPU-bound（Phase 9 基线
-frame 7.10ms ≈ cpu.record 7.03ms，CPU 侧零余量，`docs/phase9_plan.md` §10），per-draw 索引解析
+frame 7.10ms ≈ cpu.record 7.03ms，CPU 侧零余量，`docs/archive/phase9_plan.md` §10），per-draw 索引解析
 方向相反；descriptor heap 是 RADV 实验特性，变体 source 更缺测试（踩洞史见
 `docs/DESCRIPTOR_HEAP_SPEC.md`、`heap_texture_spike`）；DGC 路径下执行集合绑定完全静态，
 push-index 会扩大 GPU 生成序列的正确性面。

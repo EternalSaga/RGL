@@ -7,7 +7,7 @@
 -- ⚠ 两条**非显然**的引擎事实（本靶实测踩出来的，改本文件前务必读）：
 --  ① 黑天靠**整段 environment 缺失**（env.mipRange = 0 ⟹ light.frag 天穹分支不进）。
 --     2026-10-18 探针重立起 `intensity = 0` 也能关天穹（sky 分支门控 mipRange>0 &&
---     intensity>0，docs/图变体收敛_plan.md §6.2）；本靶仍用「整段缺失」形态——更硬，
+--     intensity>0，docs/archive/图变体收敛_plan.md §6.2）；本靶仍用「整段缺失」形态——更硬，
 --     连 IBL 漫反射/镜面项一起归零。原 `environment.skybox` 键与 forward skybox pass
 --     已随刀②.2 删除（键出现 = 未知键 warn；deferred 的天穹总闸 = intensity）。
 --  ② forward 的 IBL 风格契约检查（validateEnvironmentContract：model_pbr_ibl 等风格

@@ -1828,7 +1828,7 @@ def graph_fact_predicate_checks() -> list[Warning]:
     - **传递存活**：被「已存活的谓词」在**函数体内**调用的谓词算活（`graphHasPassState` 的唯一
       问者是同模块的 `graphHasDeferredLight`，而后者有生产问者）。体边界用花括号配对取，
       不按文件粗算——按文件算会让两条**互相引用而都无人问**的死谓词彼此点亮 = 假绿。
-    - 零问者 = ERROR，处置二选一：接上问者，或删掉它（裁决句 → docs/配置正交性_plan.md §5.2
+    - 零问者 = ERROR，处置二选一：接上问者，或删掉它（裁决句 → docs/archive/配置正交性_plan.md §5.2
       「无消费者的机制删除或降级，不挂号」）。**不是**来登记额度——本规则没有基线文件。
       （本规则落地当天就抓到两条自建的零问者谓词 `graphHasAttachment` / `graphPassIndex`
       ——「先建后找」正是它要拦的动作，S1b/S3 有问者了再长回来。）
@@ -1895,7 +1895,7 @@ def graph_fact_predicate_checks() -> list[Warning]:
     return [Warning(GRAPH_FACT_PREDICATE_SOURCE_FILE, 0,
         f"图事实谓词 `{n}` 生产侧零问者、也不在任何存活谓词的调用链上 = 机制常驻、收益悬空"
         "（反面教材 = `OffGraphSchedule::isSchedulable`：接口 + 实现 + 单测都在、生产侧没人问）。"
-        "处置二选一：接上问者，或删掉它（→ docs/配置正交性_plan.md §5.2「无消费者的机制"
+        "处置二选一：接上问者，或删掉它（→ docs/archive/配置正交性_plan.md §5.2「无消费者的机制"
         "删除或降级，不挂号」）。🔴 本规则没有基线可登记——「先建后找」就是本条要防的形态。",
         "error") for n in SCAN_GRAPH_FACT_DEAD]
 

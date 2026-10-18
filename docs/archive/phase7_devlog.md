@@ -1,6 +1,6 @@
 # Phase 7 开发日志（滚动更新：D1 单灯 → D3 多灯 → culling → 重构批次）
 
-> **状态**：现行（滚动更新，批次 0–5（5=7b GPU culling/DGC，2026-09-09）+ 勘误 + 重构批次 3–5 + **批次 2 refine（IBL+skybox）+ 灯 entity 化（2026-09-10，Phase 7 主体收尾）** 已入册；测试主场景 Bistro Exterior；D1 = 单灯 G-buffer→light→swapchain 2-pass，D3 = 多灯延迟光照）。
+> **状态**：历史（归档 2026-10-18，Phase 7 已于 2026-09-10 收尾；滚动更新，批次 0–5（5=7b GPU culling/DGC，2026-09-09）+ 勘误 + 重构批次 3–5 + **批次 2 refine（IBL+skybox）+ 灯 entity 化（2026-09-10，Phase 7 主体收尾）** 已入册；测试主场景 Bistro Exterior；D1 = 单灯 G-buffer→light→swapchain 2-pass，D3 = 多灯延迟光照）。
 > 实施计划见 `git:phase7_plan.md`；本文件记过程、踩坑、决策与当前态，供连续性交接。
 
 ---

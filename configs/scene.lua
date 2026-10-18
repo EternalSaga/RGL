@@ -83,7 +83,7 @@ return {
         },
     },
     -- forward 规格（model/model_pbr/model_phong/model_pbr_ibl/model_vegetation/model_light）、
-    -- skybox 规格与 styles 表已随图变体收敛刀②.2 删除（docs/图变体收敛_plan.md §5）。
+    -- skybox 规格与 styles 表已随图变体收敛刀②.2 删除（docs/archive/图变体收敛_plan.md §5）。
     -- 本段非空 = 整表覆盖 C++ 默认集；deferred_geometry 本体与 transparent 族四条经 findSpec 的
     -- C++ 回落词表（kMeshFragSpecs）命中，不必在此列出。
 
@@ -126,7 +126,7 @@ return {
     -- faces PNG 路径。hdr_size = 重投影面边长（2 的幂，默认 2048）。
     -- intensity：官方 Falcor 配方为 10，但那是对其 irradiance 卷积归一后的校准值；本工程
     -- 简化 IBL 直接采 cubemap top-mip 平均（env 线性均值本就 ≈0.56），×10 必过曝。实测
-    -- 1.0 时 forward/deferred 建筑与背景曝光正常（docs/phase8_plan.md ②b/③a 记录）。
+    -- 1.0 时 forward/deferred 建筑与背景曝光正常（docs/archive/phase8_plan.md ②b/③a 记录）。
     environment = {
         hdr = "env/san_giuseppe_bridge_4k.hdr",
         hdr_size = 2048,
@@ -201,11 +201,11 @@ return {
     --      场景下这就是"地震"。⚠ 曾据「实机/软件EMA = 8.66×」判为多余机制，**该参考无效**
     --      （软件 EMA 在未抖基空间累积，引擎在抖动空间，不是同一个量）；已撤回。
     --      ✅ 2026-10-03 批 13.1d **该机制已用绝对口径独立证实**（不再是推测）：见下面
-    --      「整幅游动 = 机制不是 bug」那条与 docs/phase13_plan.md §1.9。
+    --      「整幅游动 = 机制不是 bug」那条与 docs/archive/phase13_plan.md §1.9。
     --    · 次因 = resolve 端零锐化补偿（sharpen/unsharp 零命中），只能解释部分糊、不解释震。
     -- 开的前置 = phase13 批 13.1（判据 = 上面那条「理想 N 相位平均」参考）+ 13.3。
     --
-    -- 2026-10-03 批 13.1c/d 实测更新（两条根因，全案见 docs/phase13_plan.md §1.8/§1.9）：
+    -- 2026-10-03 批 13.1c/d 实测更新（两条根因，全案见 docs/archive/phase13_plan.md §1.8/§1.9）：
     --  · 「边缘闪烁」= **Catmull-Rom 历史核写成奇函数**（三次项 a³ 应为 |a|³）⟹ t=0 权重
     --    (0,1,−3,8)、Σ=6 ⟹ 2D 直流增益 36× ⟹ 历史被 saturate 顶界后 AABB 判越界 ⟹ 98.3% 像素
     --    每帧拒收历史 = 输出退化单帧。**已修**（判据 = imgqa taa-swim 的 temporal-identity：
@@ -227,7 +227,7 @@ return {
     --    13.5 = 把 un-jitter **前移到 taa pass 输入侧** + 历史采样修正 c_{t−1} ⟹ 累积发生在
     --    基空间 ⟹ 静止机位历史**点采样零重采样**。tonemap 侧偏移已删（留着 = 双重 un-jitter）。
     --    `base_space` 现义 = **基空间累积开关**（门关 = 改前的 `base_space=false` 形态，
-    --    同构建可 A/B）。全案 → `docs/taa_history_space_plan.md`。
+    --    同构建可 A/B）。全案 → `docs/archive/taa_history_space_plan.md`。
     -- 2026-10-05 补记：**默认关的现行真实理由 = BIT-IDENTICAL 可预测性，不是画质。**
     -- 上面那两条画质账（震 / 糊 −49.2%）已在 13.1c/d · 13.1e · 13.2 · 13.5 修到游动 0.060px，
     -- "画质不合格"这个理由**已经不成立**，留着会让人去修一个修好的东西。真卡点是：TAA 开 =
@@ -266,7 +266,7 @@ return {
         -- 上面那句「唯一保护 = 既有邻域盒裁剪」因此是**双刃**：它既是鬼影的唯一保护，也是静止
         -- 闪烁的主要来源——所以本门是**消融/修法实验位**，不是给用户调画质用的。
         clip_mode = 13,             -- ★ **开 TAA 时的交付档位（批 14.5 转正）** = 13「α 也吃 gate」。
-        --   ⚠ 措辞纪律（`docs/phase13_plan.md` §红线B 已澄清，别再写"交付默认"）：本键**不是**
+        --   ⚠ 措辞纪律（`docs/archive/phase13_plan.md` §红线B 已澄清，别再写"交付默认"）：本键**不是**
         --   交付默认——出厂 `aa = "off"`（批 14.6 三态），**TAA 至今没有默认开**，卡点是位级基准
         --   不是画质（而 2026-10-09 已裁定：带时域历史的档**不做位比**，见上面那段更正）。说"交付态"要么指**出厂默认（TAA 关）**，要么指**开 TAA 时的那套配置**。
         --   转正判据（债-69 / 批 13.15b，`temporal-tail-step-arm13-fixes`）：臂 11 在去遮挡处

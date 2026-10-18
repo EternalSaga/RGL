@@ -330,7 +330,7 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 /** 风格 → 管线规格名（GltfPrimitive 适配层；判据本体 = scene_config::resolvePipelineSpecName，
  *  搬出去的理由 = 那条 blend 护栏要能被 `just test` 打到，而 main 的模块分区只有可执行文件
  *  能 import。原 forward 半边（styleMap + 缺 style 抛错）已随刀②.2 删除，
- *  docs/图变体收敛_plan.md §5。 */
+ *  docs/archive/图变体收敛_plan.md §5。 */
 std::string resolvePrimitiveSpecName(const SceneConfig& scene, const GltfPrimitive& prim) {
 	return resolvePipelineSpecName(scene, prim.materialName, prim.unlit, prim.alphaModeBlend);
 }
@@ -795,7 +795,7 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 		dgcStaticEnabled ? dgcStaticEntryCount : 0u);
 
 	// 天空盒管线条目（addSkyEntry + SceneEnv 回填）已随 forward 绘制机制删除
-	// （2026-10-18 图变体收敛刀②.2，docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物
+	// （2026-10-18 图变体收敛刀②.2，docs/archive/图变体收敛_plan.md §6.2：deferred 的天穹对应物
 	//  = env.intensity 总闸）。
 
 	// Phase 7 D1：deferred 资源。装配序——env/models 已分配，此处才分配

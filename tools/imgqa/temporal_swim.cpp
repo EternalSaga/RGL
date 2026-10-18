@@ -513,7 +513,7 @@ void pushCalibrationVerdicts(std::vector<Verdict>& vs, const AbsReadings& ar, co
             + "px）——没有它，① 可能只是量具坏了。T6（门开 + fb=1，无累积）游动 "
             + d6(ar.abs6.swing)
             + "px 只打印不判：它把「重采样本身的帧间差」与「游动」分开，是解读 ① 的旁证。\n"
-              "  · 阈值 0.35 的来历（先测后定，2026-10-04 本机）：见 docs/phase13_plan.md 批 "
+              "  · 阈值 0.35 的来历（先测后定，2026-10-04 本机）：见 docs/archive/phase13_plan.md 批 "
               "13.2 的实测表。留的不是「效果越好越严」的余量，而是**量具地板**——`freeShift` "
               "是相位相关拟合，静止对上静止时它自己的抖动/亚像素偏置就是零点几像素量级。\n"
               "  · 为什么判 swing 而不是判「离 R 的距离」：后者是画质量（模糊也算偏离），"

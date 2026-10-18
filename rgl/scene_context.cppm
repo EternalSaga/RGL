@@ -478,7 +478,7 @@ export inline bool casterInShadowVolume(const ShadowVolume& v, const glm::vec3& 
  * 写进 scene data 头 @48（SceneFrameData.envParams），pbr.slang readEnvParams 消费。
  * mipRange = cubemap mipLevels−1（上传期才知道，故 main 在 loadEnvCubeMapFiles 后填）；
  * 默认全 0 = 无环境（env 镜面/漫反射项黑、天穹关；deferred 的天穹总闸 = intensity，
- * docs/图变体收敛_plan.md §6.2）。
+ * docs/archive/图变体收敛_plan.md §6.2）。
  */
 export struct SceneEnv {
 	float intensity = 0.0f;
@@ -547,7 +547,7 @@ export struct SceneEnv {
 	float taaClipMode = 0.0f;
 	float taaClipSoft = 1.0f;
 	// Phase 5.5 批次 4 天空盒（skybox / skyboxPipeline 两字段）已随 forward 绘制机制删除
-	// （2026-10-18 图变体收敛刀②.2，docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物
+	// （2026-10-18 图变体收敛刀②.2，docs/archive/图变体收敛_plan.md §6.2：deferred 的天穹对应物
 	//  = env.intensity 总闸）。
 };
 

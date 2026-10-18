@@ -30,7 +30,7 @@ namespace RGL::imgqa {
 // 本变体在**交付配置**（deferred + env/IBL/AO/shadow 全开）+ **用户报障机位**上重测
 // 短窗 vs 长窗（两档显式 `feedback`，历史：长窗档曾由 `static_boost` 给出，批 13.14b 已删）
 // 的绝对残差，并顺带出债-47：`phaseAverageLuma` 梯度能量比
-// 的**线性域**读数（`docs/phase13_plan.md` §1.5 的 0.671 是显示空间旧账，本处只出数、改判由
+// 的**线性域**读数（`docs/archive/phase13_plan.md` §1.5 的 0.671 是显示空间旧账，本处只出数、改判由
 // 主 agent 记账，本工具不动那份文档）。
 //
 // 与 aa_target profile 的三处口径差异（每处都是被迫的，读数字前必读）：

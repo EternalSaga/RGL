@@ -1,4 +1,4 @@
-// present_timing.cppm — Phase 9.3 VK_EXT_present_timing 测量通路（docs/phase9_plan.md §4）。
+// present_timing.cppm — Phase 9.3 VK_EXT_present_timing 测量通路（docs/archive/phase9_plan.md §4）。
 // 只测不调度：present 挂 VkPresentTimingsInfoEXT（presentStageQueries = vkswapchain 探测到的
 // surface 支持掩码）+ VkPresentId2KHR（单调 present id，结果按 id 升序回收），每帧 collect
 // 读回 past timing → IPD（相邻 present 基准 stage 时间差）/ 基准缺失（spec：stage time 0 =

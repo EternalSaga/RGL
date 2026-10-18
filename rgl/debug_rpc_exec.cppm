@@ -12,7 +12,7 @@ namespace RGL {
 
 /**
  * HTTP POST RPC 调试通道**执行层 + 装配**（Phase 10b 批 11b.2；
- * docs/phase10b_plan.md §4 批 11b.2）。
+ * docs/archive/phase10b_plan.md §4 批 11b.2）。
  *
  * 分层：`debug_rpc` = 传输层（HTTP 线程 / 队列 / 超时与停机结算，**零 ECS 零协议**）；
  * 本模块 = 协议解析 → registry/渲染器套用 → `ConfigReloadHook` 帧边界挂点。它是

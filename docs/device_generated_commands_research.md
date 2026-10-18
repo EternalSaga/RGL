@@ -243,7 +243,7 @@ DGC 路与重放路消费同一序列。详见 `phase7_devlog.md` 2026-09-09 条
 
 ---
 
-## 六、引入步骤（计划随 Phase 7，已写入 `docs/next_roadmap.md`）
+## 六、引入步骤（计划随 Phase 7，已写入 `docs/archive/next_roadmap.md`）
 
 **全部完成（2026-09-09，Phase 7b 批次 5）**：1-6 均已落地，实际实现与 §4.4 勘误一致
 （PFN 解析、读回重放取代 IndirectCount、2j/2j+1 execution set 排布）。
@@ -284,4 +284,4 @@ DGC 路与重放路消费同一序列。详见 `phase7_devlog.md` 2026-09-09 条
 - 本地头文件：`/usr/include/vulkan/vulkan_core.h:23946-24011`（扩展块：enums/features/properties）、`:24020-24150`（structs）、`:24165-24235`（入口点）、`:7091/:2641-2642/:7176-7177`（COMMAND_PREPROCESS stage/access）
 - C++ wrapper：`vulkan.hpp:7416-7469`（raw 命令）、`:5806/:28286`（`vk::Device` 方法）、`:11118`（RAII）
 - 驱动实测：`vulkaninfo`（2026-08-22 本机双 GPU 基线 + 2026-09-24 Mesa 26.2.3 复核；现 RADV 无条件 advertise `descriptor_heap` 与 `device_generated_commands`，无需 `RADV_EXPERIMENTAL`）
-- 相关项目文档：`docs/nvidia_compatibility_report.md`（双驱动差异排查史）、`docs/DESCRIPTOR_HEAP_SPEC.md`（heap 排坑）、`docs/技术概念.md`（sync2 / push data / 缓冲访问规则）、`docs/next_roadmap.md` Phase 7
+- 相关项目文档：`docs/nvidia_compatibility_report.md`（双驱动差异排查史）、`docs/DESCRIPTOR_HEAP_SPEC.md`（heap 排坑）、`docs/技术概念.md`（sync2 / push data / 缓冲访问规则）、`docs/archive/next_roadmap.md` Phase 7

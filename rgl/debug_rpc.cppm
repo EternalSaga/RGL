@@ -59,7 +59,7 @@ export class RpcResponder {
 };
 
 /**
- * loopback HTTP 调试通道（Phase 10b 批 11b.2；docs/phase10b_plan.md §4 批 11b.2）。
+ * loopback HTTP 调试通道（Phase 10b 批 11b.2；docs/archive/phase10b_plan.md §4 批 11b.2）。
  *
  * **纯传输层**：只负责收请求 / 入队 / 超时与停机结算，不认识 registry、Vulkan、
  * 也不解析 JSON（协议执行 + 装配在 `debug_rpc_exec` 模块的 applier 里，同

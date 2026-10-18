@@ -377,7 +377,7 @@ export struct RuntimeConfig {
 	 * **纯派生件**——唯一置重点 = `applyAaKey`（aa=fsr 隐含打开，FSR 的 motionVectors
 	 * 输入就是那张图），消费侧对派生关系无感知。旧「独立键（TAA 重投影线是非 FSR 消费者）」
 	 * 裁决已被逐位实测推翻：aa=off / aa=taa 两档上 velocity 开关逐位相同（→ 本文档
-	 * docs/配置正交性_plan.md 拍板 C 的 ①–④ 档表）。
+	 * docs/archive/配置正交性_plan.md 拍板 C 的 ①–④ 档表）。
 	 *
 	 * 开 = 每帧多一个全屏 pass（读 depth、写 RGBA16F）+ 一张渲染分辨率 RGBA16F RT。
 	 */
@@ -626,7 +626,7 @@ export struct RuntimeConfig {
 };
 
 /**
- * 解析器键轨迹（`DiagnosticsKeyTrace` 同形，债-11：docs/gate_lint_plan.md §3-B 的
+ * 解析器键轨迹（`DiagnosticsKeyTrace` 同形，债-11：docs/archive/gate_lint_plan.md §3-B 的
  * 未知键 lint + 覆盖率护栏回灌 runtime.lua）。键名书写与 Lua 路径一致，嵌套块字段用
  * `表名.字段`（如 `meshlet.shadow_lod`）；数组形字段（headless_size/win_size 的 [1][2]）
  * 无键名，只记表名一个键。本 loader 没有门回显行 ⟹ 判据表叫 KnownKeys 而非 EchoKeys：

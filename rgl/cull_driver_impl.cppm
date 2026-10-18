@@ -187,7 +187,7 @@ std::expected<void, Error> CullDriver::harvest(uint32_t slot, const FrameDrawLis
 	auto& device_ = device.getDevice();
 	// 批 9.5（观测任务的头号数字）：这次无限超时同步等待自 Phase 9 起一直落在未归因段里、
 	// 从未被量过。单独成 zone 才能复核 Phase 9 当年"cull GPU 只 14µs ⟹ 否决读回延后一帧"
-	// 那条否决（详见 docs/phase9_plan.md §10）——债-30 的实测把它翻案了：等的不是 cull，
+	// 那条否决（详见 docs/archive/phase9_plan.md §10）——债-30 的实测把它翻案了：等的不是 cull，
 	// 是上一帧整帧排空。
 	const vk::Result cullWaitResult = [&] {
 		auto z = zone("cull.fenceWait");

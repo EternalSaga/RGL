@@ -215,7 +215,7 @@ Slang → SPV 构建时编译到 `build/rgl/generated_shaders/`。硬规则：**
   `docs/还债实测数据.md`（结案账目的实测数据 + 主 agent 亲验记录）· `docs/cpu_perf_plan.md`
   （CPU/GPU 读数与还账方案；`just cpu` 口径 + 基线表）· `docs/技术概念.md`（机制深版：
   §核心运行时模块表 = **唯一模块职责表** / §main 启动流 / §RPC 调试通道 / §构建检查工具机制 /
-  §构建 Windows 前置）· `docs/gate_lint_plan.md`（**加诊断门前看**）
+  §构建 Windows 前置）· `docs/archive/gate_lint_plan.md`（**加诊断门前看**）
 - **调研 / 活文档**：`docs/mdi_plan.md`（Multi Draw Indirect **可行性定案载体**；**动 indirect 前读，
   别重推一遍**）· `docs/compute_调研.md`（图外 compute 全景 / 渲染图**真实边界** / 队列归属事实基线 /
   **扩渲染图形态的定案载体**；**动 compute 或扩渲染图前读**，§9 负知识别再重查）

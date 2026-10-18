@@ -35,7 +35,7 @@ import vk_renderer;
 import frame_draw_list;
 import render_graph;
 import render_graph_config;
-import gate_lint;  // 门组合自检（启动期一次，docs/gate_lint_plan.md §3-C）
+import gate_lint;  // 门组合自检（启动期一次，docs/archive/gate_lint_plan.md §3-C）
 import scene_config;
 import gltf_loader;
 import model_importer;
@@ -50,7 +50,7 @@ import camera_config;
 import runtime_config;  // 2026-09-08 env→配置：runtime.lua（headless/窗口/llm 截图）
 import diagnostics;      // diagnostics.lua 诊断单例（须先于一切 GPU 对象构造 setDiagnostics）
 import shadow_config;    // 批 N6a：configs/shadow.lua（阴影路线枚举）——本批**只回显不回灌**
-import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/phase9_plan.md 批 9.1）
+import profiler;         // Phase 9：帧循环 zone 收口 dump（docs/archive/phase9_plan.md 批 9.1）
 import gpu_profiler;     // Phase 9.2：GPU 时间戳会话（main 栈持有 = device 生命周期内）
 import llm_debug;
 import imgui_layer;  // Phase 10 批 10.1：IMGUI 调试面板层（main 装配 = 唯一认识 imgui 的地方之一）
@@ -584,7 +584,7 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 			compiledGraph.error().describe()));
 	// deferredMode = **图事实**（刀②）：编译图里有没有人在跑 deferred 光照。装配层据此
 	// 决定 G-buffer 槽 / light 条目 / HDR 链——消费图真值而非配置意图（旧 variant 双源
-	// 及其对账 lint 已随 `docs/图变体收敛_plan.md` §4 拆除）。
+	// 及其对账 lint 已随 `docs/archive/图变体收敛_plan.md` §4 拆除）。
 	const bool deferredMode = graphHasDeferredLight(compiledGraph->passes);
 	return CompiledGraphResult{std::move(*compiledGraph), std::move(desc),
 		deferredMode, taaDecorated, velocityDecorated, aoApplyDecorated, ssrDecorated,
@@ -592,7 +592,7 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 }
 
 /**
- * 门组合自检（gate_lint 批 §3-C，docs/gate_lint_plan.md）：启动期跑一次全量表。
+ * 门组合自检（gate_lint 批 §3-C，docs/archive/gate_lint_plan.md）：启动期跑一次全量表。
  * 门在进程内不可变（setDiagnostics 全仓仅此一处运行期调用）→ 结论对全程权威。
  * 时序契约 = compileGraphOrThrow 之后（要图事实）、GPU 大对象装配之前（findings
  * 早于一切渲染日志，先于问题现场）。lint **不阻止启动**（诊断门不该让程序起不来）。
@@ -762,7 +762,7 @@ int main() {
 		// compileRenderGraph 校验 + barrier 布局链推导，任何图错误启动期
 		// 报错退出（Renderer 构造校验器兜底执行器可解析性）。
 		// 选路（2026-10-18 图变体收敛刀②）：文件有 attachments/passes = 自定义图，
-		// 否则 = 内建 deferred；variant 枚举与 forward 图本体已删（docs/图变体收敛_plan.md）。
+		// 否则 = 内建 deferred；variant 枚举与 forward 图本体已删（docs/archive/图变体收敛_plan.md）。
 		// 批 14.6：TAA 图形态与 FSR 开关都是 aa 三态推导（原 scene.taaEnabled / fsr_upscaler
 		// 键已删）；velocityField 在 aa=fsr 时已被解析期隐含打开（单一来源在解析处）。
 		// 批 15.1 前半：四个图形态开关（taa/velocity/fsr/ssr）改由 configs.runtime 一次传入
@@ -772,7 +772,7 @@ int main() {
 		if (auto* logger = RLLogger::getInstance())
 			logger->info("RenderGraph: {} attachments / {} passes compiled",
 				graphResult.graph.attachments.size(), graphResult.graph.passes.size());
-		// 门组合自检（gate_lint 批，docs/gate_lint_plan.md §3-C）
+		// 门组合自检（gate_lint 批，docs/archive/gate_lint_plan.md §3-C）
 		runGateLint(configs.runtime, vkDevice, graphResult);
 		// Renderer 构造下移至 deferred G-buffer RT / light 管线就绪之后（deferred 模式需在构造前
 		// addLightEntry 供 Renderer 取 light 管线下标）；compiledGraph 此时保持存活（下方 move 进 Renderer）
@@ -874,7 +874,7 @@ int main() {
 		// 声明序在 registry 块内其后 = 逆序析构先释放服务再毁 registry ctx 闭包。
 		auto pickingService = wirePicking(registry, vkResources, rtCache, backEnd.renderer);
 
-		// HTTP POST RPC 调试通道（Phase 10b 批 11b.2，docs/phase10b_plan.md）：门 =
+		// HTTP POST RPC 调试通道（Phase 10b 批 11b.2，docs/archive/phase10b_plan.md）：门 =
 		// diagnostics.rpc（默认关；与 imgui 门独立，headless 也可用）。门关 / bind 失败
 		// 都降级 nullptr。声明序在 registry/assets/backEnd 之后 = 析构序其先 →
 		// try 块退出（帧循环已结束，configReloadTick 不会再跑）时 ~DebugRpcServer =

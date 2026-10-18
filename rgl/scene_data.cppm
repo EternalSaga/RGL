@@ -324,7 +324,7 @@ static_assert(kSceneDataShadowParamsBytes == 128,
  *  **基空间**（无抖动网格），不再住抖动空间。做法 = taa.frag 把**本帧**输入按 c_t 做
  *  un-jitter 重建后再进时域混合 ⟹ 混合结果天然基空间 ⟹ 历史不再每帧被亚像素重采样
  *  （静止机位下重采样偏移恒 0）。这修掉「固定频率 + 固定位置」的 16 帧周期边缘 shimmer。
- *  全案 → `docs/taa_history_space_plan.md`。**本区六段的字节布局与偏移全部未变。**
+ *  全案 → `docs/archive/taa_history_space_plan.md`。**本区六段的字节布局与偏移全部未变。**
  *
  *  - `prevViewProj`（mat4, 64B）= 上一帧**抖动后**的 proj·view。重投影公式：
  *      world = (sceneData@64 skyInvViewProj) · clip(uv, depth)   ← 本帧抖动后的逆矩阵
@@ -387,7 +387,7 @@ static_assert(kSceneDataTaaOffset == 723456,
  * 批 13.5 把 un-jitter 从 tonemap **前移到 taa 的输入侧** ⟹ 混合结果天然基空间 ⟹ 历史
  * 不再被亚像素重采样（静止机位偏移恒 0）⟹ 两个症状同源一起消。
  * tonemap 侧的 `+c_t` 偏移随之删除（留着 = 双重 un-jitter，比改前更糟）。全案 →
- * `docs/taa_history_space_plan.md`。
+ * `docs/archive/taa_history_space_plan.md`。
  *
  * 为什么偏移仍由 CPU 算好、shader 只管减：与批 13.2 同理由（把口径判定留在 CPU 一处）。
  * 本字段**无门标志位**——它不是门，是数据：TAA 关 / `jitter_scale=0` ⇒ `jitterPx = 0`

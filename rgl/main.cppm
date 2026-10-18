@@ -73,7 +73,7 @@ export std::string configPath(const char* fileName);
 export std::optional<StartupConfigs> loadAllConfigs();
 
 /** 渲染意图图编译产物（图 + deferred 路线标志 + 路线意图枚举，按 variant 求值）。
- *  variant 随产物带出供 gate_lint 交叉校验（意图 vs 图事实，docs/gate_lint_plan.md §3-A）。 */
+ *  variant 随产物带出供 gate_lint 交叉校验（意图 vs 图事实，docs/archive/gate_lint_plan.md §3-A）。 */
 export struct CompiledGraphResult {
 	CompiledRenderGraph graph;
 	// B2-4③′（D5 第一刀）：图描述本体随产物带出 → move 进 Renderer::DynamicRenderGraph。

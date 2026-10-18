@@ -281,7 +281,7 @@ static void applyProbeAndNumericGates(sol::table& root, DiagnosticsConfig& cfg,
 	// izb.dump_frame，clamp 也搬去 shadow_config_impl；旧键出现即启动失败）。
 }
 
-// ———— 门回显（2026-10-02 派生化，docs/gate_lint_plan.md §3-B）————
+// ———— 门回显（2026-10-02 派生化，docs/archive/gate_lint_plan.md §3-B）————
 
 namespace {
 

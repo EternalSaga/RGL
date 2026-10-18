@@ -1,6 +1,6 @@
 # Phase 14 · 时域线换轨：vendor FSR 3.1.4（VK 后端考古）+ 逐像素速度场
 
-> **状态**：现行（2026-10-07 立项）。承接 `docs/phase13_plan.md`（TAA 收口，**本 phase 开工即冻结**）。
+> **状态**：现行（2026-10-07 立项）。承接 `docs/archive/phase13_plan.md`（TAA 收口，**本 phase 开工即冻结**）。
 > **一句话**：Phase 13 证明「门唯一的输入是相机派生量」是天花板（§1.22 三次失明），本 phase
 > 不再修那扇门，而是**换输入面**：先做逐像素速度场（债-71），再把 AMD FSR 3.1.4 的 Vulkan
 > 后端从 1.1.4 里捞出来接上。
@@ -1356,7 +1356,7 @@ EASU 的 un-jitter 开始起作用；修复前那个更高的边缘值是**错�
   消费侧对隐含关系无感知；`off/taa` 态不碰它 ⟹ 不会凭空冒出 velocity pass。
   ⚠ **本条已被推翻**（债-129 S2.5-C，2026-10-17）：「非 FSR 消费者」经逐位实测不成立，
   `velocity_field` 键**已撤并删除**，`velocityField` 降为纯派生件（唯一置重点仍是 `applyAaKey`
-  那一行）→ `docs/配置正交性_plan.md` 拍板 C。
+  那一行）→ `docs/archive/配置正交性_plan.md` 拍板 C。
 
 ### 红线：四条截图逐位复现（`just shot --frames 8`，基底 = 仓库 `configs/`）
 

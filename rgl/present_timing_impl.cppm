@@ -1,4 +1,4 @@
-// present_timing_impl.cppm — Phase 9.3 VK_EXT_present_timing 测量实现（docs/phase9_plan.md §4.2）。
+// present_timing_impl.cppm — Phase 9.3 VK_EXT_present_timing 测量实现（docs/archive/phase9_plan.md §4.2）。
 // 结构：构造期钉 pNext 链与轮询缓冲 → collect 每帧「句柄变化复位 → 时间域 → 刷新属性 →
 // 校准 → 读回 → 逐条消费 → 周期摘要」→ attach/onQueueFull 供帧会话调用。
 // queue-full 回退语义（wsi.adoc「队列操作仍入队、信号量 wait 仍执行」）：重试 present 由

@@ -53,7 +53,7 @@ export struct DiagnosticsConfig {
 	bool dgcStatic = false;             // RADV 静态 shader DGC 路（staticGraphicsIndirect 设备的 spike 门，默认关，见 docs/archive/radv_static_dgc_spike.md）
 	CullReplayMode cullReplay = CullReplayMode::cpu;  // 剔除结果驱动方式（cull_replay；三态语义 → `CullReplayMode` 注释，方案与定价 → docs/cpu_perf_plan.md §4）。默认 cpu = 交付路径不让 CPU 等 GPU 读回
 	uint32_t frameStats = 0;            // 帧时间统计：每 N 帧打一行 avg/min/max（0 = 关；headless 吞吐 ≈ GPU-bound）
-	uint32_t profiler = 0;              // Phase 9 zone profiler 帧窗口 N（0 = 关；最近 N 帧 → 退出 dump trace+stats，docs/phase9_plan.md）
+	uint32_t profiler = 0;              // Phase 9 zone profiler 帧窗口 N（0 = 关；最近 N 帧 → 退出 dump trace+stats，docs/archive/phase9_plan.md）
 	bool imgui = false;                 // Phase 10 IMGUI 调试面板总开关（帧末 UI 段 + 输入拦截；headless 无窗天然 no-op，docs/archive/phase10_plan.md）
 	bool configReload = false;          // Phase 10 批 10.3 配置热重载总开关（帧边界轮询源 configs/：scene/camera/log_level 的 T1 字段；imgui 面板开关本身不可热载=需重建后端，docs/archive/phase10_plan.md）
 	bool shaderReload = false;          // Phase 10 批 10.4 shader 热重载 L1（帧边界 fork slangc 重编源 shaders/ + 同签名守卫换入；slangc/flags/源目录缺失降级关，docs/archive/phase10_plan.md）
@@ -72,7 +72,7 @@ export struct DiagnosticsConfig {
 	uint32_t cameraProbeFrame = 0;      // 脚本化相机键盘探针（窗口模式）：第 N 帧（0 起）按住移动键 holdFrames 帧，验证 eventSystem→InputFilter→cameraSystem 输入链并打 PASS/FAIL；0 = 关（2026-09-28 "面板吞 WASD" 回归护栏）
 	uint32_t cameraProbeKey = 0;        // 探针 SDL 键码（须为 Camera.keys 绑定的 W/A/S/D 之一；lua 里写单字母，解析期映射）
 	uint32_t cameraProbeHold = 0;       // 按键保持帧数（<1 解析期回落 8）
-	bool rpc = false;                   // Phase 10b HTTP POST RPC 通道（只绑 127.0.0.1；独立于 imgui 门，headless 可用，docs/phase10b_plan.md）
+	bool rpc = false;                   // Phase 10b HTTP POST RPC 通道（只绑 127.0.0.1；独立于 imgui 门，headless 可用，docs/archive/phase10b_plan.md）
 	uint32_t rpcPort = 8788;            // RPC 监听端口（bind 失败 = 日志降级关，不崩）
 };
 
@@ -88,7 +88,7 @@ export DiagnosticsConfig& diagnostics();
 export void setDiagnostics(const DiagnosticsConfig& cfg);
 
 /**
- * 解析器键轨迹（2026-10-02 门回显派生的覆盖率护栏输入，docs/gate_lint_plan.md §3-B）：
+ * 解析器键轨迹（2026-10-02 门回显派生的覆盖率护栏输入，docs/archive/gate_lint_plan.md §3-B）：
  * 记录解析器**实际读过**的键与 Lua 文件里**实际出现**的顶层键。两个用途：
  *   ① 单测断言「读过的键集合 == 回显表键集合」——漏一个方向都红（回显抄漏 = 撒谎行，
  *      回显多写 = 陈旧键）；

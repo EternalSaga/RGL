@@ -1,4 +1,4 @@
-// gpu_profiler_impl.cppm — Phase 9.2 GPU 时间戳实现（docs/phase9_plan.md 批 9.2）。
+// gpu_profiler_impl.cppm — Phase 9.2 GPU 时间戳实现（docs/archive/phase9_plan.md 批 9.2）。
 // 结构：构造三重门控建 pool → frameBegin 读回两段+校准+归并+主段复位记主 CB →
 // begin/cullBegin 成对时间戳（配对栈、双段游标）→ 析构观测日志。读回走裸 C
 //（vk::raii 未包装 getQueryPoolResults；每段只读实际写入部分，非 SUCCESS 计 drops 跳段）。

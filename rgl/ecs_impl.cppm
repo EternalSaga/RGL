@@ -20,7 +20,7 @@ import render_list;
 import runtime_config;  // LlmDebugConfig（renderSystem 参数类型）
 import diagnostics;     // texel_canary 诊断单例（configs/diagnostics.lua）
 import input_probe;     // 脚本化输入探针（2026-09-28 输入链回归护栏，帧循环 tick）
-import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/phase9_plan.md）
+import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/archive/phase9_plan.md）
 import gpu_canary;
 import param_registry;   // DebugPanelState（批 10.7 点选跳页请求位）
 import scene_context;

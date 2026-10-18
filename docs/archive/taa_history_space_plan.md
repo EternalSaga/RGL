@@ -1,6 +1,6 @@
 # TAA 历史坐标空间改造（基空间累积）
 
-状态：**现行**（2026-10-04 立，**已落地** = §4 改动面清单全 ✅）。本文 = 本改造的权威载体与执行清单。
+状态：**历史**（归档 2026-10-18；2026-10-04 立，已落地 = §4 改动面清单全 ✅）。本文 = 本改造的权威载体与执行清单。
 关联：`phase13_plan.md`（TAA 收口 phase，本改造是其 13.1d/13.2 的**续命**）、
 `taa_plan.md`（T0–T4 判据收口史）、`还债总账.md` 债-33 / 债-38。
 
@@ -194,7 +194,7 @@ Step 2 依赖 Step 1。Step 3 若晚于 Step 2 = 双重 un-jitter，**比现状�
 | `rgl/shaders/tonemap.frag.slang` | ✅ Step 3 删 `baseSpaceUv` + `sampleHdrBaseSpace`；CR 选型实测数据**搬**到 taa.frag（先补目的地再删源） |
 | `rgl/scene_config*.cppm` + `configs/scene.lua` + `main_impl.cppm` | ✅ 门 `base_space` **改义**（不删）+ 注释重写 |
 | `tests/test_taa_jitter.cppm` | ✅ 新增「静止机位不变量」用例（主断言 + 三条闭式反向）；新增 `enginePixelFromNdc` helper |
-| `docs/gate_lint_plan.md` | ➖ **不用改**（门数不变，§3.1 Step 3 改义裁决的直接收益） |
+| `docs/archive/gate_lint_plan.md` | ➖ **不用改**（门数不变，§3.1 Step 3 改义裁决的直接收益） |
 | `tools/imgqa/` | ⏳ 新判据 `taa-noise`（§5，**待做**）；`temporal-base-space` 阈值待重测回填 |
 
 ---

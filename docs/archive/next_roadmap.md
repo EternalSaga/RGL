@@ -9,7 +9,7 @@
 > 见 [架构债务-依赖方向审计.md](架构债务-依赖方向审计.md)，`b1788e0`）；下一步路由 → 各 phase 计划文件，当前 `phase13_plan.md`）
 >
 > **阶段号重排（2026-09-27）**：**Phase 10 = 调试交互**（配置热重载 + IMGUI 参数面板 + shader 热重载
-> + 点选取参，计划 = [phase10_plan.md](archive/phase10_plan.md)）插队，**阴影整体顺延为 Phase 11**。
+> + 点选取参，计划 = [phase10_plan.md](phase10_plan.md)）插队，**阴影整体顺延为 Phase 11**。
 > 历史代码注释里的旧口径 "Phase 10 批次 0"（= 2026-09-10 Renderer 拆分）**一律不改**；
 > 本文件与 AGENTS/技术概念等活文档中的"阴影 Phase 10"引用已全部改为 Phase 11。
 
@@ -54,14 +54,14 @@ shader/vkresources/vkrenderer import 生成模块，硬编码常量清零。细�
 tinygltf + `gltf_loader`（去索引展开 + 包围球）+ `model_importer`（顶点上传 heap + registerScene
 ECS 化）+ `scene_config`；第二条反射管线（`model_types_generated`）；前置解耦 = `RenderState`
 动态状态外移 + Renderer 管线表（`PipelineEntry`）；自适应 near/far。**ECS 五规范自此为参照系**
-（合规审查 → [archive/ecs_compliance_review.md](archive/ecs_compliance_review.md)）。
+（合规审查 → [archive/ecs_compliance_review.md](ecs_compliance_review.md)）。
 细节 → `git:phase2_plan.md`（含 §7 计划外发现）。
 
 ### Phase 3：纹理管理（已完成 2026-08-28）
 bindless 纹理：`AssetTable`（TextureAsset/MaterialAsset）+ 自由函数上传（`TexturePool` 类未落地——
 main 局部对象 UAF 教训，整体降为自由函数 + `allocSlot` 统一分配）+ **独立 sampler heap**；
 描述符统一步长 = `max(imageDescriptorSize, bufferDescriptorSize)`（三驱动实测：RADV/Intel/NVIDIA
-全 PASS）。细节 → `git:phase3_plan.md` + [archive/heap_texture_research.md](archive/heap_texture_research.md)。
+全 PASS）。细节 → `git:phase3_plan.md` + [archive/heap_texture_research.md](heap_texture_research.md)。
 
 ### Phase 4：多 Shader + 统一契约（已完成 2026-08-28/30）
 `material.slang` `DrawArgs` 超集（第三条反射管线，scalar 布局）+ `shader_registry` 管线去重
@@ -133,7 +133,7 @@ per-light 颜色、距离衰减）headless 零 VVL error；forward 只读 `light
   `cull.comp.slang`）+ `vk_indirect_commands`（DGC RAII，8 入口点 PFN via `vkGetDeviceProcAddr`）+
   `vkrenderer` 双路（DGC execute / **读回重放**——IndirectCount 无 per-draw push data 故弃用，
   见 research §4.4 勘误）；能力门控（`DgcSupport.graphicsIndirect`）。DGC 路径待 NVIDIA 机实测。
-  设计细节与双驱动实测 → [device_generated_commands_research.md](device_generated_commands_research.md)。
+  设计细节与双驱动实测 → [device_generated_commands_research.md](../device_generated_commands_research.md)。
 - **静态 shader DGC（RADV 路，2026-09-10 spike 完结）**：功能验证通过（VVL 零 error +
   1px tie 级回归），但满槽孔洞实现 preprocess ×N 慢重放 1.85× → **默认不开**
   （`diagnostics.dgc_static` 门控保留）。翻盘前提 = 紧凑分桶（∝visible）+ 去 cull 同步等待。
@@ -193,7 +193,7 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
   **进度（2026-09-27）**：批 9.1（① CPU zone profiler，零宏 `RGL::zone()`）/ 9.2（③ GPU
   时间戳 + 校准同轴）/ 9.3（④ `VK_EXT_present_timing` 测量通路 + 9.3a `present_mode`
   双模式开关）/ 9.4（⑤ 判定收口）全部落地，默认关全部 BIT-IDENTICAL；②（gprof/perf）
-  未做（判定不依赖）。实施与实测记录 = `docs/phase9_plan.md` §3.4/§4.4/§10；
+  未做（判定不依赖）。实施与实测记录 = `docs/archive/phase9_plan.md` §3.4/§4.4/§10；
   跨驱动状态 = `docs/nvidia_compatibility_report.md` §九。
   **⑤ 判定结论（本机 forward 1280×720，RADV Strix Halo + KWin，165 Hz）**：
   ① **CPU-bound** —— profiler 判定行 `frame=7.10ms cpu.record=7.03ms gpu.frame=2.98ms
@@ -214,11 +214,11 @@ Phase 9：性能观测（profiler）——先回答"CPU-bound 还是 GPU-bound"�
      （激活 / queue-full 回退 / 校准全跑通、VVL 零报警）；NVIDIA / Intel anv 待跨机复测，
      判读口径 = `docs/nvidia_compatibility_report.md` §九
   ⑤ 判定 + 决策输入：CPU 帧时 vs GPU 帧跨度 vs IPD 三方对比 —— **✅ 批 9.4 成文
-     （`docs/phase9_plan.md` §10）**：本机 CPU-bound；④c"读回延后一帧"**否决**；
+     （`docs/archive/phase9_plan.md` §10）**：本机 CPU-bound；④c"读回延后一帧"**否决**；
      帧率上限**当前不需要**；下一步头寸 = `drawFrame` 内部 CPU 细分（可选批 9.5）
     ↓
  Phase 10：调试交互（配置热重载 + IMGUI 参数面板 + shader 热重载 L1 + GPU id 点选取参）
-   **计划已立（2026-09-27，[phase10_plan.md](archive/phase10_plan.md)），插队阴影（原 Phase 10 → 11）**。
+   **计划已立（2026-09-27，[phase10_plan.md](phase10_plan.md)），插队阴影（原 Phase 10 → 11）**。
    总纲 = **单一事实来源**（控件字段结构引用反射生成物，注册表不镜像布局；ObjectDraw 材质表
    单源化为前置批）。批次：10.1 imgui 骨架 ✅ / 10.2a ObjectDraw 单源化 ✅ /
    10.2b 灯曝光控件 ✅ / 10.2c 材质控件 ✅ / 10.3 配置热重载 ✅（均 2026-09-28）/
@@ -259,7 +259,7 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
     湿面（`_Wet` 材质 roughnessFactor → effective 0.12）、"背光面过暗"（env 0.2→1.0 /
     sun 15→12 / exp 1.2→1.0，同材质阴影/受光线性比 0.0022 → 0.037）、SSAO（depth-only，
     默认 0.5，强度 0 逐位旁路）。计划与实际偏差（判据改了、11.0c 未做）见
-    [phase11_plan.md](phase11_plan.md) §8；排障细节见 调试历史 2026-09-29。
+    [phase11_plan.md](../phase11_plan.md) §8；排障细节见 调试历史 2026-09-29。
   ① 保守光栅化基建（VK_EXT_conservative_rasterization，RADV 26.2.1 已实测可用 rev 1）：
      深度写入保守化（重叠三角形不留缝）——CSM/HFTS 共同硬前提。
      **能力边界已实测（2026-09-29，phase11_plan.md §9）**：OVERESTIMATE 基线语义可用，
@@ -276,7 +276,7 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
      近场 CSM/PCSS 混合。**验收**：Bistro 场景光线步进软阴影视觉正确 + 成本 ≤X ms
      （**X = 3 ms**，Phase 9 批 9.4 定的 GPU 侧余量基线：本机 forward 1280×720 的
      `gpu.frame` 2.98 ms / 165 Hz 预算 6.06 ms，超出即掉帧——注意本机现状是 **CPU-bound**，
-     CPU 录制侧无余量，详见 `docs/phase9_plan.md` §10）；
+     CPU 录制侧无余量，详见 `docs/archive/phase9_plan.md` §10）；
      **达不到即收手，CSM+PCSS 为最终交付**（The
      Division 自身近场也是 shadow map，HFTS 只负责远场）。优先走 FTIZB 路线
      （光栅管线 + 硬件保守光栅 + early-z，非重 compute）
@@ -292,7 +292,7 @@ Phase 11：阴影（大特性，一口气；风险分层 = CSM 承诺交付 + HF
        （无 ms 门），预算口径阶段 2 实测后定（见其 §4.4，替代上文 X=3 ms 口径）
     ↓
     ↓
-Phase 12：测试体系（**补立计划** 2026-09-30，[phase12_plan.md](phase12_plan.md)）——
+Phase 12：测试体系（**补立计划** 2026-09-30，[phase12_plan.md](../phase12_plan.md)）——
    12.1–12.3 滚动落地：tests/ 单测层（113 用例无 GPU 毫秒级）+ 设备原语层 +
    闭式解探针 + **imgqa**（C++，区域归因判据：objectID 反解可见 piece / 闭式解逐面
    预测 / 开关影响域域外恰为 0；反模式登记 ssim 等；排查渲染问题默认起手）。
@@ -300,7 +300,7 @@ Phase 12：测试体系（**补立计划** 2026-09-30，[phase12_plan.md](phase1
    12.4 三机跨机（字节锚点每机登记制）/ 12.5 qa_scenes C++ 重写 / 12.6 收尾。
     ↓
 Phase 13：TAA 收口（**2026-10-03 立项**，[phase13_plan.md](phase13_plan.md)；设计与踩坑账的权威
-   载体 = [taa_plan.md](taa_plan.md)，批 12.6 T0–T4 判据收口，优化项未动）。
+   载体 = [taa_plan.md](../taa_plan.md)，批 12.6 T0–T4 判据收口，优化项未动）。
    **立项理由不是"TAA 没做完"，而是三件更糟的事**：① T3 的三条 + T2 的一条验收被"跨帧历史每帧被
    `VK_IMAGE_LAYOUT_UNDEFINED` 销毁"这个 bug **空洞满足 / 作废**（历史是死的 ⟹ 按构造不可能有拖影；
    "无拖影/无残影"这类**负向观测**同时被"实现正确"与"实现根本没跑"满足），修好后一条都没重跑；

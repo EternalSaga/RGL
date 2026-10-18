@@ -1,4 +1,4 @@
-// profiler.cppm — Phase 9 CPU zone profiler 核心接口（docs/phase9_plan.md 批 9.1）。
+// profiler.cppm — Phase 9 CPU zone profiler 核心接口（docs/archive/phase9_plan.md 批 9.1）。
 // 零宏设计（D4 翻案 2026-09-27）：调用形态 auto z = RGL::zone("label");——
 // source_location 默认实参在调用点求值，捕获 file:line/function（本项目编译规则传
 // 绝对源路径，build/build.ninja CXX_COMPILER 行 → file 免费为绝对路径）。

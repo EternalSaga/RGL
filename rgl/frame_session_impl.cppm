@@ -12,7 +12,7 @@ import vkerror;
 import vk_device;
 import vk_swapchain;
 import vk_resources;
-import profiler;  // Phase 9 帧相 zone（fenceWait/acquire/submit/present，docs/phase9_plan.md）
+import profiler;  // Phase 9 帧相 zone（fenceWait/acquire/submit/present，docs/archive/phase9_plan.md）
 import present_timing;  // Phase 9.3：attach/onQueueFull/collect 方法声明可见（不靠可达性穿透）
 
 namespace RGL {

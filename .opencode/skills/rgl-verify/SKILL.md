@@ -34,7 +34,7 @@ just smoke --set 'shadow:mode="pcss"'            # 字符串值**必须带引号
 `shadow.lua`），白名单 = camera/diagnostics/render_graph/runtime/scene/shadow，不带前缀 = 打
 runtime.lua；② 原值是字符串的键给裸值会被拒（写进 lua 成了未定义全局 = nil = 静默回落默认，
 正是它拦下的形态）。**渲染路线没有开关**：`variant` 键与 `RgGraphVariant` 枚举已删
-（`docs/图变体收敛_plan.md` §4），要自定义图就在 `render_graph.lua` 里写 `attachments`/`passes`。
+（`docs/archive/图变体收敛_plan.md` §4），要自定义图就在 `render_graph.lua` 里写 `attachments`/`passes`。
 
 `tools/smoke.py`（stdlib-only）把一次性配置铺到临时目录并用 **`RGL_CONFIG_DIR`** 注入（引擎契约：
 只覆盖配置目录，资产仍按 CWD 相对）——**不改任何配置副本，因此没有"跑完要复原"的状态**。

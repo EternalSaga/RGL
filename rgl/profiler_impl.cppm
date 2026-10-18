@@ -1,4 +1,4 @@
-// profiler_impl.cppm — Phase 9 CPU zone profiler 实现（docs/phase9_plan.md 批 9.1）。
+// profiler_impl.cppm — Phase 9 CPU zone profiler 实现（docs/archive/phase9_plan.md 批 9.1）。
 // 结构：单例态（环形帧槽，window 定型后不变）→ Zone RAII 读写 → frameBegin 切槽 →
 // dump = 聚合 → Perfetto trace + stats JSON + rllogger 摘要三件套（§报告设计）。
 // 单线程假设：帧循环全在主线程；9.2 GPU 时间戳 / 9.3 present 记录经 profilerPush 同线程回填。

@@ -184,7 +184,7 @@ const std::vector<JudgmentInfo>& temporalStaticAnchorJudgments()
             "（extent 相对下限 K=0.02…0.4 / 退化时跳过裁剪）在压暗区**逐位不改**（−18.506 全同），"
             "因为 js=0 稳态与裁剪算子无关（收敛点由「历史怎么被夹」决定，不由「历史怎么被裁」决定）。",
            {"docs/taa_plan.md §7 第 12 条（历史销毁那次的恒等式检查）",
-            "docs/phase13_plan.md §1.8（CR 核奇偶性 bug 全案）",
+            "docs/archive/phase13_plan.md §1.8（CR 核奇偶性 bug 全案）",
             "rgl/shaders/taa.frag.slang `clampHdr` 头注释（2026-10-04：saturate 顶平 HDR ⟹ 亮部压暗 18.5 LSB 全案）"},},
         {"temporal-fitter-anchor", JudgmentFamily::TemporalStatic,
             "**阳性锚点 + 反向用例（拟合器自己的刻度）**。把零抖动参考 R 按**已知**位移 "
@@ -236,7 +236,7 @@ const std::vector<JudgmentInfo>& temporalStaticJitterSpaceJudgments()
             "36.7%（场景档差，见上）④ 额外符号 (+1,+1)、φ 每次启动常数（3/11/15 实测）。\n"
             "⚠ 搜索空间少一维，结论就会反过来：第一版只试「两轴同一符号」，永远匹配不上，于是"
             "把口径错配误读成『画面搬了但不按 Halton 搬』。",
-           {"docs/phase13_plan.md §1.8/§1.9", "git:调试历史 2026-10-03"},},
+           {"docs/archive/phase13_plan.md §1.8/§1.9", "git:调试历史 2026-10-03"},},
         {"temporal-swim-pixels", JudgmentFamily::TemporalStatic,
             "**单位 = 像素**，直接对应肉眼，不需要观测域/阈值换算：量「现行工作点（fb=.12、"
             "js=1）相邻两帧输出之间的整幅位移」（相位相关逐帧量出绝对位移后取相邻差）。闭式期望"
@@ -250,7 +250,7 @@ const std::vector<JudgmentInfo>& temporalStaticJitterSpaceJudgments()
             "fb=1 游动 0.674px / 1.058px，闭式期望 0.667px。\n"
             "⚠ 为什么不用「逐帧差均值（0..255）」当游动量：那是观测域的量，边缘覆盖翻转会把它"
             "放大/缩小，说不清「几像素」。像素就是像素。",
-           {"docs/phase13_plan.md §1.9", "git:调试历史 2026-10-03"},},
+           {"docs/archive/phase13_plan.md §1.9", "git:调试历史 2026-10-03"},},
         {"temporal-base-space", JudgmentFamily::TemporalStatic,
             "三条同时成立（批 13.2，门 `taa.base_space`）：① 门开态（T5 = T2 + 门）相邻帧整幅"
             "位移 ≤ **0.35×** 闭式抖动差；② 门关态（T2）游动仍 ≥ 0.75× 闭式 —— **阳性锚点**，"
@@ -263,7 +263,7 @@ const std::vector<JudgmentInfo>& temporalStaticJitterSpaceJudgments()
             "⚠ 本判据与 `temporal-swim-pixels` 是**对偶**的，不是替代：后者钉「门关态输出长在"
             "抖动空间」这个机制事实（门改了它就该红，那是回归），前者钉「门开态把它搬回了基"
             "网格」。两条在同一次运行里同时绿，才说明门是**开关**而不是**默认值漂移**。",
-            {"docs/phase13_plan.md 批 13.2", "git:调试历史 2026-10-04（游动 = 机制不是 bug）"},
+            {"docs/archive/phase13_plan.md 批 13.2", "git:调试历史 2026-10-04（游动 = 机制不是 bug）"},
         },
         {"temporal-jitter-phase", JudgmentFamily::TemporalStatic,
             "**量具自检（差分口径的相位标定）**：采集下标与引擎抖动序号之间差一个未知常数相位"

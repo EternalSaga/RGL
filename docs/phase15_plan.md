@@ -25,7 +25,7 @@ AO 当年选 depth-only 是**主动兼容**（开阔地面 AO 本来也不需要
 
 **待同步的旧措辞**（这三处仍把 D1 当硬约束，改完本 phase 才不会有人再查一遍）：
 `docs/phase11_plan.md` 的 §2.5「SSR 属后处理 → deferred-only，破 D1 对等」与 §3 决策表
-「AO 若走后处理会破 D1 对等」、`docs/next_roadmap.md` 的「D1 两路对等需豁免或 forward 补
+「AO 若走后处理会破 D1 对等」、`docs/archive/next_roadmap.md` 的「D1 两路对等需豁免或 forward 补
 G-buffer」。改写口径 = **豁免已给**，不是"待裁决"。另 `rgl/shaders/ao.frag.slang` 头注释
 「默认变体是 forward」是过期陈述，就地改。
 

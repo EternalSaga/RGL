@@ -465,7 +465,7 @@ void applyDeliverySceneLua(const std::string& outDir, const ProfileOpts& o)
 
 /// 合成 profile 的 render_graph.lua：整份拷模板（模板 = qa/configs/analytic，
 /// 刀② 后其内容为空表 = 内建 deferred；variant 键与重写机制已随 RgGraphVariant 删除，
-/// docs/图变体收敛_plan.md §6.1-2）。
+/// docs/archive/图变体收敛_plan.md §6.1-2）。
 void writeSyntheticRenderGraphLua(const std::string& outDir)
 {
     // render_graph.lua 定义图本身，**必须整份拷**（缺文件虽回落内建 deferred，但合成
@@ -588,7 +588,7 @@ void writeSyntheticSceneLua(const std::string& outDir, const ProfileOpts& o)
         // 环境（intensity 由 ProfileOpts 给；env 文件与交付配置同一张 .hdr）。
         // ⚠ 资产**恒发**保持既有口径：intensity=0 时 IBL 两路与天穹一起归零
         //   （light.frag 天穹分支门控 `mipRange>0 && intensity>0`，env 总闸语义，
-        //   2026-10-18 探针重立定案，docs/图变体收敛_plan.md §6.2）。原 skybox 标志
+        //   2026-10-18 探针重立定案，docs/archive/图变体收敛_plan.md §6.2）。原 skybox 标志
         //   （forward draw 侧 knob）已随刀②.2 删除，不再写出。
           + "    environment = { hdr = \"env/san_giuseppe_bridge_4k.hdr\", hdr_size = 2048,\n      intensity = "
             + std::to_string(o.envIntensity) + " },\n"

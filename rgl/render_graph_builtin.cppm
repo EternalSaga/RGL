@@ -46,11 +46,11 @@ RgPassDesc aoPass() {
 }  // namespace
 
 /** forward 图本体（defaultRenderGraphDesc / defaultRenderGraph，5-pass HDR 链）已删
- *  （2026-10-18 图变体收敛刀②.2，`docs/图变体收敛_plan.md` §5：生产侧选路在刀②.1 已改成
+ *  （2026-10-18 图变体收敛刀②.2，`docs/archive/图变体收敛_plan.md` §5：生产侧选路在刀②.1 已改成
  *  「文件有 attachments/passes = 自定义图，否则 = 内建 deferred」，forward 图自此不可达；
  *  forward-only frag 与 skybox 绘制机制同刀删除，原图声明见本文件的 2026-10-18 之前版本）。 */
 
-/** offscreen 图变体已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §2：零使用者）。
+/** offscreen 图变体已删（2026-10-18 刀①，`docs/archive/图变体收敛_plan.md` §2：零使用者）。
  *  blit pass 机制与 `RgAttachmentKind::offscreen` 固有能力**都不在本刀射程**——前者仍被
  *  本文件 selfCheck 的合成图与自定义 Lua 图消费，后者 pervasive（scene_hdr / ao / gbuffer_*）。 */
 
@@ -409,7 +409,7 @@ void selfCheckFormats(std::vector<std::string>& failures) {
 /** selfCheck 后半：内建 deferred 图结构断言（barrier 形态/present 转换）+ 格式词表断言
  *  （各段拆 selfCheckDeferred* / selfCheckFormats，本函数只做编排、保 push 顺序）。
  *  原「默认图 = 5 pass」那组 forward 结构断言已随图本体删除（2026-10-18 刀②.2，
- *  docs/图变体收敛_plan.md §5）；帧首 barrier / ao 深度转换 / tonemap 尾段 / present
+ *  docs/archive/图变体收敛_plan.md §5）；帧首 barrier / ao 深度转换 / tonemap 尾段 / present
  *  转换这些**活机制**的断言本体改喂内建 deferred 图（= 今天唯一内建图）。 */
 void selfCheckStructure(std::vector<std::string>& failures) {
 	// 结构断言（deferred 图 = 5 pass：geometry → light → **transparent** → ao → tonemap）：首 pass

@@ -30,7 +30,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "容差里的①会随热身不足自动放大（那是设计——①本来就是瞬态的上界），热身由 `warm = "
             "⌈6/α⌉` 公式保证并在表头打印，不由本条保证。",
             {"tools/imgqa/temporal_residual.cpp 常量表实测表（2026-10-05 首轮）+ 两条变异记录；"
-             "docs/phase13_plan.md 批 13.1"},},
+             "docs/archive/phase13_plan.md 批 13.1"},},
         {"temporal-residual-anchor", JudgmentFamily::TemporalMotion,
             "阳性锚点 = 「只抖不滤」（fb=1，输出 = 本帧光栅 = 闪烁本体）必须摆得起来。两条子判据"
             "同时成立：meanSwing ≥ **1×τ**、frac(swing>τ) ≥ 1%。实测 meanSwing 门关 0.021982 = "
@@ -45,7 +45,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "（丢掉 objectID，背景稀释掉 73% 面积）→ 本条以 0.0059 < 0.0067 红，而 ②④⑦ 三条"
             "**相对**口径全绿。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M7 / M11（2026-10-05）；"
-             "docs/phase13_plan.md 批 13.1 阳性锚点"},},
+             "docs/archive/phase13_plan.md 批 13.1 阳性锚点"},},
         {"temporal-residual-jitter-off", JudgmentFamily::TemporalMotion,
             "**无容差**（判**恰为 0**，不是接近 0）。`jitter_scale = 0` 掐掉的是唯一激励源：静止机位 "
             "+ 零抖动 ⟹ 每帧是同一张图 ⟹ swing 按构造恒等于 0。任何非零都与「抖动」无关，是量具或"
@@ -57,7 +57,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "⚠ 变异验过：反向组 `jitter_scale` 0→1 → 本条以 meanSwing 0.0226 ≠ 0 红（其余判据全绿，"
             "说明本条是这条激励源的唯一守卫）。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M8（2026-10-05）；"
-             "docs/phase13_plan.md 批 13.1 反向用例；本仓「guard/早退分支配反向用例」纪律"},},
+             "docs/archive/phase13_plan.md 批 13.1 反向用例；本仓「guard/早退分支配反向用例」纪律"},},
         {"temporal-residual-magnitude", JudgmentFamily::TemporalMotion,
             "⚠ **本条不是可见性阈值，也不是「越小越好」的质量线**——它是「现行工作点上信号还在场」"
             "的锚，所以写成**带**（下限红 = 信号消失向，上限红 = 回归向，两种红的处置完全不同，打印里"
@@ -66,7 +66,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "⚠ 为什么门开态要单独一条带：`taa.base_space` 消掉整幅**游动**后残差只剩**闪烁**，读数低 "
             "5.1×（0.0226 → 0.0045）。两种状态共用一条带必然一边恒绿一边恒红。\n"
             "⚠ **下限红不是回归**。已登记的机制（`temporal-swim-pixels` / "
-            "`docs/taa_history_space_plan.md`）说这个残差主要来自「历史住在抖动空间」；批 13.5 那条"
+            "`docs/archive/taa_history_space_plan.md`）说这个残差主要来自「历史住在抖动空间」；批 13.5 那条"
             "改造落地后本条**应当变红**——届时把下限改到新读数的 1/3 并在当前任务文档挂号。"
             "本条的价值是把「现行工作点 mask 平均还在摆 0.0226（= 靶白电平的 3.7%）」钉在账上，"
             "而 `temporal` 那四条**相对**比判据在它全绿的时候这件事零信息。\n"
@@ -78,7 +78,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "②④⑦ 三条相对口径全绿——下限不是装饰；反过来把 fb 从 0.12 推到 0.002（真的变好）本条"
             "**不红**（0.0158 仍在带内），这也是刻意的：本条不判好坏，只判「信号还在不在」。",
             {"tools/imgqa/temporal_residual.cpp 常量表实测表 + 变异记录 M9 / M11（2026-10-05）；"
-             "docs/phase13_plan.md §1.9 / 批 13.5"},},
+             "docs/archive/phase13_plan.md §1.9 / 批 13.5"},},
         {"temporal-residual-monotone", JudgmentFamily::TemporalMotion,
             "分辨力轴：α 从 0.12 推到 0.002（等效累积窗 16 → 500 帧，≫ 抖动周期 16）残差必须显著"
             "下降。上限 **0.90**（= 只许「不许变差」+10% 余量），实测门关 R4/R2 = 0.698、门开 0.049。"
@@ -93,7 +93,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "⚠ 变异验过：把 R2 的工作点也搬到 fb=0.002（与 R4 同档）→ 比值 1.001 > 0.90，本条红"
             "（而 ⑤ 仍绿——「工作点变好了」不是本条管的，「量具有没有力气」才是）。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M9（2026-10-05）；"
-             "docs/phase13_plan.md §1.9（累积压不掉游动）"},},
+             "docs/archive/phase13_plan.md §1.9（累积压不掉游动）"},},
         {"temporal-residual-convergence", JudgmentFamily::TemporalMotion,
             "带 [0.85, 1.02]，实测门关 0.8925 / 门开 0.9683。分子分母**同一个算子**（都是相位平均图"
             "的 Sobel 梯度能量，同 mask），差别只在累积窗——参考必须与被测项同坐标系（本仓烧过多次）。\n"
@@ -115,7 +115,7 @@ const std::vector<JudgmentInfo>& temporalResidualJudgments()
             "**全绿**——本条就是红线 1 的守卫，域选错不会静默给出一个看起来正常的数；把 R2 搬到长窗 "
             "fb=0.002 → 0.668 红。",
             {"tools/imgqa/temporal_residual.cpp 变异记录 M3 / M9（2026-10-05）；"
-             "docs/phase13_plan.md §1.5（理想 N 相位平均参考的定义与 bistro 0.671）+ 批 13.5 糊度线"},},
+             "docs/archive/phase13_plan.md §1.5（理想 N 相位平均参考的定义与 bistro 0.671）+ 批 13.5 糊度线"},},
     };
     return kPart;
 }

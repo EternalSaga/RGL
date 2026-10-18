@@ -2,7 +2,7 @@
 
 > **状态**：调研 → **已引入（仅测量）2026-09-27**（Phase 9 批 9.3 按本文第六节步骤落地；
 > 决策"暂不引入"于当日解除——RADV 侧 advertise 与运行时支持均已实测确认，见文末补记。
-> 本文仍是 API/语义底稿，**实现细节与四处分歧结论以 `docs/phase9_plan.md` §4.4 +
+> 本文仍是 API/语义底稿，**实现细节与四处分歧结论以 `docs/archive/phase9_plan.md` §4.4 +
 > `git:调试历史` 2026-09-27 为权威**）
 
 **日期**: 2026-08-22
@@ -235,7 +235,7 @@ eFifo 让驱动在 acquire 处阻塞等 vblank，渲染被压回刷新率；72% 
 
 本文档"暂不引入"的前提（驱动运行时支持未验证）已解除：本机 **Mesa 26.2.3
 RADV STRIX_HALO（Radeon 8060S）+ KWin Wayland** 已按下列顺序激活并跑通双 present 模式。
-**实现落位与逐条分歧见 `docs/phase9_plan.md` §4.4 与 `git:调试历史` 2026-09-27 条目**，
+**实现落位与逐条分歧见 `docs/archive/phase9_plan.md` §4.4 与 `git:调试历史` 2026-09-27 条目**，
 此处只记与本文原结论不一致之处：
 
 1. **§二"Swapchain 使能"/§3.2 探测链的 `swapchainSupportedFlags` 一步不可用作门槛**——

@@ -109,7 +109,7 @@ float4 main(LightInput input) : SV_Target0
     // class 3（2026-10-18）：unlit = baseColor 原样出像素（glTF KHR_materials_unlit），
     // 对齐已删除的 forward model.frag（历史对偶）：无光照、无自发光相加、无阴影。此前 deferred 没有 unlit 路
     //（deferred_styles 缺该风格 → 静默回落 deferred_geometry 被当 PBR 打光 = D1 破口，
-    // 探针重立时由 aa-coverage 电平自检抓出，docs/图变体收敛_plan.md）。早退在 env 采样前
+    // 探针重立时由 aa-coverage 电平自检抓出，docs/archive/图变体收敛_plan.md）。早退在 env 采样前
     // 安全：SampleLevel 显式 LOD 不取偏导（上方 ② 的"现行理由"），sky 分支本就同款早退。
     const bool isUnlit = materialClass > 2.5;
     if (isUnlit)

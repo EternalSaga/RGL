@@ -456,7 +456,7 @@ IMGQA_SELFTEST_DECL_COUNT_RE = r"(\d+)\s*条[\s\S]{0,24}?(?:testXxx 声明|测�
 # 谓词名单的真相源 = `render_graph.cppm` 的**命名约定**（导出自由函数 `graph<大写>(`）。
 # 🔴 名单不在本文件抄（抄名单反模式，AGENTS 明文）：抄一份「哪些是谓词」正是本规则要防的副本。
 # 反面教材 = `OffGraphSchedule::isSchedulable`：接口 + 实现 + 十几条单测都在，生产侧零调用者
-# ⟹「有查询面」被读成「已收口」。裁决句 → docs/配置正交性_plan.md §5.2。
+# ⟹「有查询面」被读成「已收口」。裁决句 → docs/archive/配置正交性_plan.md §5.2。
 GRAPH_FACT_PREDICATE_SOURCE_FILE = "rgl/render_graph.cppm"
 # 声明式（跨行）：`export <返回类型> graph<大写>(`。返回类型段不许吃 `;{}` ⟹ 防跨语句过匹配。
 GRAPH_FACT_PREDICATE_RE = r"^export\s+[^;{}]*?\b(graph[A-Z]\w*)\s*\("
