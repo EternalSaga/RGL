@@ -5,7 +5,6 @@ import diagnostics;
 import shadow_config;          // ShadowConfig（N6b：阴影门与 diagnostics 门同表申报）
 import runtime_config;         // RuntimeConfig（债-106：runtime.lua 的 meshlet 块整块接管不挑键）
 import render_graph;         // RgPassPlan / graphHasDeferredLight
-import render_graph_config;  // RgGraphVariant
 
 namespace RGL {
 
@@ -67,8 +66,9 @@ export struct GateFinding {
  * @param shadowDefaults 阴影比较基准（正常调用方传 `ShadowConfig{}`）
  * @param runtime 生效的运行配置（configs/runtime.lua；本表只吃其 meshlet 块）
  * @param runtimeDefaults 运行配置比较基准（正常调用方传 `RuntimeConfig{}` = 出厂态）
- * @param passes 编译图 pass 序列（deferred 判据 = graphHasDeferredLight，图事实层）
- * @param variant 配置层路线意图（与图事实的**分歧**在此交叉校验，不互相抹平）
+ * @param passes 编译图 pass 序列（deferred 判据 = graphHasDeferredLight，图事实层——
+ *   2026-10-18 刀② 起这是**唯一**的 deferred 真相源：原 `variant` 参数（配置层路线意图）
+ *   与它的交叉校验随 `RgGraphVariant` 枚举一起删除，见 docs/图变体收敛_plan.md §4）
  * @param env 设备/模式事实
  * @return findings（error 排前不保证——由 logGateFindings 按级别分发）
  */
@@ -76,7 +76,7 @@ export std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cf
 	const DiagnosticsConfig& defaults, const ShadowConfig& shadow,
 	const ShadowConfig& shadowDefaults, const RuntimeConfig& runtime,
 	const RuntimeConfig& runtimeDefaults, std::span<const RgPassPlan> passes,
-	RgGraphVariant variant, const GateEnv& env);
+	const GateEnv& env);
 
 /**
  * 规则表独立行覆盖的门名（= 覆盖率护栏输入之一；单测断言「独立行 ∪ 块条目」与

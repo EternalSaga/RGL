@@ -170,7 +170,7 @@ cv::Mat captureArm(const Arm& a, const std::string& tag, const std::string& prof
     std::error_code ec;
     fs::remove_all(profileDir, ec);
     ProfileOpts o;
-    o.deliveryConfigDir = projectRoot() + "/configs";  // 不重抄 env/ao/light/variant（第二真相）
+    o.deliveryConfigDir = projectRoot() + "/configs";  // 不重抄 env/ao/light（第二真相）
     o.overrideShadowRoute = true;
     o.shadowRouteMode = a.mode;
     o.shadowRouteSunDegrees = a.sun;

@@ -124,7 +124,7 @@ struct FacePrediction {
 // ═══════════════════════════════════════════ 配置目录生成 + 引擎生命周期
 
 /// 生成一份配置目录（基底 = qa/configs/analytic/ 的 render_graph.lua 整份拷——
-/// 它定义图本身，只给 {variant=...} 会得 0 个 swapchain 附件而启动失败，实测踩过）。
+/// 刀② 后模板内容为空表 = 内建 deferred；variant 键已随 RgGraphVariant 删除）。
 ///
 /// 两个真实陷阱在此收口：
 ///   ① lua 布尔必须小写——`{}` 直接格式化 C++ bool 若配错成 True 就是 nil 回落默认；
@@ -145,11 +145,10 @@ struct ProfileOpts {
     /// 为什么必须有这条：判据跑在**合成 profile** 上得出的绿不算绿。`temporal-identity`
     /// 就是这么假绿了一整轮——合成 profile + 默认机位上残差 0.016/255（绿），同一判据换到
     /// 交付配置 + 用户机位上是 **mad 1.688/255、逐像素最大 37、10.37% 像素 >2LSB**（红）。
-    /// 差异不是噪声而是**另一个场景**：交付配置是 `variant = "deferred"` + `scale = 0.01`
-    /// + izb_shadow + env/skybox/AO 全开，合成 profile 是 forward + 默认机位。
+    /// 差异不是噪声而是**另一个场景**：交付配置是 deferred + `scale = 0.01`
+    /// + izb_shadow + env/skybox/AO 全开，合成 profile（刀② 起同为 deferred）是默认机位。
     /// ⚠ 本模式生效时 `glb` / `skybox` / `shadowPass` / `lightDir` / `lightIntensity` /
-    ///   `exposure` **全部被忽略**（真相在交付配置里，工具再抄一份就是第二份真相）；
-    ///   `variant` 留空 = 尊重交付配置自己写的路线。
+    ///   `exposure` **全部被忽略**（真相在交付配置里，工具再抄一份就是第二份真相）。
     ///
     /// **例外**（`overridePicking` / `overrideEnvIntensity` / `overrideAoStrength` /
     /// `overrideShadowRoute` / `overrideLlmShot`）：这几件事不是"工具再抄一份真相"，而是
@@ -223,7 +222,6 @@ struct ProfileOpts {
     /// ⚠ 交付配置路径**不吃**它：那条路径整份替换 shadow.lua = 把交付调参抄第二份（会漂），
     /// 走 `overrideShadowRoute` 的逐键覆写。
     std::string shadowLuaOverride;
-    std::string variant;                   // "" = 模板默认（deferred，2026-10-18 探针重立随模板切换）；显式给值 = 拷贝后重写 variant 行
     /// 抗锯齿选路（批 14.6：引擎 `runtime.lua` 的 `aa` 三态键）。Off = **不写键** = 出厂态。
     /// 原 `taa` 布尔（scene.lua `taa.enabled`）与 `fsrUpscaler` 布尔（`fsr_upscaler`）都收进
     /// 这一个槽位——「谁做抗锯齿」不存在同时命中两条的写法，臂表因此**写不出**非法组合
@@ -801,11 +799,10 @@ int cmdProbe(const std::string& configDir, int x, int y, Vec3 albedo, double rou
 /// 采集走 `/shotburst`（连续 N 帧）——用 `/shot` 逐张拍不出任何结论。
 /// @param pairs 相邻帧对数（shots = pairs + 1；内部向上对齐到抖动周期 16 的整数倍）
 /// @param warm 每次采集前的预热帧数（TAA 历史收敛，feedback=0.12 ⇒ ≈19 帧）
-/// @param variant 渲染路线（默认 = 模板 deferred）
 /// @param baseSpace 批 13.2 `taa.base_space`（true = 输出在**基空间**）。⚠ 门开态下
 ///                S1（只抖不滤）的逐帧差不再由游动主导 ⟹ **S1/S2 比值失去原口径**，
 ///                两态都要跑才能解释数字（见 temporal.cpp 头注释「基空间口径」段）。
-int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace = false);
+int cmdTemporal(int pairs, int warm, bool baseSpace = false);
 
 /// 时域**绝对**残差（批 13.1 主判据）：`temporal` 的四条钉的是相对抑制比（S1/S2 ≥ 3.0），**没有任何
 /// 一条约束"收敛后逐帧残差的绝对大小"**（同一份输出里 TAA 开仍有 20.78% 像素逐帧变化、最大
@@ -817,7 +814,6 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 /// 的完整理由 → `temporal_residual.h` 头注释。
 /// @param periods 抖动周期数（≥2 的偶数；连拍 = periods×16 帧，两半同列 = 同绝对相位）
 /// @param warmMult 热身倍数：每组 warm = ⌈warmMult / feedback⌉ 向上对齐到周期（EMA 判据 6/α）
-/// @param variant 渲染路线（默认 = 模板 deferred）
 /// @param slowFeedback 单调性轴的低端 α（默认 0.002 = 等效窗 ≈500 帧 ≫ 抖动周期 16）
 /// @param baseSpace 批 13.2 门 `taa.base_space`（true = 输出在**基空间**）。本命令用它做
 ///                **归因**：门关读数 = 整幅游动 + 闪烁，门开读数 ≈ 只剩闪烁。
@@ -839,8 +835,7 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace 
 ///        批 13.7c：`--bistro` 每机位另出**亮度 × 梯度二维分带**（短窗 / 长窗 / 差三张表，
 ///        每格 share·rate·残余质量三数 + 阈值敏感性），判「残余闪烁住在高亮边还是普通边缘」；
 ///        口径与判决线（跑前写死）→ `temporal_residual.h` 同名段。
-int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
-    double slowFeedback, bool skipSlow, bool baseSpace = false, bool windowAbl = false,
+int cmdTemporalResidual(int periods, double warmMult, double slowFeedback, bool skipSlow, bool baseSpace = false, bool windowAbl = false,
     bool bistro = false, const std::string& camera = "all", double longFeedback = 0.01,
     bool diagBsOff = false, bool reject = false, bool clipAbl = false, double clipMode = 0.0,
     double clipSoft = 1.0);
@@ -1003,7 +998,6 @@ int cmdTemporalTailStep(const std::string& camera, double stepDist, int burst, i
 /// 逐杆覆盖率对拍闭式（批 12.6 T4，docs/taa_plan.md §7 第 10 条）：单帧量阶梯杆的
 /// 「黑度积分 vs 投影宽度」，TAA 关应当被二值覆盖量化破坏、TAA 开应当贴合闭式。
 /// 与采集时序无关（这是它优于逐帧差的地方）。
-/// @param variant 渲染路线（默认 = 模板 deferred）
 /// @param warm    预热帧数（feedback=0.88 的时间常数 ≈8.3 帧，预热不足会把初始黑历史
 ///                的残差算成覆盖率——判收敛必须靠调这个参数做对照，见 plan §7 第 10 条）
 /// @param feedback scene.lua `taa.feedback`（默认 0.12）。**消融用**：=1 时输出 = 本帧
@@ -1015,8 +1009,7 @@ int cmdTemporalTailStep(const std::string& camera, double stepDist, int burst, i
 ///                本判据是**静止态那条有闭式的**判据（黑度积分 = 闭式投影宽度），批 13.2 当年
 ///                就是拿它否掉 CR 的；批 13.8 拿它做「运动态新判据 ζ 选出的核在静止态是否
 ///                退化」的**第二条闭式判据**（不许只看新判据换核）。TAA 关组不消费本键。
-int cmdAaCoverage(const std::string& variant, int warm, double feedback,
-    bool baseSpace = false, double kernel = 0.0);
+int cmdAaCoverage(int warm, double feedback, bool baseSpace = false, double kernel = 0.0);
 
 /// AO 噪声量测（Phase 13 观测任务：把「SSAO 到底噪不噪」变成有数字有图有判据）。
 ///
@@ -1039,7 +1032,7 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback,
 ///               不得进契约区（阈值出处：AO 半径 0.5 m ÷ 该处米每像素 ≈ 31 px + 余量）
 /// @param pairs 时域组的相邻帧对数（向上对齐到抖动周期 16）
 /// @param doTemporal false = 跳过④（只跑静态三组，调试用）
-int cmdAoNoise(const std::string& glb, const std::string& camera, const std::string& variant,
+int cmdAoNoise(const std::string& glb, const std::string& camera,
     double strength, int radius, int pairs, bool doTemporal, bool doBistro);
 
 /// 真实场景 TAA **游动**量测（批 13.1b，phase13 §1.6 末的未定案）。
@@ -1055,8 +1048,7 @@ int cmdAoNoise(const std::string& glb, const std::string& camera, const std::str
 /// 引入的帧间差」与「游动」分开）。
 /// @param pairs 相邻帧对数（内部向上对齐到抖动周期 16 的整数倍）
 /// @param warm  预热帧数（历史收敛）
-/// @param variant 渲染路线（默认 = 模板 deferred）
-int cmdTaaSwim(int pairs, int warm, const std::string& variant);
+int cmdTaaSwim(int pairs, int warm);
 
 // ═══════════════════════════════════════════ 软影滤波轴量具（批 N6d 步 0）
 //

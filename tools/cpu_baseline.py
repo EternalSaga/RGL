@@ -108,10 +108,6 @@ ARMS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
         "「等上一帧 GPU 排空」；若不掉，stall 与 GPU 无关，另找原因",
         [("runtime.lua", "render_scale", "0.5")],
     ),
-    "forward": (
-        "forward 变体（无 G-buffer / light / ao pass）→ pass 结构差异的对照",
-        [("render_graph.lua", "variant", '"forward"')],
-    ),
     "cull-gpu-sync": (
         "cull_replay=gpu_sync：GPU 读回结果驱动 draw（= 债-30 还账前的原行为）。与 default "
         "之差 = 方案 C 的净收益；也是将来 DGC 的对照组。⚠ 本臂同时是 fence 生命周期的"

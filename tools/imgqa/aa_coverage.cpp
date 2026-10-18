@@ -177,14 +177,14 @@ CoverageReport measureCoverage(const cv::Mat& luma)
     return r;
 }
 
-int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool baseSpace,
+int cmdAaCoverage(int warm, double feedback, bool baseSpace,
     double kernel)
 {
     const std::string kTag = kernel < 0.5 ? "" : (kernel < 1.5 ? "_k1" : "_k2");
     const std::string root = projectRoot() + "/build";
-    std::printf("逐杆覆盖率对拍：%d×%d  px/m = %.2f  variant=%s  warm=%d  feedback=%.3f  "
+    std::printf("逐杆覆盖率对拍：%d×%d  px/m = %.2f  warm=%d  feedback=%.3f  "
         "base_space=%s  input_kernel=%g\n\n",
-        kViewW, kViewH, pxPerMeter(kCamZ), variant.empty() ? "deferred" : variant.c_str(), warm,
+        kViewW, kViewH, pxPerMeter(kCamZ), warm,
         feedback, baseSpace ? "开" : "关", kernel);
 
     // 两态各采一帧：TAA 关 = 被测量（无 AA 时应当量化失真），TAA 开 = 判据对象。
@@ -203,7 +203,6 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool ba
         o.taaJitterScale = jitterScale;
         o.taaBaseSpace = baseSpace;  // 批 13.2（taa=false 的那组无消费者，值无意义）
         o.taaInputKernel = kernel;   // 批 13.8（同上：taa=false 的那组无消费者）
-        o.variant = variant;
         o.size = {kViewW, kViewH};
         const std::string dir = root + "/imgqa_aacov_" + tag + kTag;
         makeProfile(dir, o);
@@ -301,7 +300,7 @@ int cmdAaCoverage(const std::string& variant, int warm, double feedback, bool ba
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
     logCall("aa-coverage",
-        {{"variant", variant.empty() ? "deferred" : variant}, {"warm", std::to_string(warm)},
+        {{"warm", std::to_string(warm)},
             {"white_luma", d3(on.whiteLuma)}, {"err_off", d3(eOff)}, {"err_on", d3(eOn)},
             {"err_jitter0", d3(eJ0)},
             {"halo", d3(mean(on) - mean(off) - wantGain)}},

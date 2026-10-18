@@ -222,7 +222,6 @@ std::vector<SubcommandSpec> specsSwimAndProbe()
             "逐杆覆盖率对拍闭式：单帧量「黑度积分 vs 投影宽度」（批 12.6 T4；--base-space = 批 13.2 门开态；--kernel = 批 13.8 输入侧重建核 0 双线性 / 1"
             " CR 4×4 / 2 Lanczos3，本判据 = 核选型那条**静止态闭式**判据）",
             {
-                FlagSpec{"--variant", "", nullptr, FlagKind::String},
                 FlagSpec{"--warm", "32", nullptr, FlagKind::Number},
                 FlagSpec{"--feedback", "0.12", nullptr, FlagKind::Number},
                 FlagSpec{"--base-space", nullptr, nullptr, FlagKind::Bool},
@@ -240,7 +239,6 @@ std::vector<SubcommandSpec> specsSwimAndProbe()
             {
                 FlagSpec{"--pairs", "32", nullptr, FlagKind::Number},
                 FlagSpec{"--warm", "32", nullptr, FlagKind::Number},
-                FlagSpec{"--variant", "", nullptr, FlagKind::String},
                 FlagSpec{"--base-space", nullptr, "批 13.2 taa.base_space：true = 输出在**基空间**。⚠ 门开态下 S1（只抖不滤）的逐帧差不再由游动主导 ⟹ S1/S2 比值失去原口径", FlagKind::Bool},
             },
             {
@@ -271,7 +269,6 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
             {
                 FlagSpec{"--periods", "2", nullptr, FlagKind::Number},
                 FlagSpec{"--warm-multiplier", "6", nullptr, FlagKind::Number},
-                FlagSpec{"--variant", "", nullptr, FlagKind::String},
                 FlagSpec{"--slow-feedback", "0.002", nullptr, FlagKind::Number},
                 FlagSpec{"--skip-slow", nullptr, nullptr, FlagKind::Bool},
                 FlagSpec{"--base-space", nullptr, nullptr, FlagKind::Bool},
@@ -303,7 +300,6 @@ std::vector<SubcommandSpec> specsResidualAndMotion()
             {
                 FlagSpec{"--pairs", "32", nullptr, FlagKind::Number},
                 FlagSpec{"--warm", "32", nullptr, FlagKind::Number},
-                FlagSpec{"--variant", "", nullptr, FlagKind::String},
             },
             {
             },
@@ -484,7 +480,6 @@ std::vector<SubcommandSpec> specsFlickerAndNoise()
             {
                 FlagSpec{"--glb", "cornell_box.glb", nullptr, FlagKind::String},
                 FlagSpec{"--camera", "front", nullptr, FlagKind::String},
-                FlagSpec{"--variant", "deferred", nullptr, FlagKind::String},
                 FlagSpec{"--strength", "0.5", nullptr, FlagKind::Number},
                 FlagSpec{"--radius", "40", nullptr, FlagKind::Number},
                 FlagSpec{"--pairs", "16", nullptr, FlagKind::Number},

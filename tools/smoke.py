@@ -2,7 +2,7 @@
 """agent 冒烟 / 截图一次性运行器（`just smoke` / `just shot` 的实现体，stdlib-only）。
 
 **解决的痛点**（2026-10-03）：既有流程要手改 `build/rgl/configs/` 副本（headless /
-llm_debug / variant），跑完再手 `cp` 复原——配置于是有两个真相源，而"忘复原"是静默的。
+llm_debug / aa 档），跑完再手 `cp` 复原——配置于是有两个真相源，而"忘复原"是静默的。
 引擎早有 `RGL_CONFIG_DIR`（契约见 `rgl/main.cppm` configDir 注释：只覆盖配置目录，
 资产仍按 CWD 相对解析），本工具用它把一次性配置落到 `build/rgl/.smoke/`，
 **全程不碰任何配置副本**，也就没有需要"复原"的状态。
@@ -33,10 +33,9 @@ errors 计数抓 `[error]` 级日志行：引擎自身 error 与 VVL 的 VUID �
      还原 → 重新 `just build` → 必须回 PASS。闸门不红 = 开关漂了或本档没生效。
 
 用法:
-    python tools/smoke.py smoke [--variant forward|deferred]
-                               [--from-build] [--frames N] [--timeout S] [--sync]
+    python tools/smoke.py smoke [--from-build] [--frames N] [--timeout S] [--sync]
     python tools/smoke.py shot  [--name NAME] [--size WxH]
-                               [--variant ...] [--from-build] [--frames N]
+                               [--from-build] [--frames N]
                                [--timeout S] [--sync]
     python tools/smoke.py shot  --config-base qa/configs/ssr_rig --name ssr_rig
                                # 用仓库里的靶配置出图（qa/configs/* 的既有目录同此用法）
@@ -80,7 +79,6 @@ LOG_PATH = BUILD_RGL / "smoke_run.log"
 EXE_NAME = "rgl.exe" if os.name == "nt" else "rgl"
 # configDir() 里必须齐的配置（少一个引擎就启动失败，见 main_impl.cppm loadAllConfigs）
 CONFIG_FILES = ("camera.lua", "scene.lua", "runtime.lua", "diagnostics.lua", "render_graph.lua", "shadow.lua")
-VALID_VARIANTS = ("forward", "deferred")
 # `--set [FILE:]KEY=VALUE` 的目标文件白名单（批 15.2 子步 D1）。为什么要有这张表而不是
 # "前缀是什么就打开同名文件"：拼错的目标（`--set camrea:mode=...`）会去 staging 里新建一个
 # 没人加载的 camrea.lua ⟹ **静默不生效**，而 patch_lua 的"键命中 ≠ 1 即 FAIL"护栏在错误
@@ -405,7 +403,7 @@ def png_size(path: Path) -> tuple[int, int] | None:
     return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
 
 
-def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames: int,
+def stage_configs(from_build: bool, shot_file: str, frames: int,
                   size: tuple[int, int] | None, render_scale: float | None,
                   aa: str | None = None,
                   clip: int | None = None,
@@ -437,8 +435,6 @@ def stage_configs(from_build: bool, variant: str | None, shot_file: str, frames:
     patch_lua(runtime, "delay_frames", str(frames))
     if size:
         patch_lua(runtime, "size", f"{{ {size[0]}, {size[1]} }}")
-    if variant:
-        patch_lua(STAGING / "render_graph.lua", "variant", f'"{variant}"')
     if render_scale is not None:
         # 越界值不在这里挡：引擎侧 clampRenderScale 是口径的唯一权威，工具重复实现一遍
         # = 两处规则漂移的机会。工具只负责**事后核对实际生效值**（见 main 里的核对）。
@@ -748,7 +744,7 @@ def verdicts(code: int, log: str, cfg: VerdictCfg, *,
     if ssrRequested and not (ssrRt and ssrTraceRt):
         # 🔴 债-129 S3-C：同 velocity，「ssr: 图形态不支持」那条逃生门已删——三条 skip（顺序 /
         # 锚点 / G-buffer 契约表）现在全部由 decorateSsrOrWarn 抛异常拒启动，其中 ③（forward 图）
-        # 是 compile **放过**的那条，以前只有 warn，现在 `--variant forward --ssr` 起不来。
+        # 是 compile **放过**的那条，以前只有 warn，现在缺 G-buffer 契约的图配 ssr 起不来。
         fail("请求 ssr（--ssr 或 --set ssr.enabled=true）但日志里 trace/apply 两行 RT 不齐"
              f"（trace={'有' if ssrTraceRt else '无'}, apply={'有' if ssrRt else '无'}）"
              " ⟹ 装饰器静默没落图或只落了一半"
@@ -873,8 +869,6 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="RGL 一次性 headless 冒烟 / 截图（走 RGL_CONFIG_DIR，不碰配置副本）")
     ap.add_argument("mode", choices=("smoke", "shot"))
-    ap.add_argument("--variant", choices=VALID_VARIANTS,
-                    help="render_graph.lua 路线（不给 = 用配置基准里的值）")
     ap.add_argument("--frames", type=int, default=8, help="第 N 帧截图（默认 8 = llm_shot 默认）")
     ap.add_argument("--size", default="", help="截图尺寸 WxH（默认用配置里的 llm_shot.size）")
     ap.add_argument("--name", default="smoke_shot", help="shot 的 PNG 名（screenshots/<name>.png）")
@@ -886,8 +880,8 @@ def parse_args() -> argparse.Namespace:
                     help="runtime.lua ssr 块 enabled = true（屏幕空间反射，批 15.3B 起 = "
                          "trace + apply 两 pass）。双向核对：开了没建齐 ssr_trace/ssr 两行 RT "
                          "= FAIL；没开却建了 = FAIL（门关不拢 = 「门开=门关逐位相同」红线失效）。"
-                         "🔴 债-129 S3-C 起没有「图形态不支持」这一档：forward 图（或缺 G-buffer "
-                         "通道齐备的自定义图）配 ssr.enabled=true 是**引擎拒启动**（smoke 报「引擎非零退出」）")
+                         "🔴 债-129 S3-C 起没有「图形态不支持」这一档：缺 G-buffer 通道齐备的"
+                         "自定义图配 ssr.enabled=true 是**引擎拒启动**（smoke 报「引擎非零退出」）")
     ap.add_argument("--aa", choices=("off", "fsr", "taa"), default=None,
                     help="runtime.lua aa（批 14.6 抗锯齿三态开关）：off = 出厂默认（无 TAA "
                          "无 FSR，红线 A 那张图）；fsr = FSR3-upscaler 做抗锯齿（隐含打开"
@@ -976,7 +970,7 @@ def main() -> int:
     # ⟹ "请求的名字"与"该出现在磁盘上的名字"从这里分叉（判 PASS 与末尾的丢弃都按后者）。
     gbuf = gbuf_channel(args.overrides)
     expect_file = f"screenshots/gbuffer_{gbuf}.png" if gbuf is not None else shot_file
-    stage_configs(args.from_build, args.variant, shot_file, args.frames, size,
+    stage_configs(args.from_build, shot_file, args.frames, size,
                   args.render_scale, args.aa,
                   args.clip, args.fsr_temporal, args.fsr_jitter,
                   ssr=args.ssr, config_base=args.config_base,
@@ -984,7 +978,7 @@ def main() -> int:
     base_desc = (str(args.config_base) if args.config_base is not None
                  else ('build 副本' if args.from_build else '仓库 configs/'))
     print(f"配置   : 基准={base_desc}"
-          f"  variant={args.variant or '(随配置)'}  frames={args.frames}"
+          f"  frames={args.frames}"
           f"  size={f'{size[0]}x{size[1]}' if size else '(随配置)'}"
           f"  render_scale={args.render_scale if args.render_scale is not None else '(随配置)'}"
           f"  ssr={'on' if args.ssr else '(随配置)'}"

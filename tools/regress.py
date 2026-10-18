@@ -52,7 +52,7 @@
     just regress floor [--runs 5]             同一构建跑 N 次 = 噪声地板
     just regress ab    [--ref HEAD] [--runs 3]  同会话双构建（工作树 vs ref）+ 归因
     just regress burst [--n 32] [--lag 16]    连拍 N 帧，量最小同相位周期
-    配置旗标与 just smoke 同源：--variant --aa --size --frames --clip --render-scale …
+    配置旗标与 just smoke 同源：--aa --size --frames --clip --render-scale …
 
 退出码: 0 = 逐位相同（且自检过）· 1 = 有差异 / 自检不过 / 前置不满足。
 """
@@ -456,7 +456,6 @@ def selftest(quiet: bool = False) -> None:
 class Cfg:
     """一次比对两侧**必须完全相同**的东西（配置不同 = 比的不是同一件事）。"""
 
-    variant: str | None = None
     aa: str | None = None
     size: tuple[int, int] | None = None
     frames: int = 8
@@ -471,8 +470,7 @@ class Cfg:
     overrides: tuple[str, ...] = ()
 
     def describe(self) -> str:
-        return ("variant=" + (self.variant or "(随配置)")
-                + f" aa={self.aa or '(随配置)'}"
+        return (f"aa={self.aa or '(随配置)'}"
                 + f" size={f'{self.size[0]}x{self.size[1]}' if self.size else '(随配置)'}"
                 + f" frames={self.frames}"
                 + f" render_scale={self.render_scale if self.render_scale is not None else '(随配置)'}"
@@ -499,7 +497,7 @@ class Shot:
 
 
 def stage(cfg: Cfg, shot_file: str) -> None:
-    smoke.stage_configs(False, cfg.variant, shot_file, cfg.frames, cfg.size,
+    smoke.stage_configs(False, shot_file, cfg.frames, cfg.size,
                         cfg.render_scale, cfg.aa,
                         cfg.clip, cfg.fsr_temporal, cfg.fsr_jitter,
                         overrides=list(cfg.overrides))
@@ -1018,7 +1016,7 @@ def _rpc(port: int, path: str, body: dict | None = None, timeout: float = 10) ->
 
 def cfg_from(args: argparse.Namespace) -> Cfg:
     # size 解析复用 smoke.parse_size：同一旗标有两种宽容度 = 一条路放行另一条路报错
-    return Cfg(variant=args.variant, aa=args.aa, size=smoke.parse_size(args.size),
+    return Cfg(aa=args.aa, size=smoke.parse_size(args.size),
                frames=args.frames, render_scale=args.render_scale,
                clip=args.clip,
                fsr_temporal=args.fsr_temporal, fsr_jitter=args.fsr_jitter,
@@ -1026,7 +1024,6 @@ def cfg_from(args: argparse.Namespace) -> Cfg:
 
 
 def add_cfg_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--variant", choices=["forward", "deferred"])
     p.add_argument("--aa", choices=["off", "taa", "fsr"])
     p.add_argument("--size")
     p.add_argument("--frames", type=int, default=8, help="第 N 帧截图（默认 8，同 just smoke）")

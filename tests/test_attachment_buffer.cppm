@@ -138,7 +138,7 @@ std::string errOf(const std::expected<CompiledRenderGraph, Error>& g) {
 }
 
 /** 配置加载的失败消息（绿 = 空串）。doctest 消息表达式吃不下三元，统一走这里。 */
-std::string errOfConfig(const std::expected<RenderGraphConfig, Error>& c) {
+std::string errOfConfig(const std::expected<RgGraphDesc, Error>& c) {
 	return c.has_value() ? std::string{"<配置竟然加载通过了>"} : c.error().message;
 }
 
@@ -409,7 +409,6 @@ TEST_CASE("Lua 词表：kind 认 buffer/depthOffscreen、usage 认 storage 两�
 	const auto name = registerBuf("rtmpLuaBuffer", 320);
 	TempLua cfg("buffer_kinds",
 		"return {\n"
-		"  variant = \"forward\",\n"
 		"  attachments = {\n"
 		"    { name = \"swapchain\", kind = \"swapchain\" },\n"
 		"    { name = \"depth\", kind = \"depth\" },\n"
@@ -437,8 +436,8 @@ TEST_CASE("Lua 词表：kind 认 buffer/depthOffscreen、usage 认 storage 两�
 	const std::string loadErr = errOfConfig(loaded);
 	if (!loaded.has_value())
 		FAIL("loadRenderGraphConfig 失败：" << loadErr);
-	const auto& atts = loaded->desc.attachments;
-	const auto& passes = loaded->desc.passes;
+	const auto& atts = loaded->attachments;
+	const auto& passes = loaded->passes;
 	REQUIRE(atts.size() == 4);
 	const auto shadowKind = atts[2].kind;
 	const auto bufferKind = atts[3].kind;

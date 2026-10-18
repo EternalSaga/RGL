@@ -14,7 +14,6 @@ import scene_config;        // SceneConfig
 import runtime_config;      // RuntimeConfig
 import vulkan_window;       // SDLWindow
 import render_graph;        // CompiledRenderGraph
-import render_graph_config;  // RgGraphVariant（CompiledGraphResult.variant，gate_lint 交叉校验）
 import vk_device;           // DeviceContext
 import rlvk;               // vk::raii::PhysicalDevice（checkMeshletDeviceFit 入参）
 import vk_swapchain;        // Swapchain
@@ -80,8 +79,11 @@ export struct CompiledGraphResult {
 	// B2-4③′（D5 第一刀）：图描述本体随产物带出 → move 进 Renderer::DynamicRenderGraph。
 	// 图自此是脏驱动派生件；`graph` 只是**首编译**产物（main 已校验，Renderer 不重复编译）。
 	RgGraphDesc desc;
+	/// deferred 装配路径开关（G-buffer 槽 / light 条目 / HDR 链）。2026-10-18 刀② 起
+	/// 取值 = **图事实** `graphHasDeferredLight(compiled.passes)`（原 = 配置层 variant，
+	/// 那枚"没有消费者的真相源"已删）——自定义图手写了 light pass，装配就给它建条目，
+	/// 装配与图对账不再靠配置意图。
 	bool deferredMode = false;
-	RgGraphVariant variant = RgGraphVariant::forward;
 	/// 批 12.6：TAA 装饰是否落图（门开且图形态支持）。装配层据此决定 TAA RT/条目
 	/// 是否领建——装饰失败时条目建了也无人执行，不如整套不建。
 	bool taaDecorated = false;

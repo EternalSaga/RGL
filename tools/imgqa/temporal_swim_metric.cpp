@@ -191,7 +191,7 @@ void shiftInto(const cv::Mat& src, cv::Mat& dst, double dx, double dy)
  */
 
 SwimRun runSwimSequence(const std::string& dir, bool taa, double feedback, double jitterScale,
-    const std::string& variant, int shots, int warm, const std::string& tag, int lag,
+    int shots, int warm, const std::string& tag, int lag,
     bool baseSpace)
 {
     ProfileOpts o;
@@ -200,7 +200,6 @@ SwimRun runSwimSequence(const std::string& dir, bool taa, double feedback, doubl
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     o.taaBaseSpace = baseSpace;  // 批 13.2 基空间输出（false = 现行为）
-    o.variant = variant;  // 空 = 尊重交付配置自己写的路线（deferred）
     // 机位从**第 1 帧**就对上（只发 RPC 会让默认机位的那几帧渗进历史，0.88/帧洗不掉；
     // 实测恒等式残差 0.100 vs 0.0226）——见 ProfileOpts::hasCamera
     o.hasCamera = true;

@@ -3,7 +3,7 @@
 // ## 缝在哪
 //
 // 缝 = **同一台影场仪器**。两条命令都在 `izb_rig.glb` 上做同一套采集（`shadowPass=true` +
-// `variant="deferred"`，izb 再叠 `izbShadow`），都在问"影子画在了它该在的地方吗"，只是一个
+// deferred 图，izb 再叠 `izbShadow`），都在问"影子画在了它该在的地方吗"，只是一个
 // 从**寻址**问（mask↔画面三方对拍）、一个从**世界不变性**问（两机位重投影对平移）。默认
 // `--glb` 同为 izb_rig.glb（见 cli_table.cpp），改动这两条判据的动机（换影场口径 / 换机位）
 // 从来是同一件事。
@@ -56,7 +56,6 @@ int cmdIzb(const std::string& glb, const std::string& camera)
         ProfileOpts o;
         o.glb = glb;
         o.shadowPass = true;  // CSM 基线；mask 重放的 shadow0 段也依赖此门
-        o.variant = "deferred";  // IZB 仅 deferred 生效（forward 无 drawLight pass）
         makeProfile(projectRoot() + "/build/imgqa_profile_izb_csm", o);
         Engine eng(projectRoot() + "/build/imgqa_profile_izb_csm");
         fCsm = captureFrame(eng, it->second, "izb_csm");
@@ -65,7 +64,6 @@ int cmdIzb(const std::string& glb, const std::string& camera)
         ProfileOpts o;
         o.glb = glb;
         o.shadowPass = true;
-        o.variant = "deferred";
         o.izbShadow = true;
         o.izbDumpFrame = 5;
         makeProfile(projectRoot() + "/build/imgqa_profile_izb_on", o);
@@ -302,7 +300,6 @@ Frame captureSwimGround(const std::string& glb, const Engine::Camera& cam,
     ProfileOpts o;
     o.glb = glb;
     o.shadowPass = true;
-    o.variant = "deferred";
     o.izbShadow = izb;
     o.evssmShadow = evssm;
     makeProfile(projectRoot() + "/build/imgqa_profile_swim", o);

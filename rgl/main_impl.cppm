@@ -430,7 +430,7 @@ bool decorateVelocityOrThrow(RgGraphDesc& desc, bool velocityEnabled) {
 		return true;
 	throw decorationRefused("velocity（aa=\"fsr\" 隐含打开）", graphDecoratedTooLate(desc) ? "次序判据 graphDecoratedTooLate 命中 = 图里已有 taa / ao_apply pass（**不是**锚点未命中）⟹ main_impl 的「velocity 先于 taa / ao_apply 装饰」调用序被挪错：本 pass 会夹在它们与 tonemap 之间、吃不到时域滤波，而 compile 照样过、画面静默错"
 		: "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」且「sampleRead 场景色附件」（速度场 pass 的落点）；自定义 blit 上屏图用 composite blit（transferRead ≠ sampleRead）必无落点",
-		graphDecoratedTooLate(desc) ? "把 decorateVelocityOrThrow 的调用挪回 decorateTaaOrThrow / decorateAoApplyOrThrow 之前（本文件 compileGraphOrThrow 尾段；次序契约与判据本体 → render_graph.cppm 的 graphDecoratedTooLate）" : "variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"taa\"（runtime.lua，速度场由 aa 派生）");
+		graphDecoratedTooLate(desc) ? "把 decorateVelocityOrThrow 的调用挪回 decorateTaaOrThrow / decorateAoApplyOrThrow 之前（本文件 compileGraphOrThrow 尾段；次序契约与判据本体 → render_graph.cppm 的 graphDecoratedTooLate）" : "删 render_graph.lua 的 attachments/passes 两键（回落内建 deferred 图），或 aa 改 \"off\"/\"taa\"（runtime.lua，速度场由 aa 派生）");
 }
 
 /**
@@ -457,7 +457,7 @@ bool decorateAoApplyOrThrow(RgGraphDesc& desc, bool fsrEnabled) {
 	throw decorationRefused("aa = \"fsr\"", "decorateAoApplyPass 两条判据之一未过：① taa pass 已在图里 = 施加点已被它占（aa 三态互斥 ⟹ "
 		"正常配置走不到 ①，走到就是 main_impl 的装饰顺序被挪错）② swapchainColorConsumerIndex 未命中 = 无 pass 同时「写 swapchain」且"
 		"「sampleRead 场景色」（本 pass 要插在它前并把色输入换成 ao_applied）；自定义 blit 上屏图 blit 上屏故必然无落点",
-		"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"taa\"");
+		"删 render_graph.lua 的 attachments/passes 两键（回落内建 deferred 图），或 aa 改 \"off\"/\"taa\"");
 }
 
 /**
@@ -475,7 +475,7 @@ bool decorateTaaOrThrow(RgGraphDesc& desc, bool taaEnabled) {
 		return true;
 	throw decorationRefused("aa = \"taa\"", "swapchainColorConsumerIndex 未命中 = 图里没有 pass 同时「写 swapchain 附件」且「sampleRead "
 		"场景色附件」（= tonemap，taa pass 要插在它前并把它的色输入换成 taa_out）；自定义 blit 上屏图用 composite blit = 必无落点",
-		"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 aa 改 \"off\"/\"fsr\"");
+		"删 render_graph.lua 的 attachments/passes 两键（回落内建 deferred 图），或 aa 改 \"off\"/\"fsr\"");
 }
 
 /**
@@ -496,12 +496,13 @@ bool decorateSsrOrThrow(RgGraphDesc& desc, bool ssrEnabled) {
 	throw decorationRefused("ssr.enabled = true", "decorateSsrPass 三条判据之一未过：① taa / ao_apply 已在图里 = main_impl 的"
 		"「SSR 先于它们装饰」调用序被挪错 ② swapchainColorConsumerIndex 未命中 = 无 pass 同时「写 swapchain」且「sampleRead 场景色」"
 		"（自定义 blit 上屏图）③ G-buffer 契约表 kGBufferAttachments 通道不齐 = 这张图不是 deferred 图（forward 不跟 = D1 对等豁免，"
-		"docs/phase15_plan.md §0.1；含不被引用的 emissive ⟹ compile 不替你拒这条）", "variant 改 \"deferred\"，或 ssr.enabled = false");
+		"docs/phase15_plan.md §0.1；含不被引用的 emissive ⟹ compile 不替你拒这条）", "删 render_graph.lua 的 attachments/passes 两键（回落内建 deferred 图），或 ssr.enabled = false");
 }
 
 /**
- * 加载 configs/render_graph.lua + `compileRenderGraph`（校验 + barrier 布局链推导）+ variant
- * 求值 `deferredMode`（forward(默认) / deferred 两张内建 exclusive 图变体；offscreen 档已删，刀①）。
+ * 加载 configs/render_graph.lua + `compileRenderGraph`（校验 + barrier 布局链推导）+
+ * 按**图事实**求值 `deferredMode`（2026-10-18 刀②：原按配置层 variant，那枚枚举已删——
+ * 装配路径消费图事实 `graphHasDeferredLight`，自定义图手写 light pass 也照样拿到装配）。
  *
  * 四个图形态开关全部由 `RuntimeConfig` 派生（`aaWantsTaa()` / `velocityField` / `aaWantsFsr()` /
  * `ssr.enabled`）——**单一真相源在 runtime_config**，调用点不逐项推导，省行也防漏传。
@@ -525,15 +526,15 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 	auto graphConfig = loadRenderGraphConfig(path);
 	if (!graphConfig)
 		throw std::runtime_error(graphConfig.error().describe());
-	bool deferredMode = graphConfig->variant == RgGraphVariant::deferred;
+	RgGraphDesc desc = std::move(*graphConfig);
 	// 🔴 债-129 S3-C：装饰失败**不再出声了事**，改成抛 std::runtime_error 拒启动（与下面
 	// compileRenderGraph 失败同一形态、同一层级——都在启动期、都不进帧循环）。理由：装饰器返回
 	// false 的图 compile **照样编得过**（能力没落图不是布局错误），warn + 继续跑 = 配了能力却静默
 	// 拿到出厂图 = 本债的病本体。消息必须点名「哪个配置键 / 哪条锚点判据没命中 / 怎么修」，
 	// 让「为什么没插进去」不用读代码（旧 warn 已做到的那半保留）。两处同门 = diagnostics.picking：
-	// object_id 的锚点内建两图都有（缺它 = 自定义 passes 的事），高亮的锚点在 blit 上屏图必不命中
+	// object_id 的锚点内建图都有（缺它 = 自定义 passes 的事），高亮的锚点在 blit 上屏图必不命中
 	// （blit 上屏 = 无 sampleRead 色消费者）——这两条事实从旧消息里挪到这里，消息本体保持短。
-	if (diagnostics().picking && !decoratePickingPass(graphConfig->desc)) {
+	if (diagnostics().picking && !decoratePickingPass(desc)) {
 		throw decorationRefused("diagnostics.picking = true", "decoratePickingPass 锚点未命中 = 图里没有「kind = drawMesh 且 "
 			"drawSource = opaque 且输出 depthWrite」的 pass（object_id pass 插在它后面、借它的 depth 附件测深）",
 			"在 render_graph.lua 的 passes 里补一个 opaque + depth 的 draw pass，或 diagnostics.lua 的 picking = false");
@@ -545,20 +546,20 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 	// 为什么不能等运行期再算：撤回要还原的跨 pass 补丁**原值**只在「装饰落图之前」问得到
 	// （见 RgStoreOpPatch::originalStoreOp），事后重算问到的已经是装饰后的值。
 	CompiledGraphResult result;  // 只用来带 highlightPlan 出去（其余字段末尾聚合初始化）
-	result.highlightPlan = planHighlightDecoration(graphConfig->desc);
-	if (diagnostics().picking && !applyHighlightPlan(graphConfig->desc, result.highlightPlan)) {
+	result.highlightPlan = planHighlightDecoration(desc);
+	if (diagnostics().picking && !applyHighlightPlan(desc, result.highlightPlan)) {
 		// 🔴 债-129 S3-C：这里原来还有一句 `result.highlightPlan = {};`（"没落图 = 没有可登记的
 		// 东西"）—— 随 warn→throw 一起删：抛出去之后 result 整个作废，那句成了不可达的死码。
 		throw decorationRefused("diagnostics.picking = true", "planHighlightDecoration 判不适用 = 图里没有「首个 sampleRead 场景色"
 			"附件」的 pass（高亮要插在它之前、写同一张色附件叠加），或其前无 depth 写者可借；自定义 blit 上屏图 = 无色消费者",
-			"variant 改 \"deferred\"/\"forward\"（render_graph.lua），或 diagnostics.lua 的 picking = false");
+			"删掉 render_graph.lua 的 attachments/passes 两键（回落内建 deferred 图），或 diagnostics.lua 的 picking = false");
 	}
 	// Phase 11 批 11.2：阴影 pass 装饰**无条件**（不再由 diagnostics 门控）。原因（实测驱动）：
 	// 光照管线条目**无条件把阴影图的描述槽烘焙进去**，所以图里必须无条件地有这张图
 	// 与其布局链（否则开关时描述绑定的图从未被任何 pass 转换布局 → 采样它就报 VVL）。
 	// 门控改到渲染侧：关时阴影段**零 draw**（只清 4 MB 深度，近乎免费），图内全是
 	// 1.0 = 无遮挡 → 采样结果恒为全亮 → 成片逐位不变。
-	decorateShadowPass(graphConfig->desc, kShadowMapSize);
+	decorateShadowPass(desc, kShadowMapSize);
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("shadow: 已装饰 depth-only 阴影 pass（{}² {}，{} 级；投影体清单由 "
 			"shadow.lua 的 mode 门控（形态表 drawAtlas），mode = \"none\" 时段内零 draw = 画面逐位不变）",
@@ -576,25 +577,28 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
 	//   变成可观测失败。挪错顺序的端到端兜底（aa=taa 档 SSR 开/关差分必须不同）→
 	//   phase15_plan §3.2 缺口 1/2。
 	// 默认关 = 不调用 = 图逐位不变（D10 纪律；门 = runtime.lua ssr.enabled，与 aa 正交）。
-	const bool ssrDecorated = decorateSsrOrThrow(graphConfig->desc, ssrEnabled);
+	const bool ssrDecorated = decorateSsrOrThrow(desc, ssrEnabled);
 	// 批 12.6 TAA 装饰**必须最后**（在 picking / highlight / shadow 之后）：它把
 	// 「写 swapchain 且采色」的 pass（tonemap）的输入换成时域结果，若 highlight 后插
 	// 就会落在 taa 与 tonemap 之间而吃不到滤波。默认关 = 不装饰 = 图逐位不变（D10 纪律）。
 	// 批 14.4 速度场装饰**先于** TAA（TAA 保持「必须最后」的既有纪律）。落点顺序
 	// = [velocity, taa, tonemap]：两者都只 sampleRead depth，彼此无依赖，而 TAA 的锚点
 	// 是**现搜**的（不缓存下标）⟹ velocity 先插不会让 TAA 认错消费者。
-	const bool velocityDecorated = decorateVelocityOrThrow(graphConfig->desc, velocityEnabled);
-	const bool taaDecorated = decorateTaaOrThrow(graphConfig->desc, taaEnabled);
+	const bool velocityDecorated = decorateVelocityOrThrow(desc, velocityEnabled);
+	const bool taaDecorated = decorateTaaOrThrow(desc, taaEnabled);
 	// 批 14.5 第三批：AO 施加 pass **必须在 taa 之后**装饰——它自己要先看「taa 在不在图里」
 	// 决定跳过，而它本身是真正的成片消费者，先插会让前面的装饰认错锚点。
-	const bool aoApplyDecorated = decorateAoApplyOrThrow(graphConfig->desc, fsrEnabled);
-	auto compiledGraph = compileRenderGraph(graphConfig->desc);
+	const bool aoApplyDecorated = decorateAoApplyOrThrow(desc, fsrEnabled);
+	auto compiledGraph = compileRenderGraph(desc);
 	if (!compiledGraph)
 		throw std::runtime_error(fmt::format("render graph compile failed: {}",
 			compiledGraph.error().describe()));
-	return CompiledGraphResult{std::move(*compiledGraph), std::move(graphConfig->desc),
-		deferredMode, graphConfig->variant,
-		taaDecorated, velocityDecorated, aoApplyDecorated, ssrDecorated,
+	// deferredMode = **图事实**（刀②）：编译图里有没有人在跑 deferred 光照。装配层据此
+	// 决定 G-buffer 槽 / light 条目 / HDR 链——消费图真值而非配置意图（旧 variant 双源
+	// 及其对账 lint 已随 `docs/图变体收敛_plan.md` §4 拆除）。
+	const bool deferredMode = graphHasDeferredLight(compiledGraph->passes);
+	return CompiledGraphResult{std::move(*compiledGraph), std::move(desc),
+		deferredMode, taaDecorated, velocityDecorated, aoApplyDecorated, ssrDecorated,
 		std::move(result.highlightPlan)};
 }
 
@@ -605,7 +609,8 @@ CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& r
  * 早于一切渲染日志，先于问题现场）。lint **不阻止启动**（诊断门不该让程序起不来）。
  * @param runtime runtime.lua 产物（headless / llm_debug 两个消费前提 + meshlet 块生效值，债-106）
  * @param device 设备上下文（staticGraphicsIndirect 能力事实）
- * @param graphResult 编译图产物（passes = 图事实；variant = 配置意图，交叉校验）
+ * @param graphResult 编译图产物（passes = 图事实；2026-10-18 刀② 起 lint 只吃图事实——
+ *   原 variant 参数 = 配置意图 + 两者交叉校验，随 `RgGraphVariant` 枚举一起删除）
  */
 void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 	const CompiledGraphResult& graphResult) {
@@ -618,7 +623,7 @@ void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 	// runtime 侧的基准 = `RuntimeConfig{}`（meshlet 块出厂态 assets + shadow_lod = 5，债-106）。
 	const auto findings = lintDiagnosticsGates(diagnostics(), DiagnosticsConfig{},
 		shadowConfig(), ShadowConfig{}, runtime, RuntimeConfig{},
-		graphResult.graph.passes, graphResult.variant, gateEnv);
+		graphResult.graph.passes, gateEnv);
 	const uint32_t errors = logGateFindings(findings);
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("gate_lint: {} findings ({} error)", findings.size(), errors);

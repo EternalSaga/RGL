@@ -151,7 +151,7 @@ double meanAbs(const cv::Mat& a, const cv::Mat& b);
 
 /// 一次真实场景连拍（交付配置 + 用户机位）——配置口径的完整理由见定义处头注释。
 SwimRun runSwimSequence(const std::string& dir, bool taa, double feedback, double jitterScale,
-    const std::string& variant, int shots, int warm, const std::string& tag, int lag,
+    int shots, int warm, const std::string& tag, int lag,
     bool baseSpace = false);
 
 /// 逐 lag 的平移假设检验（本量具的核心）——稳态推导见 LagStat 头注释。

@@ -80,11 +80,10 @@ int dispatchTemporalTail(const Args& P)
 int dispatchTemporal(const std::string& cmd, const Args& P)
 {
     if (cmd == "temporal")
-        return cmdTemporal(P.integer("--pairs"), P.integer("--warm"), P.get("--variant"),
-            P.has("--base-space"));
+        return cmdTemporal(P.integer("--pairs"), P.integer("--warm"), P.has("--base-space"));
     if (cmd == "temporal-residual")
         return cmdTemporalResidual(P.integer("--periods"), P.number("--warm-multiplier"),
-            P.get("--variant"), P.number("--slow-feedback"), P.has("--skip-slow"),
+            P.number("--slow-feedback"), P.has("--skip-slow"),
             P.has("--base-space"), P.has("--long-feedback"), P.has("--bistro"), P.get("--camera"),
             P.number("--long-feedback"), P.has("--diag-bs-off"), P.has("--reject"),
             P.has("--clip-abl"), P.number("--clip"), P.number("--clip-soft"));
@@ -151,7 +150,7 @@ int dispatchRig(const std::string& cmd, const Args& P)
             P.has("--light") || P.has("--intensity"));
     }
     if (cmd == "ao-noise")
-        return cmdAoNoise(P.get("--glb"), P.get("--camera"), P.get("--variant"),
+        return cmdAoNoise(P.get("--glb"), P.get("--camera"),
             P.number("--strength"), P.integer("--radius"), P.integer("--pairs"),
             !P.has("--no-temporal"), P.has("--bistro"));
     return notWired(cmd);
@@ -193,11 +192,11 @@ int dispatch(const std::string& cmd, const Args& P)
     // lambda 无捕获 ⟹ 转函数指针，与 kMeta 同型；`Args` 的取值接口全是 const，故按 const& 传。
     static const std::map<std::string, int (*)(const Args&)> kFlagCmd = {
         { "aa-coverage", +[](const Args& a) {
-             return cmdAaCoverage(a.get("--variant"), a.integer("--warm"), a.number("--feedback"),
+             return cmdAaCoverage(a.integer("--warm"), a.number("--feedback"),
                  a.has("--base-space"), a.number("--kernel"));
          } },
         { "taa-swim", +[](const Args& a) {
-             return cmdTaaSwim(a.integer("--pairs"), a.integer("--warm"), a.get("--variant"));
+             return cmdTaaSwim(a.integer("--pairs"), a.integer("--warm"));
          } },
         { "diffstruct", +[](const Args& a) {
              return cmdDiffStruct(a.get("--a"), a.get("--b"), a.get("--gbuf"), a.number("--gate"),

@@ -75,21 +75,21 @@ namespace {
  * 传下去——跨组换 τ = `frac` 的跨组比较失去意义 = 单调性轴作废。
  * 采集失败（在场性守卫抛）向上传，由调用方转成退出码 2。
  */
-std::vector<Run> collectTargetRuns(const std::string& root, const std::string& variant,
+std::vector<Run> collectTargetRuns(const std::string& root,
     int periods, double warmMult, double slowFeedback, bool skipSlow, bool baseSpace, double& tau)
 {
     std::vector<Run> runs;
     runs.push_back(runGroup(root + "/imgqa_res_r0", "R0 TAA关(地板)", "resr0", false, 0.12,
-        1.0, variant, periods, warmMult, tau, false));
+        1.0, periods, warmMult, tau, false));
     runs.push_back(runGroup(root + "/imgqa_res_r1", "R1 fb=1  js=1(锚点)", "resr1", true, 1.0,
-        1.0, variant, periods, warmMult, tau, baseSpace));
+        1.0, periods, warmMult, tau, baseSpace));
     runs.push_back(runGroup(root + "/imgqa_res_r2", "R2 fb=.12 js=1(现行)", "resr2", true,
-        0.12, 1.0, variant, periods, warmMult, tau, baseSpace));
+        0.12, 1.0, periods, warmMult, tau, baseSpace));
     runs.push_back(runGroup(root + "/imgqa_res_r3", "R3 fb=.12 js=0(反向)", "resr3", true,
-        0.12, 0.0, variant, periods, warmMult, tau, baseSpace));
+        0.12, 0.0, periods, warmMult, tau, baseSpace));
     if (!skipSlow)
         runs.push_back(runGroup(root + "/imgqa_res_r4",
-            "R4 fb=" + d4(slowFeedback) + " js=1", "resr4", true, slowFeedback, 1.0, variant,
+            "R4 fb=" + d4(slowFeedback) + " js=1", "resr4", true, slowFeedback, 1.0,
             periods, warmMult, tau, baseSpace));
     return runs;
 }
@@ -291,14 +291,14 @@ std::vector<Verdict> buildTargetVerdicts(const std::vector<Run>& runs, bool hasS
 
 /// 台账（`qa/log`）：判据可信度的一手数据。字段名是历史契约，**别改**。
 void logTargetRun(const std::vector<Run>& runs, bool hasSlow, int periods, double warmMult,
-    const std::string& variant, double tau, const GradRatios& g, const std::vector<Verdict>& vs)
+    double tau, const GradRatios& g, const std::vector<Verdict>& vs)
 {
     const Run& R0 = runs[0];
     const Run& R1 = runs[1];
     const Run& R2 = runs[2];
     const Run& R3 = runs[3];
     logCall("temporal-residual", {{"periods", std::to_string(periods)},
-               {"warmMult", d4(warmMult)}, {"variant", variant.empty() ? "deferred" : variant},
+               {"warmMult", d4(warmMult)},
                {"tau", d6(tau)}, {"white", d6(R2.whiteLuma)},
                {"R0_swing", d6(R0.stat.meanSwing)}, {"R1_swing", d6(R1.stat.meanSwing)},
                {"R2_swing", d6(R2.stat.meanSwing)}, {"R3_swing", d6(R3.stat.meanSwing)},
@@ -319,7 +319,7 @@ void logTargetRun(const std::vector<Run>& runs, bool hasSlow, int periods, doubl
 
 /// 合成靶主路径 = 现行 7 条判据（`--bistro` / `--window-abl` 两个变体在命令入口就分岔走了）。
 int runTargetResidual(
-    int periods, double warmMult, const std::string& variant, double slowFeedback, bool skipSlow,
+    int periods, double warmMult, double slowFeedback, bool skipSlow,
     bool baseSpace)
 {
     if (warmMult < 6.0)
@@ -332,7 +332,7 @@ int runTargetResidual(
     std::vector<Run> runs;
     try {
         runs = collectTargetRuns(
-            root, variant, periods, warmMult, slowFeedback, skipSlow, baseSpace, tau);
+            root, periods, warmMult, slowFeedback, skipSlow, baseSpace, tau);
     } catch (const std::exception& e) {
         std::printf("  采集失败: %s\n", e.what());
         return 2;
@@ -351,7 +351,7 @@ int runTargetResidual(
     for (const auto& v : vs)
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
-    logTargetRun(runs, hasSlow, periods, warmMult, variant, tau, g, vs);
+    logTargetRun(runs, hasSlow, periods, warmMult, tau, g, vs);
     const bool ok = std::ranges::all_of(vs, [](const Verdict& v) { return v.ok; });
     return ok ? 0 : 1;
 }

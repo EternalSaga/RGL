@@ -1,8 +1,6 @@
 ### factory/def-happy
 ### factory/fwd-dark
-variant	2
 ### factory/fwd-happy
-variant	2
 ### factory/def-headless
 ### pcss/owner-on
 pcss.min_footprint_texels	1
@@ -58,7 +56,6 @@ izb.on	1
 ### izb/on-fwd
 izb.on	1
 izb.on	2
-variant	2
 ### izb/on-none
 izb.on	1
 izb.on	2
@@ -66,7 +63,6 @@ izb.on	2
 izb.on	1
 izb.on	2
 izb.on	2
-variant	2
 ### izb/dump-off
 izb.dump_frame	1
 ### izb/dump-on
@@ -77,7 +73,6 @@ izb.grid	0
 izb.on	1
 ### izb/evssm-fwd
 mode	2
-variant	2
 ### pp/frame-off-nopicking
 picking_probe.frame	2
 ### pp/frame-on-picking-on
@@ -126,12 +121,7 @@ imgui	1
 dump_gbuf	2
 ### gbuf/llm-fwd
 dump_gbuf	2
-variant	2
 ### gbuf/ok
-### variant/deferred-on-fwd
-variant	2
-### variant/forward-on-def
-variant	1
 ### rt/factory
 ### rt/off-redline
 ### rt/off-lod5

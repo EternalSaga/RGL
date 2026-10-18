@@ -8,7 +8,6 @@ import diagnostics;
 import shadow_config;
 import runtime_config;  // 债-106：meshlet 块十枚键的申报规则（RuntimeConfig 成员指针取字段）
 import render_graph;
-import render_graph_config;
 
 namespace RGL {
 
@@ -452,7 +451,7 @@ std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cfg,
 	const DiagnosticsConfig& defaults, const ShadowConfig& shadow,
 	const ShadowConfig& shadowDefaults, const RuntimeConfig& runtime,
 	const RuntimeConfig& runtimeDefaults, std::span<const RgPassPlan> passes,
-	RgGraphVariant variant, const GateEnv& env) {
+	const GateEnv& env) {
 	const Ctx ctx{cfg, defaults, shadow, shadowDefaults, runtime, runtimeDefaults,
 		graphHasDeferredLight(passes), env};
 	std::vector<GateFinding> findings;
@@ -460,18 +459,9 @@ std::vector<GateFinding> lintDiagnosticsGates(const DiagnosticsConfig& cfg,
 		if (r.violated && r.violated(ctx))
 			findings.push_back({r.gate, r.severity, std::string{r.message}});
 	appendBlockFindings(findings, ctx);  // 块级宿主声明（判据见 appendBlockFindings 注释）
-
-	// variant 交叉校验（计划 §3-A：配置意图与图事实两个真相源的**分歧在此喊**，
-	// 不靠谁吞掉谁——自定义 Lua 图在 forward 变体下手写 light pass 是合法定制，
-	// 但下游（IZB/EVSSM/dump_gbuf）按图事实走，这个错位值得喊一声）
-	if (variant == RgGraphVariant::deferred && !ctx.deferredLight)
-		findings.push_back({"variant", GateSeverity::error,
-			"variant=deferred 但编译图没有 drawLight+light pass（内建 deferred 图被改坏？"
-			"deferred 装配路径会因缺管线条目在 Renderer 构造处 throw）"});
-	else if (variant != RgGraphVariant::deferred && ctx.deferredLight)
-		findings.push_back({"variant", GateSeverity::warn,
-			"图里有 deferred 光照 pass 但 variant 不是 deferred（自定义 passes 手写 light？"
-			"IZB/EVSSM/dump_gbuf 按图事实生效，与 variant 意图不一致）"});
+	// （原此处的 variant×图事实交叉校验已随 RgGraphVariant 枚举删除，2026-10-18 刀②：
+	//  装配与判据全部只吃 ctx.deferredLight 一个真相源，对账失去存在前提——
+	//  docs/图变体收敛_plan.md §4「两个真相源 + 一条对账判据」的维护税到此清零）
 	return findings;
 }
 

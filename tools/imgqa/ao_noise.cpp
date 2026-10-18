@@ -189,7 +189,6 @@ std::string profileOf(const Ctx& ctx, const std::string& name, double aoStrength
 {
     ProfileOpts o;
     o.glb = ctx.glb;
-    o.variant = ctx.variant;
     o.aoStrength = aoStrength;
     o.shadowPass = false;
     o.envIntensity = 0.0;
@@ -600,7 +599,7 @@ int printVerdict(const Ctx& ctx, const Collected& col, const Results& res)
  * 事：清空 outDir。陈旧产物会伪装成「本轮测的」（izb 首跑实锤过），所以它既不能跟着某个
  * 组的函数被搬走，也不能被调两次。调用顺序 = 原实现 = 打印顺序（验收比的是结构签名）。
  */
-int cmdAoNoise(const std::string& glb, const std::string& camera, const std::string& variant,
+int cmdAoNoise(const std::string& glb, const std::string& camera,
     double strength, int radius, int pairs, bool doTemporal, bool doBistro)
 {
     const std::string stem = glb.substr(0, glb.find_last_of('.'));
@@ -611,7 +610,6 @@ int cmdAoNoise(const std::string& glb, const std::string& camera, const std::str
 
     Ctx ctx;
     ctx.glb = glb;
-    ctx.variant = variant;
     ctx.camera = camera;
     ctx.man = man;
     ctx.cam = camIt->second;
@@ -629,9 +627,9 @@ int cmdAoNoise(const std::string& glb, const std::string& camera, const std::str
         if (!ec && e.is_regular_file(ec))
             fs::remove(e.path(), ec);  // 陈旧产物会伪装成「本轮测的」（izb 首跑实锤过）
 
-    std::printf("AO 噪声量测（同进程 A/B）  靶=%s  机位=%s  variant=%s  strength=%.3f  契约区排除半径=%d px\n",
+    std::printf("AO 噪声量测（同进程 A/B）  靶=%s  机位=%s  strength=%.3f  契约区排除半径=%d px\n",
         ctx.glb.c_str(), ctx.camera.c_str(),
-        ctx.variant.empty() ? "deferred" : ctx.variant.c_str(), ctx.strength, ctx.radius);
+        ctx.strength, ctx.radius);
     std::printf("尺寸 %dx%d  光照 env=0 ambient=0 shadow=off（底图零高频 = 判据前提）\n", kAoSize[0],
         kAoSize[1]);
     std::printf("产物目录 %s\n\n", ctx.outDir.c_str());

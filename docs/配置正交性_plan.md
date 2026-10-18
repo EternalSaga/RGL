@@ -500,8 +500,8 @@ feature gate → `declarePass`/`adoptPass`/`withdrawPass`（B2-5 已落地的 AP
    齐全性）与单文件文本补丁那一整类「改了没生效要响亮失败」护栏才有前提；② 被加载文件是数据不是
    程序 ⟹ 配置面不会变成零护栏的第三真相源（Lua 侧零类型、零 lint、零 doctest）。
    **实测放宽的成本 = 0**：全仓 Lua 配置零处使用 `math.` / `string.` / `os.` / 字符串拼接。
-   真实代价在别处：`qa/configs/env_band` 与 `nm_rig` 的 `runtime.lua` 去掉注释后**只差一行**
-   （截图文件名），注释写着「正文沿用 env_band 同一套」——**护栏把组合赶进了散文，而散文级复制
+   真实代价在别处：env_band（已随图变体收敛刀②归档）与 `nm_rig` 的 `runtime.lua` 去掉注释后
+   **只差一行**（截图文件名），注释写着「正文沿用 env_band 同一套」——**护栏把组合赶进了散文，而散文级复制
    不可校验**。正确修法 = 组合归**生成器**（在 `tools/` 加一个 stdlib-only 的铺目录工具：
    base + 每靶 overlay，**本条尚未落地**），不归被加载文件。→ 另案登记，**不进 债-129 射程**
    （S1–S4 无一步需要 Lua 有计算力）。
@@ -630,7 +630,7 @@ readSsrBlock 头注释（runtime_config_impl.cppm:315-327）明确裁决「confi
 2. `docs/compute_调研.md` §7 未逐节读（kind 加档「10 处静默点」的逐处、B2-4③′ 裁决全文——
    本文只复核了引用的数字：4.5µs / 29 emit / nullopt 早退）。
 3. ~~`qa/configs/**` 与 `tools/qa_scenes.py` 是否有**第四层出声点**~~ —— **已查（2026-10-16，
-   本文实测）**：没有。`qa/configs/` 四个冻结目录（analytic / env_band / nm_rig / ssr_rig）
+   本文实测）**：没有。`qa/configs/` 冻结目录（analytic / nm_rig / ssr_rig；env_band 已随图变体收敛刀②归档）
    零引用 `meshlet.*` / `fsr.*` / `taa.*` / `velocity_field`；唯一命中的 `qa/log/imgqa_calls.jsonl`
    是追加式调用台账不是配置。tools 侧真实引用面：`velocity_field` 4 文件、`fsr.*` 3–4 文件、
    `meshlet.overlay` / `meshlet.enable` 各 1 文件（**比 §8.3 预估的小**）。

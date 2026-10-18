@@ -39,7 +39,7 @@ const Engine::Camera kTargetCamera{
  * α=0.002 要 3000 帧，用 `/shotburst` 热身就是写 3000 张 PNG（实测直接超时）。
  */
 Run runGroup(const std::string& dir, const std::string& name, const std::string& tag, bool taa,
-    double feedback, double jitterScale, const std::string& variant, int periods,
+    double feedback, double jitterScale, int periods,
     double warmMult, double& tau, bool baseSpace, const ClipArm& arm)
 {
     Run r;
@@ -68,7 +68,6 @@ Run runGroup(const std::string& dir, const std::string& name, const std::string&
     // aa_target 上同向**，所以靶侧也必须能开臂（0 = 门关 = 不写键 = 逐位今天）。
     o.taaClipMode = arm.mode;
     o.taaClipSoft = arm.soft;
-    o.variant = variant;
     o.size = {kSize[0], kSize[1]};
     makeProfile(dir, o);
 
@@ -198,22 +197,22 @@ void printRow(const Run& r)
 //      不该引入任何第二时域源；非零 = 长窗档接错了地方）
 
 int runWindowSweep(const std::string& root, int periods, double warmMult,
-    const std::string& variant, bool baseSpace, double longFeedback, const ClipArm& arm)
+    bool baseSpace, double longFeedback, const ClipArm& arm)
 {
     double tau = 0.0;
     std::vector<Run> runs;
     try {
         runs.push_back(runGroup(root + "/imgqa_resb_b1", "B1 fb=1  js=1(梯度参考)", "resbb1",
-            true, 1.0, 1.0, variant, periods, warmMult, tau, baseSpace));
+            true, 1.0, 1.0, periods, warmMult, tau, baseSpace));
         runs.push_back(runGroup(root + "/imgqa_resb_b2",
-            "B2 短窗 fb=.12 js=1(对照)", "resbb2", true, 0.12, 1.0, variant, periods, warmMult,
+            "B2 短窗 fb=.12 js=1(对照)", "resbb2", true, 0.12, 1.0, periods, warmMult,
             tau, baseSpace, arm));
         runs.push_back(runGroup(root + "/imgqa_resb_b3",
-            "B3 长窗 fb=" + d4(longFeedback) + " js=1", "resbb3", true, longFeedback, 1.0, variant,
+            "B3 长窗 fb=" + d4(longFeedback) + " js=1", "resbb3", true, longFeedback, 1.0,
             periods, warmMult, tau, baseSpace, arm));
         runs.push_back(runGroup(root + "/imgqa_resb_b4",
             "B4 长窗 fb=" + d4(longFeedback) + " js=0(反向)", "resbb4",
-            true, longFeedback, 0.0, variant, periods, warmMult, tau, baseSpace, arm));
+            true, longFeedback, 0.0, periods, warmMult, tau, baseSpace, arm));
     } catch (const std::exception& e) {
         std::printf("  采集失败: %s\n", e.what());
         return 2;
@@ -259,7 +258,6 @@ int runWindowSweep(const std::string& root, int periods, double warmMult,
     //  分界 = 本 commit，跨分界按标签查数要知道这里换过名）。键 `floor` 同步 → `longFeedback`。
     logCall("temporal-residual-window",
         {{"periods", std::to_string(periods)}, {"warmMult", d4(warmMult)},
-            {"variant", variant.empty() ? "deferred" : variant},
             {"longFeedback", d4(longFeedback)}, {"baseSpace", baseSpace ? "1" : "0"},
             {"tau", d6(tau)}, {"B2_swing", d6(B2.stat.meanSwing)},
             {"B3_swing", d6(B3.stat.meanSwing)}, {"B3_p999", d6(B3.stat.p999Swing)},

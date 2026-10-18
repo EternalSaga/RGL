@@ -454,43 +454,15 @@ void applyDeliverySceneLua(const std::string& outDir, const ProfileOpts& o)
     writeFile(outDir + "/scene.lua", sc);
 }
 
-/// 交付配置模式 · render_graph.lua 域：只动 variant 行的字符串值。`variant` 留空 =
-/// 一个字节都不写（原 `if (!empty)` 整块翻成早返回，块尾无后续语句）。
-void applyDeliveryVariantLua(const std::string& outDir, const ProfileOpts& o)
+/// 合成 profile 的 render_graph.lua：整份拷模板（模板 = qa/configs/analytic，
+/// 刀② 后其内容为空表 = 内建 deferred；variant 键与重写机制已随 RgGraphVariant 删除，
+/// docs/图变体收敛_plan.md §6.1-2）。
+void writeSyntheticRenderGraphLua(const std::string& outDir)
 {
-    // variant 覆写是**可选**的：留空 = 尊重交付配置自己写的路线（交付默认 deferred）。
-
-    if (o.variant.empty())
-    return;
-
-    std::string rg = readFile(outDir + "/render_graph.lua");
-    static const std::regex variantRx(R"(variant\s*=\s*"[^"]*")");
-    if (!std::regex_search(rg, variantRx))
-        throw std::runtime_error("交付配置 render_graph.lua 无 variant 行，无法覆写");
-    writeFile(outDir + "/render_graph.lua",
-        std::regex_replace(rg, variantRx, "variant = \"" + o.variant + "\""));
-}
-
-/// 合成 profile 的 render_graph.lua：整份拷模板 + 可选 variant 重写。
-/// （原 `if (!empty)` 整块翻成早返回，块尾无后续语句。）
-void writeSyntheticRenderGraphLua(const std::string& outDir, const ProfileOpts& o)
-{
-    // render_graph.lua 定义图本身，**必须整份拷**（只给 {variant=...} 得 0 个
-    // swapchain 附件 → 启动失败，实测踩过）。
+    // render_graph.lua 定义图本身，**必须整份拷**（缺文件虽回落内建 deferred，但合成
+    // 路径保持"目录自足"的既有纪律：六份配置一个不缺，见 smoke.py CONFIG_FILES 同因）。
     fs::copy_file(profileTemplate() + "/render_graph.lua", outDir + "/render_graph.lua",
         fs::copy_options::overwrite_existing);
-    // variant 重写（izb 判据要 deferred；模板默认 2026-10-18 起已是 deferred）：只动 variant 行的字符串值
-
-    if (o.variant.empty())
-    return;
-
-    std::ifstream in(outDir + "/render_graph.lua");
-    std::string rg((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    static const std::regex variantRx(R"(variant\s*=\s*"[^"]*")");
-    if (!std::regex_search(rg, variantRx))
-        throw std::runtime_error("render_graph.lua 模板无 variant 行，无法重写");
-    const std::string out = std::regex_replace(rg, variantRx, "variant = \"" + o.variant + "\"");
-    writeFile(outDir + "/render_graph.lua", out);
 }
 
 /// 合成 profile 的 runtime.lua（**从零写**，不是覆写）：尺寸 / llm_shot 骨架 + 升频与 aa 键。
@@ -662,7 +634,6 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         applyDeliveryRuntimeLua(outDir, o);
         applyDeliveryDiagnosticsLua(outDir, o);
         applyDeliverySceneLua(outDir, o);
-        applyDeliveryVariantLua(outDir, o);
         // 机位写进 camera.lua（**从第 1 帧生效**，理由见 ProfileOpts::hasCamera 的注释）
         applyCameraLua(outDir, o);
         // 第 4/5 例外门（批 N6d `shadow-softness`）：门闭 = 函数第一行返回 = 交付配置
@@ -674,7 +645,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         return outDir;
     }
     // 合成路径：render_graph 整拷 → 两份 json → runtime / diagnostics / shadow / scene 逐份写。
-    writeSyntheticRenderGraphLua(outDir, o);
+    writeSyntheticRenderGraphLua(outDir);
     for (const char* j : {"log_level.json", "shaderRefLogLevel.json"})
         fs::copy_file(profileTemplate() + "/" + j, outDir + "/" + j,
             fs::copy_options::overwrite_existing);

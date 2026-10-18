@@ -493,7 +493,6 @@ void testShadowKernelScaleInstrument(Checker& c)
     {
         ProfileOpts o;
         o.glb = "penumbra_ladder.glb";
-        o.variant = "deferred";
         o.shadowLuaOverride = "return { mode = \"pcss\", izb = { on = false }, pcss = { sun_degrees = 5.0 } }\n";
         o.overrideLlmShot = true;
         o.llmShotFile = "screenshots/selftest_kernelscale.png";

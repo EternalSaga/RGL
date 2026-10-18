@@ -104,7 +104,7 @@ struct RunResult {
 };
 
 RunResult runSequence(const std::string& dir, bool taa, double feedback, double jitterScale,
-    const std::string& variant, int shots, int warm, const std::string& tag, bool baseSpace)
+    int shots, int warm, const std::string& tag, bool baseSpace)
 {
     ProfileOpts o;
     o.entitiesLua = "{ type = \"aa_target\" }";  // 内存合成靶，无 glb 文件
@@ -118,7 +118,6 @@ RunResult runSequence(const std::string& dir, bool taa, double feedback, double 
     o.taaFeedback = feedback;
     o.taaJitterScale = jitterScale;
     o.taaBaseSpace = baseSpace;  // 批 13.2 基空间输出（false = 现行为 = 输出在抖动空间）
-    o.variant = variant;
     o.size = {kSize[0], kSize[1]};
     makeProfile(dir, o);
 
@@ -250,7 +249,7 @@ TemporalStat temporalDiffStat(const std::vector<Frame>& shots, const cv::Mat& ma
     return s;
 }
 
-int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace)
+int cmdTemporal(int pairs, int warm, bool baseSpace)
 {
     // jitter 是 Halton **周期 16 的周期信号**，且周期内的帧间跳变幅度极不均匀
     // （|h(3)-h(4)| = 0.875px，而 |h(8)-h(9)| = 0.5px）。若只采任意 8 个连续帧对，测的
@@ -269,9 +268,9 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace)
 
     const int shots = pairs + 1;
     const std::string root = projectRoot() + "/build";
-    std::printf("细线靶时域锚点：%d×%d  静止机位  预热 %d 帧  帧对 %d  variant=%s  "
+    std::printf("细线靶时域锚点：%d×%d  静止机位  预热 %d 帧  帧对 %d  "
         "base_space=%s\n\n",
-        kSize[0], kSize[1], warm, pairs, variant.empty() ? "deferred" : variant.c_str(),
+        kSize[0], kSize[1], warm, pairs,
         baseSpace ? "开（输出在基空间）" : "关（输出在抖动空间）");
 
     // ── 采集矩阵（S = 静止机位；三组全是静止机位）────────────────────────────
@@ -296,14 +295,14 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace)
     //   的 scope/stillOpen。
     RunResult S0, S1, S2;
     try {
-        S0 = runSequence(root + "/imgqa_taa_s0", false, 0.12, 1.0, variant, shots, warm,
+        S0 = runSequence(root + "/imgqa_taa_s0", false, 0.12, 1.0, shots, warm,
             "taas0", false);  // TAA 关 ⟹ base_space 无消费者，恒按门关采
         // ⚠ 消融组是 **feedback=1**（输出 = 本帧），不是 0。写成 0 会得到「输出 = 裁剪后的
         // 历史」= 完全丢弃本帧的退化反馈环，它反而**更**依赖重投影，测出来的不是闪烁本体
         // （本轮真实踩过：fb=0 时 S1 会随 prevViewProj 口径变化，而"无滤波"本不该依赖历史）。
-        S1 = runSequence(root + "/imgqa_taa_s1", true, 1.0, 1.0, variant, shots, warm,
+        S1 = runSequence(root + "/imgqa_taa_s1", true, 1.0, 1.0, shots, warm,
             "taas1", baseSpace);
-        S2 = runSequence(root + "/imgqa_taa_s2", true, 0.12, 1.0, variant, shots, warm,
+        S2 = runSequence(root + "/imgqa_taa_s2", true, 0.12, 1.0, shots, warm,
             "taas2", baseSpace);
     } catch (const std::exception& e) {
         std::printf("  采集失败: %s\n", e.what());
@@ -350,7 +349,6 @@ int cmdTemporal(int pairs, int warm, const std::string& variant, bool baseSpace)
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
     logCall("temporal", {{"pairs", std::to_string(pairs)}, {"warm", std::to_string(warm)},
-               {"variant", variant.empty() ? "deferred" : variant},
                {"S0_off_stay", d6(S0.stat.meanAbsDiff)},
                {"S1_fb1_stay", d6(S1.stat.meanAbsDiff)},
                {"S2_fb12_stay", d6(S2.stat.meanAbsDiff)},

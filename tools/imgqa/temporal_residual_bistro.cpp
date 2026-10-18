@@ -35,7 +35,7 @@ namespace RGL::imgqa {
 //
 // 与 aa_target profile 的三处口径差异（每处都是被迫的，读数字前必读）：
 //   ① 配置 = `deliveryConfigDir` 模式（红线 4：合成副本不覆盖 env/skybox 路径，bistro 的 HDR
-//      高亮细线正是本症状的激励源）。variant 留空 = 尊重交付的 deferred；`base_space` **钉真**
+//      高亮细线正是本症状的激励源）。路线 = 交付配置自己写的 deferred；`base_space` **钉真**
 //      ——引擎默认 true（`scene_config.cppm::SceneConfig::taaBaseSpace`，批 13.5 起 = 交付态），
 //      而 `ProfileOpts::taaBaseSpace` 默认 false 是批 13.2 的旧口径且 `rewriteTaaBlock` 会
 //      **显式写键**，不钉 = 静默换场景。

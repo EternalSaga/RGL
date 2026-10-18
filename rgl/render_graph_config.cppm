@@ -11,8 +11,16 @@ namespace RGL {
 // 与 camera_config/scene_config 同构：本模块只做"文本 → 声明数据"的解析，
 // 校验与编译归 render_graph::compileRenderGraph（main 启动期串接）。
 //
-// Lua 形如（全字段可选；缺文件 = 回落 defaultRenderGraphDesc 三段图；文件在但
-// 缺段 = 空表透传，结构错误由 compileRenderGraph 报，不静默回落）：
+// **选路语义（2026-10-18 刀②，`docs/图变体收敛_plan.md` §6.1-2）**：
+// `variant` 键与 `RgGraphVariant` 枚举**已删除**——它是"没有消费者的真相源"
+// （消费方要的是图事实 `graphHasDeferredLight`，不是配置里写了什么；两个真相源
+// 的对账 lint 只是维护税）。现在只有一条规则：
+//   文件里有 `attachments` / `passes` 任一键 → 解析为**自定义图**（"图是数据"路）；
+//   否则（缺文件 / 空表 / 只有注释）→ **内建 deferred 图**。
+// 缺文件不再静默换路线（旧形态：缺文件 = forward 而出厂默认 = deferred，路径写错
+// 就换一个渲染器——本仓实测活雷，随本刀拆除）。
+//
+// Lua 形如（两键都缺 = 内建 deferred；全字段速查见 configs/render_graph.lua 头注）：
 //   return {
 //     attachments = { { name="swapchain", kind="swapchain" },
 //                     { name="depth", kind="depth" },
@@ -31,32 +39,14 @@ namespace RGL {
 // （Renderer 构造校验 + compileRenderGraph）负责全部结构检查。
 
 /**
- * 渲染路线变体（render_graph.lua 顶层 variant 字段；2026-09-08 替代 RGL_DEFERRED/
- * RGL_OFFSCREEN 环境变量）。deferred = 内建图（exclusive，忽略文件 passes）；
- * forward（缺省）= 文件 passes/attachments（文件在但缺段 = 空表透传，由
- * compileRenderGraph 报结构错误，不静默回落）。
- * ⚠ offscreen 档已删（2026-10-18 刀①，`docs/图变体收敛_plan.md` §2：全仓零使用者；
- * 工具要的离屏能力 = `RgAttachmentKind::offscreen`，与 variant 无关，每个图都具备）。
- */
-export enum class RgGraphVariant : uint8_t { forward, deferred };
-
-/**
- * loadRenderGraphConfig 的输出：variant（路线选择，main 按此决定装配路径）+
- * desc（渲染意图声明；deferred = 内建图，forward = 文件解析结果）。
- */
-export struct RenderGraphConfig {
-	RgGraphVariant variant = RgGraphVariant::forward;
-	RgGraphDesc desc;
-};
-
-/**
- * 从 Lua 配置初始化渲染图声明（configs/render_graph.lua → RenderGraphConfig）。
- * 文件缺失 → warn + 默认三段图 forward；文件在但缺段 → 空表透传（结构错误留给
- * compileRenderGraph 报，不重复校验）；脚本/类型/枚举字符串错误 →
- * std::unexpected(ConfigLoadFailed)。
+ * 从 Lua 配置解析渲染图声明（configs/render_graph.lua → RgGraphDesc）。
+ * 选路 = 上方模块头的唯一规则（有 attachments/passes → 自定义图；否则内建 deferred）。
+ * 文件缺失 → warn + 内建 deferred；自定义图文件在但缺段 → 空表透传（结构错误留给
+ * compileRenderGraph 报，不重复校验）；`variant` 键出现 = ConfigLoadFailed（键已删除，
+ * 静默忽略会让用户以为切了路线）；脚本/类型/枚举字符串错误 → std::unexpected。
  * @param path 配置文件路径（相对 CWD，须为 build/rgl）
- * @return variant + RgGraphDesc；解析失败返回 Error
+ * @return RgGraphDesc；解析失败返回 Error
  */
-export [[nodiscard]] std::expected<RenderGraphConfig, Error> loadRenderGraphConfig(std::string_view path);
+export [[nodiscard]] std::expected<RgGraphDesc, Error> loadRenderGraphConfig(std::string_view path);
 
 }  // namespace RGL

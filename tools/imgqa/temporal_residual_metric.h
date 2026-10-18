@@ -51,7 +51,7 @@ inline constexpr int kSize[2] = {1280, 720};
 
 // ── 阈值（**先测后定**，2026-10-05 首轮实测；每条理由同步进 judge.cpp 注册表）─────────────
 //
-// 实测表（aa_target 1280×720，periods=2，warm-multiplier=6，variant=forward；单位 = 线性 luma；
+// 实测表（aa_target 1280×720，periods=2，warm-multiplier=6，刀② 前时代 variant=forward；单位 = 线性 luma；
 // 斜体组 = 同一次运行内的参照。两轮独立运行差 ≤0.3%，故**最小余量取 3%**，见头注释「可复现性」）：
 //
 //   组（meanSwing / frac(swing>τ)）    门关 = 交付默认          门开 = --base-space
@@ -330,7 +330,7 @@ SwingCore swingFoldCore(const cv::Size& sz, const cv::Mat& m, double tau, int pe
 
 /// 合成靶一组采集（配置一律走 `makeProfile`，热身不写盘）。`tau` 由首组现算后回传，后续组共用。
 Run runGroup(const std::string& dir, const std::string& name, const std::string& tag, bool taa,
-    double feedback, double jitterScale, const std::string& variant, int periods, double warmMult,
+    double feedback, double jitterScale, int periods, double warmMult,
     double& tau, bool baseSpace, const ClipArm& arm = {});
 
 /// 一行 `Run` 读数（列宽 = 判据台账引用的列，别改）。
@@ -338,7 +338,7 @@ void printRow(const Run& r);
 
 /// 批 13.7 合成靶**长短窗对照**变体（四组 B1–B4，**只出数不判**）。
 int runWindowSweep(const std::string& root, int periods, double warmMult,
-    const std::string& variant, bool baseSpace, double longFeedback, const ClipArm& arm = {});
+    bool baseSpace, double longFeedback, const ClipArm& arm = {});
 
 /// bistro 一机位的一组采集（交付配置 + 用户机位；`wantMaps` 才留逐帧图）。
 BistroRun runBistroGroup(const std::string& dir, const std::string& name, const std::string& tag,
@@ -376,7 +376,7 @@ int validateResidualArgs(int periods, bool bistro, bool windowAbl, bool reject, 
     double longFeedback);
 
 /// 合成靶主路径 = 现行 7 条判据（`--bistro` / `--window-abl` 两个变体在命令入口就分岔走了）。
-int runTargetResidual(int periods, double warmMult, const std::string& variant,
+int runTargetResidual(int periods, double warmMult,
     double slowFeedback, bool skipSlow, bool baseSpace);
 
 }  // namespace RGL::imgqa

@@ -134,21 +134,21 @@ double distToRef(const cv::Mat& ref, const std::vector<cv::Mat>& fr)
 
 /// 七组采集（T0..T6，每组一个独立引擎进程；try/catch 与「采集失败」出口逐字保留）。
 /// 各组为什么存在——注释跟着各自的采集调用走（下面原样）。
-int collectSwimGroups(SwimGroups& g, const std::string& root, const std::string& variant,
+int collectSwimGroups(SwimGroups& g, const std::string& root,
     int shots, int nWarm)
 {
     try {
-        g.t0 = runSwimSequence(root + "/imgqa_swim_t0", false, 0.12, 1.0, variant, shots, nWarm,
+        g.t0 = runSwimSequence(root + "/imgqa_swim_t0", false, 0.12, 1.0, shots, nWarm,
             "swimt0", static_cast<int>(kTaaJitterPeriod));
-        g.t1 = runSwimSequence(root + "/imgqa_swim_t1", true, 1.0, 1.0, variant, shots, nWarm,
+        g.t1 = runSwimSequence(root + "/imgqa_swim_t1", true, 1.0, 1.0, shots, nWarm,
             "swimt1", static_cast<int>(kTaaJitterPeriod));
-        g.t2 = runSwimSequence(root + "/imgqa_swim_t2", true, 0.12, 1.0, variant, shots, nWarm,
+        g.t2 = runSwimSequence(root + "/imgqa_swim_t2", true, 0.12, 1.0, shots, nWarm,
             "swimt2", static_cast<int>(kTaaJitterPeriod));
         // T3 **恒等式组**：jitter_scale=0 + 静止机位 ⟹ 每帧画面相同、prevUv 必须恰为 uv
         // ⟹ 历史 = 同一张图 ⟹ 收敛输出必须与 TAA 关**逐位相同**。本项目最便宜且不可辩驳
         // 的判据形态（`taa_plan` §7 第 12 条可复用判断①：先把它自己的恒等式做成判据）。
         // 它不依赖参考实现、不依赖 Halton 口径、不依赖观测域选择。
-        g.t3 = runSwimSequence(root + "/imgqa_swim_t3", true, 0.12, 0.0, variant, shots, nWarm,
+        g.t3 = runSwimSequence(root + "/imgqa_swim_t3", true, 0.12, 0.0, shots, nWarm,
             "swimt3", static_cast<int>(kTaaJitterPeriod));
         // T4 **大抖动组**：jitter_scale=8（±4px）+ **feedback=1**。
         // 为什么 ±0.5px 档不行：那里「整幅平移」与「边缘二值覆盖翻转」同量级 ⟹ 平移算子没有
@@ -162,7 +162,7 @@ int collectSwimGroups(SwimGroups& g, const std::string& root, const std::string&
         // 于是 T4 的 lag-16 同相位差从 0.000 变成 **0.068 ≠ 0**——纯历史当然逐帧不同。
         // ⟹ 教训：`temporal-swim-anchor` 这条免费标定不只防采集，它**也防工具自己的口径漂移**；
         //   任何「按构造必须为 0」的锚点都有这个副产品。
-        g.t4 = runSwimSequence(root + "/imgqa_swim_t4", true, 1.0, 8.0, variant, shots, nWarm,
+        g.t4 = runSwimSequence(root + "/imgqa_swim_t4", true, 1.0, 8.0, shots, nWarm,
             "swimt4", static_cast<int>(kTaaJitterPeriod));
         // T5/T6 **基空间组**（批 13.2，门 `taa.base_space`）：与 T2/T1 **只差一个门**，
         // 于是「门关读数」与「门开读数」在同一次运行、同一机位、同一交付配置下直接可比
@@ -171,9 +171,9 @@ int collectSwimGroups(SwimGroups& g, const std::string& root, const std::string&
         //   T6 = T1 + 门开（fb=1，无累积）：把「重采样本身引入的帧间差」与「游动」分开。
         //        fb=1 时输出 = 本帧光栅重采样到基网格，相邻帧之间**没有**整幅平移项，
         //        只剩「按亚像素偏移重新光栅化」的覆盖翻转地板（≈ T4 交付场景档 37%）。
-        g.t5 = runSwimSequence(root + "/imgqa_swim_t5", true, 0.12, 1.0, variant, shots, nWarm,
+        g.t5 = runSwimSequence(root + "/imgqa_swim_t5", true, 0.12, 1.0, shots, nWarm,
             "swimt5", static_cast<int>(kTaaJitterPeriod), true);
-        g.t6 = runSwimSequence(root + "/imgqa_swim_t6", true, 1.0, 1.0, variant, shots, nWarm,
+        g.t6 = runSwimSequence(root + "/imgqa_swim_t6", true, 1.0, 1.0, shots, nWarm,
             "swimt6", static_cast<int>(kTaaJitterPeriod), true);
     } catch (const std::exception& e) {
         std::printf("  采集失败: %s\n", e.what());
@@ -583,7 +583,7 @@ std::array<double, 2> lagTable(const char* name, const std::vector<cv::Mat>& fra
         sumWrong / (sumMeas > 0 ? sumMeas : 1.0)};
 }
 
-int cmdTaaSwim(int pairs, int warm, const std::string& variant)
+int cmdTaaSwim(int pairs, int warm)
 {
     const auto up = [](int v, int p) { return ((v + p - 1) / p) * p; };
     const int nPairs = up(pairs, static_cast<int>(kTaaJitterPeriod));
@@ -598,7 +598,7 @@ int cmdTaaSwim(int pairs, int warm, const std::string& variant)
         "假设：收敛后 out_i(uv) = F(uv − jitter_i) ⟹ 相隔 k 帧的两帧是精确平移 (j_{i+k} − j_i)\n\n",
         nWarm, nPairs);
     SwimGroups g;
-    if (const int rc = collectSwimGroups(g, root, variant, shots, nWarm))
+    if (const int rc = collectSwimGroups(g, root, shots, nWarm))
         return rc;
 
     // 离未抖基图多远（T0 逐帧差恰为 0 ⟹ 取第一帧当基图 R）。这条**不是**平移判据
@@ -637,7 +637,6 @@ int cmdTaaSwim(int pairs, int warm, const std::string& variant)
         std::printf("\n  [%s] 容差理由: %s\n", v.name.c_str(), v.whyTol.c_str());
 
     logCall("taa-swim", {{"pairs", std::to_string(nPairs)}, {"warm", std::to_string(nWarm)},
-               {"variant", variant.empty() ? "deferred" : variant},
                {"T0_consec", d6(g.t0.consecDiff)}, {"T1_consec", d6(g.t1.consecDiff)},
                {"T2_consec", d6(g.t2.consecDiff)}, {"T3_consec", d6(g.t3.consecDiff)},
                {"T4_consec", d6(g.t4.consecDiff)},

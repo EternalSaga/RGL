@@ -56,7 +56,7 @@
 
 namespace RGL::imgqa {
 
-int cmdTemporalResidual(int periods, double warmMult, const std::string& variant,
+int cmdTemporalResidual(int periods, double warmMult,
     double slowFeedback, bool skipSlow, bool baseSpace, bool windowAbl, bool bistro,
     const std::string& camera, double longFeedback, bool diagBsOff, bool reject, bool clipAbl,
     double clipMode, double clipSoft)
@@ -76,9 +76,9 @@ int cmdTemporalResidual(int periods, double warmMult, const std::string& variant
     }
     // 批 13.7 变体分岔（`--long-feedback` 显式给出才进，现行 7 条判据路径逐字不变）
     if (windowAbl)
-        return runWindowSweep(projectRoot() + "/build", periods, warmMult, variant, baseSpace,
+        return runWindowSweep(projectRoot() + "/build", periods, warmMult, baseSpace,
             longFeedback, arm);
-    return runTargetResidual(periods, warmMult, variant, slowFeedback, skipSlow, baseSpace);
+    return runTargetResidual(periods, warmMult, slowFeedback, skipSlow, baseSpace);
 }
 
 }  // namespace RGL::imgqa
