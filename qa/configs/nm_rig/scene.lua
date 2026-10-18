@@ -83,9 +83,7 @@ return {
     cube = false,
     exposure = 1.0,
     ao = { strength = 0.0 },
-    -- enabled 是**图形态**开关（关 = 图里没有 taa/taa_commit pass）。harness 按 cell 覆写
-    -- enabled / jitter_scale；这里写开 = 本目录的"基线 cell"是 TAA 开的形态。
-    taa = {
-        enabled = true,
-    },
+    -- （原 `taa = { enabled = true }` 死键已裁，2026-10-18 用户拍板：解析器从不读
+    --  scene.lua 的 taa.enabled，TAA 总门早就是 runtime.lua 的 aa 三态键——本目录
+    --  实际运行态一直是 aa 缺省 = off，这个键只是"以为开着"的化石。债-129 N9 遗留清账。）
 }
