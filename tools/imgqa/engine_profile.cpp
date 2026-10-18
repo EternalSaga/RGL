@@ -47,6 +47,12 @@ void writeFile(const fs::path& p, const std::string& text)
 /// ——那比不检查更糟。两种读取形态都要覆盖（实测各配置模块用的不一样，只覆盖一种会
 /// **误报**合法键，而误报的检查很快被当噪音绕过）：
 ///   diagnostics_impl：readBool("no_vvl", def) ／ scene_config_impl：readBool(root, "spin", def)
+/// 🔴 第四种形态（透明混合管线刀1 的 `ac90a61` 加进来，当时**静默打断**了本校验器，见下）：
+///   键名以**实参**传进解析 helper —— `parseStyleMap(root, "deferred_styles", …)`，helper 内部
+///   写 `root[key]`（变量，前三种模式都抽不到）。漏掉它的后果不是"少一个键"而是**整条校验器
+///   反向误报**：makeProfile 写出的 `deferred_styles` 被判成"解析器不认识的键" ⟹ 抛 ⟹
+///   `imgqa selftest` 在 testKeyValidation 处**异常退出**，其后 26 条 testXxx 一条都不跑，
+///   而 `just gates` 完全听不见（它不编 imgqa）。误报与静默失效在这里同样贵。
 std::set<std::string> knownRootKeys(const std::string& implRel)
 {
     const std::string src = readFile(fs::path(projectRoot()) / implRel);
@@ -55,8 +61,11 @@ std::set<std::string> knownRootKeys(const std::string& implRel)
     static const std::regex reRoot(R"rx(root\[\s*"([a-z_]{2,26})"\s*\])rx");
     static const std::regex reRead(R"rx(\bread\w*\([^"]*"([a-z_]{2,26})")rx");
     static const std::regex reGet(R"rx(\b(?:get|opt|has|contains|named)\(\s*"([a-z_]{2,26})")rx");
+    // 只认「第一个实参是 root、第二个实参是键名字面量」这一种 helper 调用形态——再宽就成了
+    // 「源文件里出现过的任何字符串字面量」，那等于没有校验。
+    static const std::regex reHelper(R"rx(\b\w+\(\s*root\s*,\s*"([a-z_]{2,26})")rx");
     std::set<std::string> keys;
-    for (auto* re : {&reRoot, &reRead, &reGet})
+    for (auto* re : {&reRoot, &reRead, &reGet, &reHelper})
         for (std::sregex_iterator it(src.begin(), src.end(), *re), e; it != e; ++it)
             keys.insert((*it)[1].str());
     return keys;
