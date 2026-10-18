@@ -823,7 +823,8 @@ export class RenderPipeline {
 	 *（binding 表 = ShaderRegistry::fillSceneRegionSlots，本文件不抄；批 N+1 起**没有**
 	 * 全区 binding 3 那一条了）；SPV 未声明的那条被批 M 过滤掉，不再白烘。
 	 * hasEnv=true（Phase 5.5）追加 binding 4/5 → env cubemap 槽 + sky sampler 偏移
-	 *（仅 import env.slang 的风格消费——pbr/phong/unlit 不声明 = 批 M 后不烘）。
+	 *（仅 import env.slang 的 frag 消费——现 = 透明 frag 一族；deferred_geometry 不采样 env
+	 *（它只写 G-buffer）⟹ 不声明 = 批 M 后不烘，light pass 的 env 在本地 9/10）。
 	 * extra（Phase 7 D1）续 base 追加（light pass 采 G-buffer 4 RT + sampler）。
 	 * @param device 设备句柄
 	 * @param effect mesh + frag 两阶段 SPV 码流

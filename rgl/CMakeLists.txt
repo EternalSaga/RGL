@@ -40,6 +40,15 @@ rgl_shader(deferred_geometry.frag DEFERRED_GEOM_FRAG_SPV model material scene no
 rgl_shader(deferred_geometry_vegetation.frag DEFERRED_GEOM_VEG_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
 rgl_shader(deferred_geometry_light.frag DEFERRED_GEOM_LIGHT_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
 rgl_shader(deferred_geometry_unlit.frag DEFERRED_GEOM_UNLIT_FRAG_SPV deferred_geometry.frag model material scene normalmap scene_tables)
+# 透明混合管线刀1（docs/透明混合管线_plan.md §1-3）：BLEND 图元的前向着色 frag + 三个类别 wrapper。
+# 🔴 与 deferred_geometry 那一族的根本差别 = 本族**只写一张色附件**（透明 pass 挂 scene_hdr），
+# 而 blend 图元只可能落在透明段 ⟹ 规格路由里 blend 分支必须排在 material_rules 之前
+#（scene_config::resolvePipelineSpecName，顺序即护栏：5-MRT 条目画进单附件 pass 是 VVL 才炸的形态）。
+# 算式在 pbr.slang（与 light.frag 同一份），本族只加"材质从 heap 读 + alpha 出像素 + 类别走编译期宏"。
+rgl_shader(transparent.frag TRANSPARENT_FRAG_SPV model material scene scene_tables normalmap env lights shadow pbr)
+rgl_shader(transparent_vegetation.frag TRANSPARENT_VEG_FRAG_SPV transparent.frag model material scene scene_tables normalmap env lights shadow pbr)
+rgl_shader(transparent_light.frag TRANSPARENT_LIGHT_FRAG_SPV transparent.frag model material scene scene_tables normalmap env lights shadow pbr)
+rgl_shader(transparent_unlit.frag TRANSPARENT_UNLIT_FRAG_SPV transparent.frag model material scene scene_tables normalmap env lights shadow pbr)
 # Phase 7 D1：light pass（全屏大三角 mesh + 采样 G-buffer 的 deferred 光照 frag）。
 # DEP 里的 pbr = 共享着色核（2026-10-18 透明混合管线刀0 抽出，docs/透明混合管线_plan.md §1-2）：
 # 改 pbr.slang 必须触发 light.frag **全部六个变体**重编译（漏一个 = 该变体吃陈旧 SPV，

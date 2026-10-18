@@ -345,6 +345,12 @@ void bakeMeshletEntries(const UploadedAssets& uploaded, const SceneConfig& scene
 			continue;  // 该模型旁没有簇产物（或扫描/对账失败）= 无叠加条目
 		for (size_t i = 0; i < um.assetIds.size(); ++i) {
 			const uint32_t id = um.assetIds[i];
+			// 规格名与本体条目**同一函数**（★1-a1ii-α 的单一真相源）。⚠ 透明混合管线刀1 起
+			// blend 图元会解析到 transparent 族——本函数**不**为此加过滤：簇路径的两个消费者
+			//（collectMeshletOverlay 与 makeOpaqueCall 的原位取代）本就各自排除 blend
+			//（render_list_impl.cppm 那两条 `!mat.alphaModeBlend` / `mat.alphaModeBlend` 守卫），
+			// 所以这里烘出来的透明族簇条目是**按构造不可达**的条目（零 draw、零像素）。
+			// 加过滤要新增一处"谁懂 blend 规则"，比留一条永不执行的条目更贵。
 			const uint32_t entryIdx = pipelines.addMeshletEntry(
 				resolvePrimitiveSpecName(scene, um.model->primitives[i]),
 				assets.getTexture(um.textureIds.base[i]).heapSlot,

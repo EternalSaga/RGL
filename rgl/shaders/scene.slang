@@ -25,7 +25,7 @@
 //     @0   direction vec3 | @12 eyePos vec3 | @24 color vec3（CPU 预乘 intensity）| @36 ambient vec3
 //          （两个 intensity 语义：光色在此 CPU 预乘成最终值；env intensity 是 @48 的裸标量、
 //            GPU 端乘——env 颜色在 GPU 侧无法预乘，调光两条路线各改各 config 的一个 intensity）
-//     @48  env 参数（Phase 5.5，env.slang readEnvParams 消费）| @64 skyboxInvViewProj
+//     @48  env 参数（Phase 5.5，pbr.slang readEnvParams 消费；原在 env.slang，刀0 移入着色核）| @64 skyboxInvViewProj
 //          mat4 列主序（Phase 5.5 批次 4，sky.slang skyClipToWorld 消费）
 //   @256 对象矩阵表（批 L 起 256B 对齐，头 128B 后为对齐间隙）：mat4 列主序 ×
 //        kSceneMatrixCapacity(4096)，[objectIndex] = spin·world
@@ -92,11 +92,12 @@ SceneLight readSceneLight()
 
 // 头区 env 参数读取面（契约字段 SceneHeaderBlock::envParams：x=envIntensity
 // y=envMipRange z=exposure w=aoStrength）。
-//   · readEnvIntensity() / readEnvMipRange()：env.slang 的 mip 选择与 light.frag /
-//     ssr_trace.frag 的环境项**三处共用**（批 S-5 起删掉后两文件各自的本地副本，
-//     原形 = `asfloat(envData.Load(48))` / `asfloat(envData.Load(52))`）。
-//     ⚠ 本文件**不**提供 `readEnvParams()`——那个名字是 env.slang 返回 `EnvParams` 结构
-//     的同名函数（无参重载撞不上，但同名不同返回类型 = 直接编译错误），别再新增。
+//   · readEnvIntensity() / readEnvMipRange()：mip 选择与环境项的**共用字节读取面**（批 S-5 起
+//     删掉各文件本地副本，原形 = `asfloat(envData.Load(48))` / `asfloat(envData.Load(52))`）。
+//     ⚠ 本文件**不**提供 `readEnvParams()`——那个名字是 pbr.slang 返回 `EnvParams` 结构体的
+//     同名函数（无参重载撞不上，但同名不同返回类型 = 直接编译错误），别再新增。
+//     ⚠ 已知遗留副本：ssr_trace.frag 的 `EnvParamsS` / `readEnvParamsS()`（改名避撞）——
+//     合并它要重跑 ssr 档逐位探针，账挂 docs/透明混合管线_plan.md §4。
 //   · readExposure()：tonemap.frag.slang 唯一消费者（原形 = `envData.Load(56)`）。
 //   · readSceneEyePos()：ao.frag.slang 把 SSAO 半分辨率深度线性化用（原形 =
 //     `asfloat(sceneData.Load3(12))` = 主光 eyePos，装配层每帧写）。

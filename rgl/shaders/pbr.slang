@@ -22,16 +22,23 @@
 import scene;    // irradianceSH / envBrdfFactor / readSceneLight（SceneLight）/ readEnvIntensity / readEnvMipRange
 import lights;   // 多灯：readLightCount / readGpuLight（lights 自带 binding 24 载体）
 
-// env 参数（scene data 头区契约字段 SceneHeaderBlock::envParams.xy，scene.slang 共用读取面；
-// 本结构只是本地成对取值，无字节偏移。原 light.frag 的 EnvParamsL / readEnvParamsL 逐字搬入）
-struct EnvParamsL
+// env 参数（头区契约字段 SceneHeaderBlock::envParams.xy，scene.slang 共用读取面；本结构只是
+// 本地成对取值，无字节偏移）。名字与字段承自 env.slang 的同名结构——刀0 把**读取面**收进着色核
+//（谁算 IBL 谁读参数），env.slang 自此只剩 binding 4/5 的声明。
+// 🔴 **全仓只准这一份** `readEnvParams()`：scene.slang 当年就是为躲开 env.slang 的同名函数
+// 才只提供两个标量读取（写 `readEnvParams().x` 会 ambiguous overload，见 scene.slang 注释）。
+// 再造第二份 = 同时 import 两侧的文件当场编译失败——那是**好事**，别靠改名绕开。
+struct EnvParams
 {
+    // 环境强度（scene.lua environment.intensity）。**作用点在 GPU 端**：采样后乘（env 颜色只存在于
+    // GPU，无法像定向光那样 CPU 预乘进 SceneLight::color）——与定向光 intensity 是同一类调光参数的
+    // 两种落地形态（docs/archive/教程拆解发现_20260902.md ⑤）。
     float intensity;
-    float mipRange;
+    float mipRange;   // 可采样 mip 跨度（L−1，roughness→LOD 的满量程）
 };
-EnvParamsL readEnvParamsL()
+EnvParams readEnvParams()
 {
-    EnvParamsL e;
+    EnvParams e;
     e.intensity = readEnvIntensity();
     e.mipRange  = readEnvMipRange();
     return e;
@@ -102,7 +109,7 @@ float3 shadeLightVeg(float3 N, float3 V, float3 albedo, float roughness,
 // 一致；Filament 把该 1/π 烘进 CPU SH 系数，我们在求值端）。
 float3 shadeAmbient(TextureCube<float4> envMap, SamplerState envSampler,
                     float3 N, float3 V, float3 albedo, float metallic, float roughness,
-                    bool isVeg, EnvParamsL env, float3 ambientConstant)
+                    bool isVeg, EnvParams env, float3 ambientConstant)
 {
     float3 F0 = lerp(float3(0.04), albedo, metallic);
     float NdotV = max(dot(N, V), 1e-4);

@@ -136,22 +136,28 @@ bool hasUnknownKeyWarn(const std::string& delta, std::string_view prefix, std::s
 // scene_config
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("scene_config：缺文件回落默认（warn 不报错）——默认 = 5 管线 + 3 deferred_styles + 空 entities") {
+TEST_CASE("scene_config：缺文件回落默认（warn 不报错）——默认 = 9 管线 + 两族各 3 风格 + 空 entities") {
 	// 缺文件路径：temp 目录下不存在的名
 	std::string missing = (std::filesystem::temp_directory_path() / "rgl_cfg_no_such_scene.lua").string();
 	auto r = loadSceneConfig(missing);
 	REQUIRE(r.has_value());
 	// 默认画像（defaultSceneConfig，scene_config_impl.cppm）。原 12 管线里的 forward/skybox
 	// 规格与 styles 表已随刀②.2 删除（docs/图变体收敛_plan.md §5），剩下的 = cube + 四条
-	// deferred 规格。
+	// deferred 规格 + 四条透明规格（透明混合管线刀1）。
 	// **实际行为**：缺文件路径**不经 parseEntities**，entities 保持**空**——
 	// 与"存在但空的 lua"不同（下一条），这个不对称是既有语义，钉住防"顺手统一"。
-	CHECK(r->pipelines.size() == 5);
+	CHECK(r->pipelines.size() == 9);
 	CHECK(r->materialRules.size() == 2);
 	CHECK(r->deferredStyleMap.size() == 3);
 	// unlit 2026-10-18 起**必须在榜**（.at 缺键即抛 = 断言）：KHR_materials_unlit 材质
 	// 回落 deferred_geometry 被静默打光 = D1 破口本体（探针重立实测抓出）。
 	CHECK(r->deferredStyleMap.at("unlit") == "deferred_geometry_unlit");
+	// 透明族与 deferred 族**同数同形**是刻意的（blend 与类别两个独立维度各自成立），
+	// 两族条数不等 = 有一族漏了格，那条风格的透明体静默走 PBR 前向。
+	CHECK(r->transparentStyleMap.size() == r->deferredStyleMap.size());
+	CHECK(r->transparentStyleMap.at("unlit") == "transparent_unlit");
+	CHECK(r->transparentStyleMap.at("vegetation") == "transparent_vegetation");
+	CHECK(r->transparentStyleMap.at("light") == "transparent_light");
 	CHECK(r->entities.empty());
 	CHECK(r->spin == true);
 	CHECK(r->showCube == true);
@@ -170,10 +176,11 @@ TEST_CASE("scene_config：空表 return {} → 各字段 = 默认值，且 entit
 	CHECK(r->showCube == true);
 	expectNear(r->exposure, 1.0, 0.0, 1e-6);
 	expectNear(r->aoStrength, 0.0, 0.0, 1e-6);
-	// 管线/deferred_styles = 默认集（parsePipelines 缺段不覆盖）
-	CHECK(r->pipelines.size() == 5);
+	// 管线/两族风格表 = 默认集（parsePipelines / parseStyleMap 缺段不覆盖）
+	CHECK(r->pipelines.size() == 9);
 	CHECK(r->deferredStyleMap.size() == 3);
 	CHECK(r->deferredStyleMap.at("vegetation") == "deferred_geometry_vegetation");
+	CHECK(r->transparentStyleMap.at("vegetation") == "transparent_vegetation");
 	// **实际行为**（parseEntities 缺段合成，scene_config_impl.cppm:138-144）：
 	// entities 空 + showCube 默认 true → 合成 [cube]。"空配置 ≠ 空场景"，空配置 =
 	// 一个旋转的 cube。这条不对称同样被上一条钉着（缺文件 = 真空）。
@@ -530,10 +537,75 @@ return { environment = { dir = "sky", faces = { "px", "nx", "py", "ny", "pz", "n
 	}
 }
 
+// ── resolvePipelineSpecName：风格 → 规格名（透明混合管线刀1 的 blend 护栏）─────────────
+// 判据本体 = scene_config_impl.cppm::resolvePipelineSpecName（两步：风格键 → 族）。
+// 🔴 本用例守的是那条**顺序护栏**：blend 图元永不查 deferred_styles，因此永不拿到
+// 写 5-MRT 的 deferred_geometry* 规格——透明 pass 只挂一张色附件，那种条目画进那张 pass
+// 是"编译得过、VVL 才炸"的形态（论证 → docs/透明混合管线_plan.md §1-3）。
+//
+// **变异红线**（改坏被测码必须让本用例红，答不出 = 摆设）：
+//  A 族判据恒走 deferred（`alphaModeBlend ? transparentStyleMap : deferredStyleMap`
+//    → 去掉三元）→ 「blend 拿透明族」三条 + 「缺格回落 transparent」一条红；
+//  B 回落值写死 deferred 本体（三元回落 → kDeferredGeometrySpec）→ 「缺格回落」一条红
+//    （这条专防"族判据只写了一半：查表走对了、回落走错了"）；
+//  C 族判据反向（`!alphaModeBlend`）→ **反向用例**（blend=false 必须留在 deferred 族）红；
+//  D 风格派生里 material_rules 的 break 丢掉（有序首个命中 → 末个命中）→ 风格键断言红
+//    （本用例同时是刀1 之前那条派生逻辑的回归锚：blend=false 的期望值逐字承自旧实现）。
+TEST_CASE("resolvePipelineSpecName：blend 决定族、风格决定族内哪一支；blend 永不拿 G-buffer 规格") {
+	// ⚠ **不是 `SceneConfig d;`**：materialRules / 两张风格表**没有类内初始化器**，默认构造 =
+	// 全空（默认值住 defaultSceneConfig()，同 DiagnosticsConfig 的"结构体默认 = 交付形态"不同）。
+	const SceneConfig d = defaultSceneConfig();
+	// ① blend=false：与刀1 之前逐字同结果（回归锚，四条覆盖 unlit/两 pattern/回落）
+	CHECK(resolvePipelineSpecName(d, "", true, false) == "deferred_geometry_unlit");
+	CHECK(resolvePipelineSpecName(d, "Foliage_Tree_01", false, false) == "deferred_geometry_vegetation");
+	CHECK(resolvePipelineSpecName(d, "Emissive_Lamp", false, false) == "deferred_geometry_light");
+	CHECK(resolvePipelineSpecName(d, "Wall_Stone", false, false) == "deferred_geometry");
+	// ② blend=true：同一批输入必须**整族换掉**（风格语义保住，族换成前向单附件）
+	CHECK(resolvePipelineSpecName(d, "", true, true) == "transparent_unlit");
+	CHECK(resolvePipelineSpecName(d, "Foliage_Tree_01", false, true) == "transparent_vegetation");
+	CHECK(resolvePipelineSpecName(d, "Emissive_Lamp", false, true) == "transparent_light");
+	CHECK(resolvePipelineSpecName(d, "Wall_Stone", false, true) == "transparent");
+	// ③ 护栏的**穷尽形式**：不是"上面四条恰好没返回 deferred"，而是"任何材质名都返回不了"。
+	// 名字表刻意含两族全部风格词 + 空串（编译期字面量数组，不可能为空 = 无需空集合守卫）。
+	static constexpr std::string_view names[]{
+		"", "Foliage", "Emissive", "Foliage_Emissive_Both", "unlit", "Whatever_Mesh_02"};
+	static constexpr bool unlitFlags[]{false, true};
+	for (std::string_view n : names)
+		for (bool u : unlitFlags) {
+			const std::string spec = resolvePipelineSpecName(d, n, u, true);
+			CHECK(spec.find("deferred") == std::string::npos);  // blend 永不进 G-buffer 族
+			CHECK_FALSE(spec.empty());  // 空规格名 = findSpec 回落 nullptr，比错族更糟
+		}
+	// ④ 缺格回落（变异 B 的靶）：透明族清空 ⟹ 回落**透明本体**，不是 deferred 本体。
+	// deferred 侧的对照用"风格不在表里"的输入（pbr 两族都不上榜 = 它就是回落值本身），
+	// 而不是把 deferred 族也清空——清空两份就测不到"两族各自回落"这件事了。
+	SceneConfig emptyMap = d;
+	emptyMap.transparentStyleMap.clear();
+	CHECK(resolvePipelineSpecName(emptyMap, "Foliage_Tree_01", false, true) == "transparent");
+	CHECK(resolvePipelineSpecName(d, "Wall_Stone", false, false) == "deferred_geometry");
+	// ⑤ 两族独立：用户只覆盖透明族 ⟹ deferred 族一格不动（防"两张表其实指向同一个 map"）
+	SceneConfig one = d;
+	one.transparentStyleMap["vegetation"] = "my_blend_veg";
+	CHECK(resolvePipelineSpecName(one, "Foliage_Tree_01", false, true) == "my_blend_veg");
+	CHECK(resolvePipelineSpecName(one, "Foliage_Tree_01", false, false) == "deferred_geometry_vegetation");
+}
+
+TEST_CASE("scene_config：transparent_styles 与 deferred_styles 各自覆盖默认（共用 parseStyleMap）") {
+	// 共用解析函数（parseStyleMap）的阳性锚点：只写 transparent_styles 时，deferred_styles
+	// 保持默认集（若两表误共用一个 clear/into，这里必红）。
+	TempLua f("sc_tstyles", R"lua(return { transparent_styles = { pbr = "mine_blend" } })lua");
+	auto r = loadSceneConfig(f.pathStr());
+	REQUIRE(r.has_value());
+	REQUIRE(r->transparentStyleMap.size() == 1);  // 覆盖而非追加
+	CHECK(r->transparentStyleMap.at("pbr") == "mine_blend");
+	CHECK(r->deferredStyleMap.size() == 3);  // 另一族没被牵连
+	CHECK(resolvePipelineSpecName(*r, "Wall_Stone", false, true) == "mine_blend");
+}
+
 TEST_CASE("scene_config：pipelines/deferred_styles 非空覆盖默认；pipeline 缺 name 报错；语法错误报错") {
 	{
 		// 原 styles 表（风格→forward 规格）已随刀②.2 删除，本用例的 map 段半边换喂
-		// deferred_styles——两段的「非空 = 覆盖而非追加」语义同源（parseDeferredStyles 先 clear）。
+		// deferred_styles——两段的「非空 = 覆盖而非追加」语义同源（parseStyleMap 先 clear）。
 		TempLua f("sc_pipe",
 			R"lua(return { pipelines = { { name = "mine", mesh = "m.spv", frag = "f.spv" } },
   deferred_styles = { pbr = "mine" } })lua");

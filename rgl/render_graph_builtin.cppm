@@ -56,8 +56,10 @@ RgPassDesc aoPass() {
 
 /** deferredRenderGraphDesc 定义（接口注释见 render_graph.cppm）。Phase 8 ①：light 输出改 scene_hdr + tonemap 上屏。 */
 const RgGraphDesc& deferredRenderGraphDesc() {
-	// Phase 7 D1：3-pass deferred 图（Phase 8 ① +tonemap）。geometry（drawMesh/opaque 段）
+	// Phase 7 D1 起的 deferred 图（Phase 8 ① +tonemap、批 11.4 +ao、2026-10-18 透明混合管线刀1
+	// +transparent；段数由 selfCheckStructure 断言，别在这里抄）。geometry（drawMesh/opaque 段）
 	// 渲入 4 G-buffer RT（显式格式）+ depth；light（drawLight）全屏采样 4 RT 渲入 scene_hdr；
+	// transparent（drawMesh/transparent 段）在 scene_hdr 上前向 alpha 叠加；ao 采 depth 写 ao RT；
 	// tonemap（drawLight）采 scene_hdr ACES 上屏 swapchain。storeOp：G-buffer 全 store
 	//（light 读），帧首 clear；scene_hdr/swapchain 全屏覆盖 clear。present 由 presentTransition 派生。
 	static const RgGraphDesc desc = [] {
@@ -94,7 +96,24 @@ const RgGraphDesc& deferredRenderGraphDesc() {
 		// Phase 8 ①：light 不再直写 swapchain——渲入 scene_hdr（tonemap 上屏）
 		light.outputs.push_back(writeAtt(std::string{kSceneHdrName}, RgUsage::colorWrite,
 			RgLoadOp::clear, RgStoreOp::store));
-		d.passes = {std::move(geometry), std::move(light), aoPass(), tonemapPass()};
+		// 透明混合管线刀1（2026-10-18，docs/透明混合管线_plan.md §1-1）：BLEND 图元的前向叠加段。
+		// 三段语义：① 色 = scene_hdr **load + store**（在已打光的不透明成片上按远→近逐层 alpha
+		// 混合；clear 会把整张成片抹掉）；② depth = **load + store 借来只测不写**（写不写由
+		// StateKit 的 transparentState.depthWrite=false 决定，这里的 depthWrite 角色只是
+		// "把深度附件挂上渲染通道"的声明位，同 picking/highlight 先例）；③ drawSource 吃
+		// FrameDrawList 的 [transparentStart, end) 段（renderListSystem 已按距离² 降序稳定排好）。
+		// 🔴 **排在 ao 之前**不是审美：ao 把 depth 转成 ShaderReadOnly，透明段排在它之后就得
+		// SRO→DSAO→SRO 走两趟无谓转换；排在之前是 DSAO→DSAO→SRO 一条链。
+		// 阴影输入不用手写：decorateShadowPass 的 kShadowLitStates 本就含 "transparent"
+		//（刀②.2 保留那条的理由今天才兑现）。
+		RgPassDesc transparent{.name = "transparent", .state = "transparent",
+			.drawSource = "transparent"};
+		transparent.outputs = {
+			writeAtt(std::string{kSceneHdrName}, RgUsage::colorWrite, RgLoadOp::load,
+				RgStoreOp::store),
+			writeAtt("depth", RgUsage::depthWrite, RgLoadOp::load, RgStoreOp::store)};
+		d.passes = {std::move(geometry), std::move(light), std::move(transparent), aoPass(),
+			tonemapPass()};
 		return d;
 	}();
 	return desc;
@@ -188,9 +207,11 @@ void selfCheckTopology(std::vector<std::string>& failures) {
 	auto scAtt = [] { return RgAttachmentDesc{.name = "swapchain"}; };
 
 	// Phase 7 D1 + Phase 8 ①：deferred 图（geometry 4 G-buffer + light 采 GB 渲 scene_hdr
-	// + tonemap 采 scene_hdr 上屏）应编译通过（原 forward 默认图的 expectOk("default") 样本
-	// 随图本体删除，2026-10-18 刀②.2）
-	expectOk("deferred 3-pass", deferredRenderGraphDesc());
+	// + transparent 前向叠加 + ao + tonemap 采 scene_hdr 上屏）应编译通过（原 forward 默认图的
+	// expectOk("default") 样本随图本体删除，2026-10-18 刀②.2）。
+	// ⚠ 样本名**不写 pass 数**：这行曾叫 "deferred 3-pass"，而图加 ao 时没人改它，
+	// 透明段再加一格就是"3-pass = 五段"的谎——计数属于 selfCheckStructure 的断言，不属于样本名。
+	expectOk("deferred 内建图", deferredRenderGraphDesc());
 
 	// blit 图：offscreen RT 渲三段 + blit 上屏（批次 4 的转正拓扑）
 	expectOk("offscreen blit", RgGraphDesc{
@@ -320,6 +341,31 @@ void selfCheckDeferredLightPass(std::span<const RgCompiledAttachment> attachment
 	}
 }
 
+/** selfCheck：deferred 图透明段（2026-10-18 透明混合管线刀1）——四条各钉一处"编译能过、
+ *  画面上错得隐蔽"的形态：
+ *  ① kind/state/drawSource 三元组：drawMesh + "transparent" + 段名 "transparent"，
+ *     段名错了 = segmentSpan 兜底分支照样返回 transparent 段（**画了，但状态是别人的**）；
+ *  ② **只挂一张色附件**：blend 图元的管线条目按"单色附件"烘焙（transparent.frag 只写
+ *     SV_Target0），本 pass 若被挂上第二张，混合语义与 shader 输出接口就分叉了；
+ *  ③ 色 load **必须是 Load**：Clear 会把 light pass 打好的不透明成片抹掉——透明体照样画、
+ *     背景全黑，是"看起来像配置错了"的那种错；
+ *  ④ 必须挂 depth：不挂 = 透明体盖在前景后面（无遮挡），而画面"有透明效果"，肉眼极易放过。
+ *  位置（排在 ao 之前）由 selfCheckStructure 的下标断言钉。
+ */
+void selfCheckDeferredTransparentPass(const RgPassPlan& tp, std::vector<std::string>& failures) {
+	if (tp.kind != RgPassKind::drawMesh || tp.state != "transparent" || tp.drawSource != "transparent")
+		failures.push_back(
+			"deferred: transparent segment should be drawMesh/transparent drawing the transparent span");
+	if (tp.colors.size() != 1)
+		failures.push_back(fmt::format(
+			"deferred: transparent pass should attach exactly 1 color (blend entries are baked for a "
+			"single target), got {}", tp.colors.size()));
+	if (!tp.colors.empty() && tp.colors[0].loadOp != vk::AttachmentLoadOp::eLoad)
+		failures.push_back("deferred: transparent pass must LOAD scene_hdr (clear would erase the lit opaque result)");
+	if (!tp.depth)
+		failures.push_back("deferred: transparent pass needs the depth attachment (depth-test-only, no write)");
+}
+
 /** selfCheck：deferred 图 ao 段（Phase 11 批 11.4）kind/state + **深度转换**断言。
  *
  * 深度那条是 SSAO 能工作的硬前提：ao pass 以 sampleRead 读 depth，编译器须把布局从
@@ -366,12 +412,13 @@ void selfCheckFormats(std::vector<std::string>& failures) {
  *  docs/图变体收敛_plan.md §5）；帧首 barrier / ao 深度转换 / tonemap 尾段 / present
  *  转换这些**活机制**的断言本体改喂内建 deferred 图（= 今天唯一内建图）。 */
 void selfCheckStructure(std::vector<std::string>& failures) {
-	// 结构断言（deferred 图 = 4 pass：geometry → light → **ao** → tonemap）：首 pass
+	// 结构断言（deferred 图 = 5 pass：geometry → light → **transparent** → ao → tonemap）：首 pass
 	// （geometry）帧首转换—— G-buffer 全部（offscreen = 追踪布局非 discard）+ depth
 	// （discard）；light 段对 5 张 G-buffer 各一条 → ShaderReadOnly 转换（light.frag
 	// 采样的硬前提）；present 转换来自 tonemap 段的 swapchain colorWrite（CAO→PresentSrc）。
-	// ao 段（index 2）额外断言 depth 走 sampleRead 转换（eDepthStencilAttachmentOptimal
-	// → eShaderReadOnlyOptimal）——这条是 SSAO 能工作的前提，漏了 = ao 读到未转换的深度。
+	// 透明段（index 2）断言见 selfCheckDeferredTransparentPass；ao 段（index 3）额外断言 depth
+	// 走 sampleRead 转换（eDepthStencilAttachmentOptimal → eShaderReadOnlyOptimal）——这条是
+	// SSAO 能工作的前提，漏了 = ao 读到未转换的深度。
 	auto compiled = compileRenderGraph(deferredRenderGraphDesc());
 	if (!compiled) {
 		failures.push_back(fmt::format("deferred: self-check graph failed to compile: {}",
@@ -379,13 +426,14 @@ void selfCheckStructure(std::vector<std::string>& failures) {
 		return;
 	}
 	const auto& g = *compiled;
-	if (g.passes.size() != 4)
-		failures.push_back("deferred: expected 4 passes");
-	if (g.passes.size() == 4) {
+	if (g.passes.size() != 5)
+		failures.push_back("deferred: expected 5 passes");
+	if (g.passes.size() == 5) {
 		selfCheckDeferredFirstPass(g.passes[0], failures);
 		selfCheckDeferredLightPass(g.attachments, g.passes[1], failures);
-		selfCheckDeferredAoPass(g.passes[2], failures);
-		selfCheckDeferredLastPass(g.passes[3], failures);
+		selfCheckDeferredTransparentPass(g.passes[2], failures);
+		selfCheckDeferredAoPass(g.passes[3], failures);
+		selfCheckDeferredLastPass(g.passes[4], failures);
 	}
 	if (!g.presentTransition ||
 		g.presentTransition->newLayout != vk::ImageLayout::ePresentSrcKHR)

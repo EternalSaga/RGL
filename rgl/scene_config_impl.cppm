@@ -71,6 +71,17 @@ SceneConfig defaultSceneConfig() {
 			"generated_shaders/deferred_geometry_light.frag.spv"},
 		{"deferred_geometry_unlit", "generated_shaders/model.mesh.spv",
 			"generated_shaders/deferred_geometry_unlit.frag.spv"},
+		// 透明混合管线刀1：透明族四条（mesh 复用 model.mesh.spv，frag 前向着色只写一张色附件）。
+		// 与 deferred 族**同数同形**是刻意的：blend 与类别是两个独立维度，缺哪一格就是哪一格
+		// 的透明体静默走错着色（详见 transparent.frag.slang 头注）。
+		{"transparent", "generated_shaders/model.mesh.spv",
+			"generated_shaders/transparent.frag.spv"},
+		{"transparent_vegetation", "generated_shaders/model.mesh.spv",
+			"generated_shaders/transparent_vegetation.frag.spv"},
+		{"transparent_light", "generated_shaders/model.mesh.spv",
+			"generated_shaders/transparent_light.frag.spv"},
+		{"transparent_unlit", "generated_shaders/model.mesh.spv",
+			"generated_shaders/transparent_unlit.frag.spv"},
 	};
 	cfg.materialRules = {{"Emissive", "light"}, {"Foliage", "vegetation"}};
 	// unlit 必须上榜（2026-10-18）：缺表回落 deferred_geometry = KHR_materials_unlit
@@ -78,8 +89,32 @@ SceneConfig defaultSceneConfig() {
 	cfg.deferredStyleMap = {{"unlit", "deferred_geometry_unlit"},
 		{"vegetation", "deferred_geometry_vegetation"},
 		{"light", "deferred_geometry_light"}};
+	// 透明族同三格（缺表风格回落 transparent 本体 = PBR 前向）。pbr 不上任何一张榜——
+	// 它就是两族的回落值本身。
+	cfg.transparentStyleMap = {{"unlit", "transparent_unlit"},
+		{"vegetation", "transparent_vegetation"},
+		{"light", "transparent_light"}};
 	cfg.spin = true;
 	return cfg;
+}
+
+/** resolvePipelineSpecName 定义（契约见 scene_config.cppm，两步派生 + blend 护栏都在那里）。 */
+std::string resolvePipelineSpecName(const SceneConfig& scene, std::string_view materialName,
+	bool unlit, bool alphaModeBlend) {
+	std::string style = unlit ? "unlit" : "pbr";
+	if (!unlit) {
+		for (const auto& [pattern, styleKey] : scene.materialRules)
+			if (materialName.find(pattern) != std::string_view::npos) {
+				style = styleKey;
+				break;
+			}
+	}
+	// 🔴 族判据在风格查表**之前**：blend 图元永不查 deferredStyleMap（护栏本体，理由见接口注释）
+	const auto& map = alphaModeBlend ? scene.transparentStyleMap : scene.deferredStyleMap;
+	const auto it = map.find(style);
+	if (it != map.end())
+		return it->second;
+	return alphaModeBlend ? std::string{kTransparentSpec} : std::string{kDeferredGeometrySpec};
 }
 
 namespace {
@@ -137,6 +172,7 @@ constexpr std::string_view kSceneKeys[]{
 	"material_styles.pattern",
 	"material_styles.style",
 	"deferred_styles",
+	"transparent_styles",
 };
 
 /**
@@ -442,16 +478,20 @@ void parseMaterialStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace
 	}
 }
 
-/** deferred_styles 解析（Phase 8 批次 F，风格名→deferred 规格名；非空覆盖默认。
- * 未列出的风格在 deferred 下回落 deferred_geometry 本体）。map 段只记表名。 */
-void parseDeferredStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
-	trace.read.emplace_back("deferred_styles");
-	sol::table styles = root["deferred_styles"];
+/** 风格→规格名 map 段解析（Phase 8 批次 F 的 deferred_styles 与透明混合管线刀1 新增的
+ *  transparent_styles **共用同一段代码**：两份同构的「读表 → clear → 逐键填」就是两个真相源，
+ *  将来加第三族时必漏其中一处）。非空覆盖默认；未列出的风格回落该族基础规格
+ *  （回落点在 resolvePipelineSpecName，不在这里）。map 段只记表名 = 开放 map 不钻
+ *  （子键是用户自起的风格名，见 declaresNestedKeys）。 */
+void parseStyleMap(sol::table root, const char* key,
+	std::map<std::string, std::string>& into, SceneKeyTrace& trace) {
+	trace.read.emplace_back(key);
+	sol::table styles = root[key];
 	if (!(styles.valid() && styles.is<sol::table>()))
 		return;
-	cfg.deferredStyleMap.clear();
-	for (auto [key, value] : styles)
-		cfg.deferredStyleMap[key.as<std::string>()] = value.as<std::string>();
+	into.clear();
+	for (auto [name, value] : styles)
+		into[name.as<std::string>()] = value.as<std::string>();
 }
 
 }  // namespace
@@ -551,7 +591,8 @@ void parseDeferredStyles(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace
 		if (auto r = parseEnvironment(root, cfg, *trace); !r)
 			return std::unexpected(r.error());
 		parseMaterialStyles(root, cfg, *trace);
-		parseDeferredStyles(root, cfg, *trace);
+		parseStyleMap(root, "deferred_styles", cfg.deferredStyleMap, *trace);
+		parseStyleMap(root, "transparent_styles", cfg.transparentStyleMap, *trace);
 
 		// 未知键 lint（债-11：scene.lua 里拼错的键此前完全静默）
 		lintUnknownSceneKeys(*trace);

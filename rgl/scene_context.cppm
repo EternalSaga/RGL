@@ -475,7 +475,7 @@ export inline bool casterInShadowVolume(const ShadowVolume& v, const glm::vec3& 
 /**
  * 环境贴图参数（registry context，Phase 5.5；main 启动期从 configs/scene.lua
  * environment 段 + env cubemap 上传结果 emplace，仿 Light）。renderListSystem 每帧
- * 写进 scene data 头 @48（SceneFrameData.envParams），env.slang readEnvParams 消费。
+ * 写进 scene data 头 @48（SceneFrameData.envParams），pbr.slang readEnvParams 消费。
  * mipRange = cubemap mipLevels−1（上传期才知道，故 main 在 loadEnvCubeMapFiles 后填）；
  * 默认全 0 = 无环境（env 镜面/漫反射项黑、天穹关；deferred 的天穹总闸 = intensity，
  * docs/图变体收敛_plan.md §6.2）。

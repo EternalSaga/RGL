@@ -2565,4 +2565,61 @@ TEST_CASE("真图对账：出厂 deferred 图不接 FSR（缺 velocity），装�
 	CHECK_FALSE(vi.color->baseSpace);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 组 11：内建 deferred 图的形状契约（2026-10-18 透明混合管线刀1 起进 just test）
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("renderGraphSelfCheck 零失败——且它此前**只在启动期跑**，图形态断言不在测试网里") {
+	// 这条 CHECK 的全部价值在**调用位置**：renderGraphSelfCheck 此前唯一的调用点是
+	// main_impl（启动期），⟹「deferred 图应该是几段、透明段挂几张色附件、load 是不是 Clear」
+	// 这些断言只有**有人真的把引擎跑起来**才会执行。`just test` 毫秒级、无设备，加这一行
+	// 就把整批图形态断言搬进每次提交的必经之路。
+	// **变异红线**：把 deferredRenderGraphDesc 的 transparent.outputs 里 scene_hdr 的
+	// RgLoadOp::load 改成 clear → 本用例红（selfCheckDeferredTransparentPass 第③条）；
+	// 把 d.passes 里 transparent 与 aoPass() 换序 → 红（selfCheckStructure 的下标断言 +
+	// selfCheckDeferredAoPass 喂到透明段上）。
+	CHECK(renderGraphSelfCheck().empty());
+}
+
+TEST_CASE("内建 deferred 图 = geometry→light→transparent→ao→tonemap；透明段单附件 + Load + 借深度") {
+	// 与上一条**不互为副本**：selfCheck 断的是"图声明与期望形状一致"，本用例断的是
+	// 「编译产物里透明段确实长这样」——两条判据出处不同（前者在引擎内、本条在测试内），
+	// 只有一条被改坏时另一条仍会红。
+	const auto g = compileRenderGraph(deferredRenderGraphDesc());
+	REQUIRE(g.has_value());
+	INFO(errOf(g));
+	REQUIRE(g->passes.size() == 5);
+	std::vector<std::string> names;
+	for (const auto& p : g->passes)
+		names.push_back(p.name);
+	CHECK(names == std::vector<std::string>{"geometry", "light", "transparent", "ao", "tonemap"});
+
+	const auto& tp = g->passes[2];
+	CHECK(tp.kind == RgPassKind::drawMesh);
+	CHECK(tp.state == "transparent");
+	CHECK(tp.drawSource == "transparent");  // 段名错 = segmentSpan 兜底分支照样返回透明段（静默画两遍）
+	// 🔴 单色附件 = blend 图元按"单目标"烘焙的前提（5-MRT 条目画进这张 pass 是 VVL 才炸）
+	REQUIRE(tp.colors.size() == 1);
+	CHECK(tp.colors[0].slot == slotOf(*g, "scene_hdr"));
+	CHECK(tp.colors[0].loadOp == vk::AttachmentLoadOp::eLoad);  // Clear = 抹掉已打光成片
+	CHECK(tp.colors[0].storeOp == vk::AttachmentStoreOp::eStore);  // 下游 ao/tonemap 还要读
+	REQUIRE(tp.depth.has_value());
+	CHECK(tp.depth->loadOp == vk::AttachmentLoadOp::eLoad);  // 借 geometry 写的深度，只测不写
+	// 反向对照（防"colors.size()==1 对每个 pass 都成立"这种空判据）：opaque 段就是 5 张
+	CHECK(g->passes[0].colors.size() == 5);
+	// 深度布局链：透明段排在 ao 之前 ⟹ 它之前没有任何 pass 把 depth 转成 ShaderReadOnly，
+	// 而 ao 是**第一个**这么做的人（若把透明段挪到 ao 之后，它就得 SRO→DSAO→SRO 走两趟，
+	// 见 render_graph_builtin.cppm 里那段"排在 ao 之前不是审美"的注释）。
+	const auto depthToSro = [](const RgPassPlan& p) {
+		return std::ranges::any_of(p.barriers, [](const RgBarrierPlan& b) {
+			return b.aspect == vk::ImageAspectFlagBits::eDepth
+				&& b.newLayout == vk::ImageLayout::eShaderReadOnlyOptimal;
+		});
+	};
+	CHECK_FALSE(depthToSro(g->passes[0]));
+	CHECK_FALSE(depthToSro(g->passes[1]));
+	CHECK_FALSE(depthToSro(g->passes[2]));  // ← 透明段自己
+	CHECK(depthToSro(g->passes[3]));        // ← ao = 第一个采深度的 pass
+}
+
 }  // namespace RGL

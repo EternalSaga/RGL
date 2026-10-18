@@ -278,22 +278,12 @@ void uploadEnvironment(Resources& resources, Environment& env, DeviceContext& de
 	envCtx.mipRange = static_cast<float>(envAsset.mipLevels - 1);
 }
 
-/** 风格 → 管线规格名派生（契约见 main.cppm 声明；★1-a1ii-α 起 bakePipelineEntries 与
- *  bakeMeshletEntries 共用——原为 bakePipelineEntries 内 lambda，逐字搬出零行为变化）。
- *  forward 半边（styleMap + 缺 style 抛错）已随刀②.2 删除（docs/图变体收敛_plan.md §5）：
- *  风格派生只剩 unlit/pbr 起点 → material_rules 连连看 → deferred_styles 落规格名，
- *  缺表回落 deferred_geometry（语义不变）。 */
+/** 风格 → 管线规格名（GltfPrimitive 适配层；判据本体 = scene_config::resolvePipelineSpecName，
+ *  搬出去的理由 = 那条 blend 护栏要能被 `just test` 打到，而 main 的模块分区只有可执行文件
+ *  能 import。原 forward 半边（styleMap + 缺 style 抛错）已随刀②.2 删除，
+ *  docs/图变体收敛_plan.md §5。 */
 std::string resolvePrimitiveSpecName(const SceneConfig& scene, const GltfPrimitive& prim) {
-	std::string style = prim.unlit ? "unlit" : "pbr";
-	if (!prim.unlit) {
-		for (const auto& [pattern, styleKey] : scene.materialRules)
-			if (prim.materialName.find(pattern) != std::string::npos) {
-				style = styleKey;
-				break;
-			}
-	}
-	const auto defIt = scene.deferredStyleMap.find(style);
-	return defIt == scene.deferredStyleMap.end() ? std::string("deferred_geometry") : defIt->second;
+	return resolvePipelineSpecName(scene, prim.materialName, prim.unlit, prim.alphaModeBlend);
 }
 
 /** C1 管线条目烘焙（per unique 模型；风格派生 + 条目去重 + DIAG 分布日志）。 */

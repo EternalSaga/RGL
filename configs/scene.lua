@@ -84,8 +84,8 @@ return {
     },
     -- forward 规格（model/model_pbr/model_phong/model_pbr_ibl/model_vegetation/model_light）、
     -- skybox 规格与 styles 表已随图变体收敛刀②.2 删除（docs/图变体收敛_plan.md §5）。
-    -- 本段非空 = 整表覆盖 C++ 默认集；deferred_geometry 本体经 findSpec 的 C++ 回落词表
-    -- 命中，不必在此列出。
+    -- 本段非空 = 整表覆盖 C++ 默认集；deferred_geometry 本体与 transparent 族四条经 findSpec 的
+    -- C++ 回落词表（kMeshFragSpecs）命中，不必在此列出。
 
     -- Phase 8 批次 F：材质名连连看规则表（有序，首个命中生效；材质名含 pattern → 风格键）。
     -- 材质名 = glTF 官方元数据（loader 透出 materialName）；bistro 全 132 材质：Foliage_ 前缀
@@ -103,6 +103,17 @@ return {
         unlit = "deferred_geometry_unlit",
         vegetation = "deferred_geometry_vegetation",
         light = "deferred_geometry_light",
+    },
+    -- 透明混合管线刀1（docs/透明混合管线_plan.md §1-3）：**同一批风格键**在透明族里的落点。
+    -- 为什么两张表而不是一条命名约定：约定 = 靠字符串猜的第二个真相源，加风格/改名时没有
+    -- 任何东西替你核对两族是否同数；表是显式的，缺哪一格回落哪一格写在 resolvePipelineSpecName。
+    -- 分工：材质名经 material_styles 得**风格键**，alphaMode=="BLEND" 决定查**哪张表**
+    --（blend 图元永不查 deferred_styles —— 透明 pass 只挂一张色附件，5-MRT 条目画进去是
+    -- VVL 才炸的形态），风格键决定族内哪一支。pbr 不上榜 = 两族的回落值本身。
+    transparent_styles = {
+        unlit = "transparent_unlit",
+        vegetation = "transparent_vegetation",
+        light = "transparent_light",
     },
 
     -- Phase 5.5 环境 cubemap（缺段 = 不启用）。faces 按 Vulkan 层序 0-5 = (+X,−X,+Y,−Y,+Z,−Z)

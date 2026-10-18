@@ -131,3 +131,51 @@
 而它**自己**就是 rgl 的父进程——两次 ab 叠着跑（前一次还没收口就起后一次）会让后一次
 静默拿到「已有 rgl 进程在跑」的失败，而失败信息混在自检噪声里不显眼。判据 =
 `pgrep -af "regress.py|[r]gl$"` 为空再起跑。
+
+
+### 刀1（2026-10-18 已落地）：透明段进内建图，出厂图逐位不变 + 透明资产出图
+
+**落地面**：`transparent.frag.slang` 本体 + `_vegetation` / `_light` / `_unlit` 三个 wrapper
+（`#define MATERIAL_CLASS` + `#include`，照 deferred_geometry 那一族）；`deferredRenderGraphDesc`
+插入 `transparent` 段（scene_hdr `load+store`、depth `load+store` 借来只测不写、drawSource 吃
+透明段）；`findSpecBase` 的模型 frag 回落从 4 条 if 链改成 **8 条表** `kMeshFragSpecs`
+（两族各 4，表长写错 = 编译期红）；新增 `transparent_styles` 配置表 + `SceneConfig::transparentStyleMap`；
+风格派生本体从 main 搬进 `scene_config::resolvePipelineSpecName`（**为了写得出手上的测试**：
+main 的 FILE_SET 只有可执行文件能 import）；`env.slang` 收缩成只剩 binding 4/5 声明
+（`EnvParams` / `readEnvParams` 移入 `pbr.slang`，刀0 那份额外的本地副本 `EnvParamsL` 顺势消失）。
+
+**验收读数**：
+
+| 判据 | 结果 |
+|---|---|
+| `just gates`（build → test → checks --strict） | 全绿（测试 575 例 / 96360 断言） |
+| 出厂图逐位（`regress ab --aa off`，A=刀1 / B=刀0） | **逐位相同** ✅ 两侧均 `95edc8cc`（出厂默认锚），地板 0 漂移 |
+| 五种图形态 VVL 冒烟（`aa=off/taa/fsr` + `ssr` + `diagnostics.picking`） | 5/5 PASS，errors=0 warnings=0 |
+| 透明资产真出图 | `transparent.glb`（2 OPAQUE + 2 BLEND α=0.25）+ Phase 5 排序机位 `position={1.69,2.5,-19.46} target={0,0,0} mode="trackball"` ⟹ 混合可见、不透明盒正确遮挡混合盒、VVL 零报错 |
+
+**变异对照实测**（改坏被测码必须让测试变红；六条全 RED，每条还原后重跑基线复绿；
+harness = 四条「陈旧二进制」防呆逐条落实）：
+A 族判据恒走 deferred / B 回落写死 deferred 本体 / C 族判据反向 / D 透明段 scene_hdr 由 Load 改 Clear /
+E 透明段挪到 ao 之后 / F 透明段多挂一张色附件。
+
+**三条实测发现**（都是"照记忆写会写错"的那类）：
+
+1. **`SceneConfig` 的默认构造 ≠ 交付形态**。它的 `materialRules` / 两张风格表**没有类内初始化器**，
+   默认值住 `defaultSceneConfig()`；而 `DiagnosticsConfig` / `ShadowConfig` 是"结构体默认 = 交付形态"
+   （gate_lint 的总锚就靠那条）。同一个仓库里两种惯例并存，按 `const DiagnosticsConfig d;` 的手感
+   写 `const SceneConfig d;` 会得到三张空表 + 全部断言走回落。
+   `TEST: tests/test_scene_config.cppm`（用例内已就地记这条 ⚠）。
+2. **`renderGraphSelfCheck` 此前只在启动期跑**（唯一调用点 = `main_impl`）⟹「内建图应该是几段、
+   透明段挂几张色附件、load 是不是 Clear」这批断言**只有有人真的把引擎跑起来才会执行**，
+   `just test` 完全听不到。刀1 补一条 `CHECK(renderGraphSelfCheck().empty())` 把整批图形态断言
+   搬进每次提交的必经之路（纯 CPU、毫秒级）。
+   `GUARD:` 无 —— 这条只能靠"测试里调用它"，没有机制保证下一个 selfCheck 断言也被跑到。
+3. **selfCheck 的样本名会撒谎**：那行 `expectOk("deferred 3-pass", …)` 在图加 ao 时没人改，
+   到刀1 之前一直是"3-pass = 四段"。计数属于 `selfCheckStructure` 的断言，不属于样本名 ⟹
+   改名 `expectOk("deferred 内建图", …)`（**名字里不带计数**，下次加段就无从可漂）。
+
+**刀2 要接的一条实测症状**：场景含 BLEND 图元**且 `scene.lua` 没有 `environment` 段**
+⟹ 启动硬失败，症状是 VVL `VUID-VkShaderCreateInfoEXT-flags-11292`（透明 frag 声明的 binding 4
+没有 mapping，因为 `Environment::get()` 为空时 `addModelEntry` 不置 `hasEnv`）。
+方向是对的（响亮、起不来），但这条消息对不知情人等于天书 ⟹ 刀2 的启动出声里点名它。
+

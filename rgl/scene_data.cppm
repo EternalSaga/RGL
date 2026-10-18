@@ -23,7 +23,7 @@ namespace RGL {
 //   @0   SceneLight（48B：direction/eyePos/color/ambient 各 vec3，C API 反射生成，
 //        见 scene_forward_types_generated / docs/archive/slang_api_reflection_research.md）
 //   @48  Phase 5.5 env 参数（原 16B 保留区启用）：envIntensity float + envMipRange
-//        float（= mipLevels−1，0 = 无环境）+ 8B 留白——scene.slang/env.slang 字面量一致
+//        float（= mipLevels−1，0 = 无环境）+ 8B 留白——scene.slang/pbr.slang 字面量一致
 //   @64  Phase 5.5 批次 4 skyboxInvViewProj（mat4 列主序 = inverse(proj·view)，
 //        sky.slang skyClipToWorld 消费）
 //   @256 对象矩阵表（批 L 256B 对齐）：mat4 列主序 × kSceneMatrixCapacity（[objectSlot] = spin·world，
@@ -75,7 +75,7 @@ export inline constexpr uint32_t kSceneSentinelWord = 0xFFC00000u;
  *  由下面三个常量派生并 static_assert 钉死（scene.slang 读取面零字节数）。 */
 export inline constexpr uint32_t kSceneDataHeaderOffset = 0;
 /** Phase 5.5：env 参数偏移（envIntensity float @48 + envMipRange float @52；契约字段
- * `SceneHeaderBlock::envParams`.xy，批 S-5 起 env.slang readEnvParams 改字段读）。派生自
+ * `SceneHeaderBlock::envParams`.xy，批 S-5 起 pbr.slang readEnvParams 改字段读）。派生自
  * sizeof(SceneLight)（C API 反射生成），shader 布局漂移即编译失败。 */
 export inline constexpr uint32_t kSceneDataEnvOffset = sizeof(SceneLight);
 /** Phase 5.5 批次 4：skyboxInvViewProj mat4 列主序 @64（inverse(proj·view)；契约字段

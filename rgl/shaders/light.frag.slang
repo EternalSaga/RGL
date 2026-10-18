@@ -119,7 +119,7 @@ float4 main(LightInput input) : SV_Target0
 
     SceneLight shared = readSceneLight();     // 共享项：eyePos@12、ambient@36
     float3 V = normalize(shared.eyePos - P);
-    EnvParamsL env = readEnvParamsL();        // @48 intensity / @52 mipRange
+    EnvParams env = readEnvParams();            // @48 intensity / @52 mipRange（读取面在 pbr）
 
     // ② skybox 背景合成：天空像素 = G-buffer position 清 0（无几何，dot(P,P)=0）。
     // 重建世界射线（与已删除的 forward skybox.frag 同式：near/far 两点差，免 resolution）采 env。

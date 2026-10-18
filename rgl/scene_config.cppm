@@ -33,7 +33,7 @@ export struct PipelineSpec {
  * **Vulkan 层序** 0-5 = (+X,−X,+Y,−Y,+Z,−Z) 排列（素材面顺序定案表 =
  * docs/archive/phase5_5_plan.md 素材定案；nightSky 层序 1,3,5,6,2,4 / rainbow 方案 B
  * ft,bk,up,dn,rt,lf），完整路径 = dir + "/" + faces[i]。intensity 进 scene data
- * @48（env.slang readEnvParams）；原 skybox 背景天穹开关已随 forward 绘制机制删除
+ * @48（pbr.slang readEnvParams）；原 skybox 背景天穹开关已随 forward 绘制机制删除
  * （2026-10-18 刀②.2，docs/图变体收敛_plan.md §6.2：deferred 的天穹对应物 = intensity
  * 总闸，light.frag sky 分支门控 mipRange>0 && intensity>0）。
  *
@@ -81,6 +81,12 @@ export struct SceneConfig {
 	// 风格键经 deferredStyleMap 落规格名；空 = 全走 pbr。
 	std::vector<std::pair<std::string, std::string>> materialRules;
 	std::map<std::string, std::string> deferredStyleMap;  // 风格名→deferred 规格名（缺省风格 = deferred_geometry）
+	// 透明混合管线刀1（docs/透明混合管线_plan.md §1-3）：**同一批风格键**在透明族里的落点。
+	// 为什么是第二张表而不是给规格名加命名约定（"风格 + _transparent 后缀"之类）：约定 =
+	// 靠字符串猜的第二个真相源，改名/加风格时没有任何东西会替你核对；表是显式的，缺哪一格
+	// 回落哪一格写在 resolvePipelineSpecName 里，一眼看得完。
+	// 🔴 blend 图元**只查这张表**（不查 deferredStyleMap）——见 resolvePipelineSpecName 的护栏说明。
+	std::map<std::string, std::string> transparentStyleMap;
 	bool spin = true;                      // 场景整体时间旋转（便于肉眼判断渲染对错）
 	// ── 帧驱动 spin（scene.lua `spin_frame_angle` / `spin_axis`，诊断激励门，默认 = 逐位今天）──
 	// spin_frame_angle ≠ 0 = 门开：angle 按帧号定步推进（纯函数，见 SceneSpin 注释），
@@ -186,6 +192,41 @@ export std::vector<std::string> sceneConfigKnownKeys();
  * @return 默认 SceneConfig（值）
  */
 export SceneConfig defaultSceneConfig();
+
+/**
+ * 两条**基础规格名**（族内缺风格的回落落点）。名字同时是 `ShaderRegistry::findSpecBase`
+ * 查表的键与 `rgl_shader()` 的 frag 名——改这里必须同步改那两处（表键是定义处，不是副本）。
+ * `transparent` 族是**前向着色**（只写一张色附件），`deferred_geometry` 族写 5-MRT G-buffer。
+ */
+export inline constexpr std::string_view kDeferredGeometrySpec = "deferred_geometry";
+export inline constexpr std::string_view kTransparentSpec = "transparent";
+
+/**
+ * 风格 → 管线规格名派生（**纯函数**，从 main 搬进本模块的唯一理由：main 的
+ * CXX_MODULES FILE_SET 只有可执行文件自己能 import，"blend 永远拿不到 G-buffer 规格"
+ * 这条护栏在 main 里写不出测试；本模块在 rlbase，`just test` 直接打）。
+ *
+ * 两步，各管一个独立维度：
+ *  ① **风格键**：`unlit` → "unlit"，否则 "pbr" 再经 scene.lua `material_styles` pattern
+ *     有序首个命中改写（植被 / 光源）；
+ *  ② **族**：`alphaModeBlend` 决定查 `transparent_styles` 还是 `deferred_styles`，
+ *     缺格回落各自族的基础规格（② 是透明混合管线刀1 新加的那一步）。
+ *
+ * 🔴 **护栏在 ② 的顺序里**：blend 图元**永不**查 `deferredStyleMap`。透明 pass 只挂
+ * `scene_hdr` 一张色附件，而 blend 图元只可能落在透明段 ⟹ 一个 5-MRT 的
+ * `deferred_geometry*` 条目画进那张 pass 是"编译得过、VVL 才炸"的形态。把族判据放在
+ * 风格查表**之前**（而不是事后校验规格名），这条就不可能被"忘了加一条检查"绕过。
+ * 残余（明知不堵）：用户把 `transparent_styles` 显式指向某个 G-buffer 规格 = 自己写的
+ * 配置，症状是 VVL 报错（响亮），账挂 docs/透明混合管线_plan.md §4。
+ *
+ * @param scene 场景配置（materialRules + 两张风格表）
+ * @param materialName glTF 材质名（pattern 匹配对象，可为空）
+ * @param unlit glTF `KHR_materials_unlit` 存在性
+ * @param alphaModeBlend glTF `alphaMode == "BLEND"`
+ * @return 管线规格名（交 `ShaderRegistry::findSpec` 落 SPV 对）
+ */
+export std::string resolvePipelineSpecName(const SceneConfig& scene,
+	std::string_view materialName, bool unlit, bool alphaModeBlend);
 
 /**
  * 从 Lua 配置（configs/scene.lua）初始化场景（字段可选，缺省回落默认值）。

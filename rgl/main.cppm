@@ -463,12 +463,12 @@ export void wireMeshletPostRegistration(entt::registry& registry, const Uploaded
 	const RuntimeConfig& cfg, DeviceContext& device, MeshletAssembly& assembly);
 
 /**
- * 材质风格 → 管线规格名派生（★1-a1ii-α 起 bakePipelineEntries 与 bakeMeshletEntries
- * **共用**——叠加与本体必须走同一 material_rules / deferred_styles 映射，否则 frag
- * 静默接错；原为 bakePipelineEntries 内 lambda，抬出 = 单一真相源）。
- * 风格 = prim.unlit ? "unlit" : "pbr" 再经 scene.lua material_rules pattern（有序首个
- * 命中）→ deferred_styles（缺失回落 deferred_geometry）。forward 的 styles 表半边
- * （含「缺 style 启动抛错」分支）已随刀②.2 删除（docs/图变体收敛_plan.md §5）。
+ * 材质风格 → 管线规格名派生的 **GltfPrimitive 适配层**（★1-a1ii-α 起 bakePipelineEntries 与
+ * bakeMeshletEntries **共用**——叠加与本体必须走同一映射，否则 frag 静默接错；原为
+ * bakePipelineEntries 内 lambda，抬出 = 单一真相源）。
+ * 🔴 判据本体不在这里，在 `scene_config` 的 `resolvePipelineSpecName`（含 blend 走透明族的护栏）——
+ * 本函数只把 prim 的三个字段搬过去。为什么搬：main 的 CXX_MODULES FILE_SET 只有可执行文件能
+ * import，判据住在这里就**写不出单测**（透明混合管线刀1 实测撞到此墙）。
  */
 export std::string resolvePrimitiveSpecName(const SceneConfig& scene, const GltfPrimitive& prim);
 

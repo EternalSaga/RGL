@@ -665,9 +665,10 @@ export class ShaderRegistry {
 	const RGL::PipelineSpec* softShadowVariantSpec(const RGL::PipelineSpec* base) const;
 
 	/** 回落查表体（批 11.5 起为 findSpec 的内部底座：scene.lua pipelines 命中或默认回落词表
-	 *  cube / deferred_geometry×4 / light×2 / 尾部 kTailSpecs（tonemap/shadow/shadow_meshlet/
-	 *  izb_mask/ao/taa/velocity/ao_apply/ssr_trace/ssr）；不含 PCSS 变体替换。forward 规格与
-	 *  skybox 的回落条目已随刀②.2 删除）。 */
+	 *  cube / 模型 frag 两族八条 kMeshFragSpecs（deferred_geometry×4 写 G-buffer +
+	 *  transparent×4 前向单附件，2026-10-18 透明混合管线刀1 加）/ light×2 / 尾部 kTailSpecs
+	 *  （tonemap/shadow/shadow_meshlet/izb_mask/ao/taa/velocity/ao_apply/ssr_trace/ssr）；
+	 *  不含 PCSS 变体替换。forward 规格与 skybox 的回落条目已随刀②.2 删除）。 */
 	const RGL::PipelineSpec* findSpecBase(const char* name) const {
 		auto it = styles.find(name);
 		if (it != styles.end())
@@ -679,30 +680,32 @@ export class ShaderRegistry {
 				"cube", "generated_shaders/cube.mesh.spv", "generated_shaders/cube.frag.spv"};
 			return &defaultCube;
 		}
-		if (std::strcmp(name, "deferred_geometry") == 0) {
-			static const RGL::PipelineSpec defaultDeferredGeom{
-				"deferred_geometry", "generated_shaders/model.mesh.spv",
-				"generated_shaders/deferred_geometry.frag.spv"};
-			return &defaultDeferredGeom;
-		}
-		if (std::strcmp(name, "deferred_geometry_vegetation") == 0) {
-			static const RGL::PipelineSpec defaultDeferredGeomVeg{
-				"deferred_geometry_vegetation", "generated_shaders/model.mesh.spv",
-				"generated_shaders/deferred_geometry_vegetation.frag.spv"};
-			return &defaultDeferredGeomVeg;
-		}
-		if (std::strcmp(name, "deferred_geometry_light") == 0) {
-			static const RGL::PipelineSpec defaultDeferredGeomLight{
-				"deferred_geometry_light", "generated_shaders/model.mesh.spv",
-				"generated_shaders/deferred_geometry_light.frag.spv"};
-			return &defaultDeferredGeomLight;
-		}
-		if (std::strcmp(name, "deferred_geometry_unlit") == 0) {
-			static const RGL::PipelineSpec defaultDeferredGeomUnlit{
-				"deferred_geometry_unlit", "generated_shaders/model.mesh.spv",
-				"generated_shaders/deferred_geometry_unlit.frag.spv"};
-			return &defaultDeferredGeomUnlit;
-		}
+		// 模型 frag 两族八条（deferred_geometry×4 写 5-MRT G-buffer / transparent×4 前向着色
+		// 只写一张色附件）。**表驱动而不是 if 链**：透明混合管线刀1 一次加四条，逐条 if 让本函数
+		// 控制复杂度 +4（kTailSpecs 当年就是为躲这个改成表的），而表长写错 = 编译期直接红
+		//（brace-init 元素数与 std::array<N> 不符）。两族必须**同数同形**：blend 与类别是两个
+		// 独立维度，缺哪一格 = 那一格的图元静默走错着色（scene_config::resolvePipelineSpecName）。
+		static const std::array<RGL::PipelineSpec, 8> kMeshFragSpecs{{
+			{"deferred_geometry", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry.frag.spv"},
+			{"deferred_geometry_vegetation", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry_vegetation.frag.spv"},
+			{"deferred_geometry_light", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry_light.frag.spv"},
+			{"deferred_geometry_unlit", "generated_shaders/model.mesh.spv",
+				"generated_shaders/deferred_geometry_unlit.frag.spv"},
+			{"transparent", "generated_shaders/model.mesh.spv",
+				"generated_shaders/transparent.frag.spv"},
+			{"transparent_vegetation", "generated_shaders/model.mesh.spv",
+				"generated_shaders/transparent_vegetation.frag.spv"},
+			{"transparent_light", "generated_shaders/model.mesh.spv",
+				"generated_shaders/transparent_light.frag.spv"},
+			{"transparent_unlit", "generated_shaders/model.mesh.spv",
+				"generated_shaders/transparent_unlit.frag.spv"},
+		}};
+		for (const auto& s : kMeshFragSpecs)
+			if (std::strcmp(s.name.c_str(), name) == 0)
+				return &s;
 		if (const RGL::PipelineSpec* light = RGL::findLightSpec(name))
 			return light;
 		// 尾部词表（tonemap/shadow/izb_mask/ao/taa）：批 12.6 起表驱动查表——旧 if 链
