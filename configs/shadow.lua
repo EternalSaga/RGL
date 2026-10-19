@@ -73,7 +73,19 @@ return {
     -- 被抹光的那条缝；改本值前先跑它。逐字段语义与接线史 → rgl/shadow_config.cppm 的
     -- ShadowCsmTuning；⚠ 接线坑（vkCmdSetDepthBias 的形参顺序把 slope 送进过 clamp 位）
     -- → rgl/shader.cppm applyDynamicState 的 setDepthBias 注释。
-    csm = { slope_bias = 0.0 },
+    --   force_cascade = **强制选级诊断键**（不是画质旋钮！）。-1 = 关（出厂，逐位不变）；
+    --     0..3 = 把**全场景**钉到该级采样。clamp [-1, 7] 防手滑（上限 7 与 slope_bias 的 64
+    --     同性质：只是"手滑多写一个 0"的闸门，不代表 7 处有语义；真射程 = 生效级数，判据在
+    --     消费函数 forceShadowCascadeSplits 里，越界原样返回 = 等同关）。
+    --   为什么只改四个数就能改选级：采样端选级是**三段无条件比较**
+    --     （shadow.slang 的 `if (depth > splits.x) cascade = 1u;` 那三行），把 splits 覆写成
+    --     `splits[i] = (i < k) ? 0 : 1e9` 就把每个片元都推到第 k 级——shader 一个字不用动。
+    --   存在的理由（债-139）：量"相邻两级对同一块表面的分歧有多大"。屏幕空间统计量会被无关的
+    --     真影边淹掉（实测分不开），唯一无偏仪器 = 钉级 c 渲一张、钉级 c+1 渲一张做差分。
+    --   🔴 只覆写**写进 scene data 的那份** splits：CPU 侧算级联球/切片的 cascadeSplitDistance
+    --     照常 ⟹ 几何是真实几何，两次运行只有"从哪一级取遮挡"这一个变量。
+    --   ⚠ 钉级后的画面是**错的**（整屏用一级覆盖，出块旁路整片没影子），只准拿来出差分图。
+    csm = { slope_bias = 0.0, force_cascade = -1 },
 
     -- PCSS 档调参（clamp 口径 = 旧 pcss_* 三键原样：sun [0,5]、两半径 [1,64] 成本护栏）
     -- ⚠ 本档**没有** min_footprint_texels：那是 EVSSM 矩滤波专用件（PCSS 的半径由 Δz 现算，

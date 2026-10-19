@@ -143,21 +143,33 @@ void applyTuningBlock(sol::table& root, std::string_view table, ShadowTuning& in
 
 /**
  * CSM 档调参块读取（configs/shadow.lua 的 `csm`；缺表/缺键 = 全默认）。形态与
- * `applyTuningBlock` 同构：键轨迹**总是**记 `csm.slope_bias`（回显覆盖率护栏的输入），
- * 值 clamp [0, 64]（防手滑，与 pcss 两半径的 clamp 口径同形。量程上限不是实测出来的档：
- * offset = m·dZ/dpixel 对 m 单调，出厂 16 已在"抬掠射面自遮"这个方向上走得很远，64 只是
- * 给"手滑多写一个 0"留的闸门，不代表 64 处有什么语义）。
+ * `applyTuningBlock` 同构：键轨迹**总是**记 `csm.slope_bias` / `csm.force_cascade`（回显
+ * 覆盖率护栏的输入），值 clamp [0, 64]（防手滑，与 pcss 两半径的 clamp 口径同形。量程上限
+ * 不是实测出来的档：offset = m·dZ/dpixel 对 m 单调，出厂 16 已在"抬掠射面自遮"这个方向上走得
+ * 很远，64 只是给"手滑多写一个 0"留的闸门，不代表 64 处有什么语义）。
+ * `force_cascade` 的 clamp [-1, 7] 同理：-1 = 关（出厂），0..3 是现有 4 级级联的射程，
+ * 上限 7 **不代表 7 处有语义**——它是"手滑多写一个 0"的闸门（与 slope_bias 的 64 同性质），
+ * 真正的射程判定在消费函数 `forceShadowCascadeSplits`（force >= count 原样返回）。
  * @param root 配置根表
  * @param into 写入目标（ShadowConfig::csm）
  * @param trace 键轨迹
  */
 void applyCsmBlock(sol::table& root, ShadowCsmTuning& into, ShadowKeyTrace& trace) {
 	trace.read.emplace_back("csm.slope_bias");
+	trace.read.emplace_back("csm.force_cascade");
 	const sol::optional<sol::table> block = root["csm"];
 	if (!block)
 		return;
 	sol::optional<double> v = (*block)["slope_bias"];
 	into.slopeBias = std::clamp(v ? *v : into.slopeBias, 0.0, 64.0);
+	// 缺键回落**当前值**（= 结构体默认 -1），与 slope_bias 同一写法。🔴 本键**必须**保持
+	// `f ? *f : …` 而不是真值判据 `f && *f`：0 是合法档（钉到第 0 级），写成后者会把"钉级 0"
+	// 静默读成"关"——量具最要紧的那一臂（级 0 vs 级 3 差分）会退化成"关 vs 级 3"，而日志里
+	// 两臂的回显都写着各自被写进的值，看不出来。判据 = tests/test_scene_config.cppm 的
+	// 「0 不被吞」断言。
+	sol::optional<double> f = (*block)["force_cascade"];
+	into.forceCascade = static_cast<int>(
+		std::clamp(f ? *f : static_cast<double>(into.forceCascade), -1.0, 7.0));
 }
 
 /**
@@ -235,6 +247,7 @@ const ShadowGateEcho kShadowEcho[]{
 	{"izb.grid", [](const ShadowConfig& c) { return fmt::format("{}", c.izbGrid); }},
 	{"izb.dump_frame", [](const ShadowConfig& c) { return fmt::format("{}", c.izbDumpFrame); }},
 	{"csm.slope_bias", [](const ShadowConfig& c) { return fmt::format("{}", c.csm.slopeBias); }},
+	{"csm.force_cascade", [](const ShadowConfig& c) { return fmt::format("{}", c.csm.forceCascade); }},
 	{"pcss.sun_degrees", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.sunDegrees); }},
 	{"pcss.search_radius", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.searchRadius); }},
 	{"pcss.max_penumbra", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.maxPenumbra); }},

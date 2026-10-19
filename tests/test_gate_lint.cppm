@@ -178,9 +178,9 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	                                  // csm.slope_bias 批：预留空块的 `{"csm",…,nullptr}` 挂号行
 	                                  // 随该块填入第一枚键删除，改由 kGateBlocks 的 csm 块覆盖）
 	CHECK(blocks.size() == 7u);       // csm / pcss / evssm / 三探针 / meshlet
-	CHECK(blockKeys.size() == 20u);   // 1 + 3 + 4 + 2 + 2 + 2 + 6
+	CHECK(blockKeys.size() == 21u);   // 2 + 3 + 4 + 2 + 2 + 2 + 6（csm 两块键：slope_bias + force_cascade）
 	CHECK(echo.size() == 30u);
-	CHECK(shadowEcho.size() == 13u);
+	CHECK(shadowEcho.size() == 14u);
 	CHECK(meshletKeys.size() == 8u);  // 整块 8 枚（债-106 红线：接管整块 = 一枚都不能少；
 	                                  // 债-129 S2 起 debug+tint 合并为 instrument、
 	                                  // overlay+switch 合并为 mode）
@@ -197,7 +197,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 去重门数钉在「独立行 ∪ 块条目」的并集上（= 三方来源键数之和）。
 	std::vector<std::string> unionGates = rules;
 	unionGates.insert(unionGates.end(), blockKeys.begin(), blockKeys.end());
-	CHECK(distinctGateCount(unionGates) == 51u);
+	CHECK(distinctGateCount(unionGates) == 52u);
 	// 反向：独立行与块条目吃的都必须是已知来源键（陈旧/拼错门名）。
 	auto known = [&](std::string_view k) {
 		return hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);
@@ -510,6 +510,26 @@ TEST_CASE("gate_lint inertNote 组（shadow）：izb.grid 与三块调参键按 
 		// 反向：mode=none 但**没配**本键（出厂 0 = 未偏离）⟹ 不喊——判据是"配了没人读的值"，
 		// 不是"档不对"（出厂态必须零 findings，否则 gate_lint 基线用例红）
 		CHECK(find(lintS(ShadowConfig{.mode = ShadowMode::none}), "csm.slope_bias") == nullptr);
+	}
+	{  // csm.force_cascade（强制选级诊断键）：宿主与 slope_bias **同一条** = `mode != "none"`，
+	   // **不是** `mode == "csm"`。选级那三段比较是 csm / pcss / evssm 三档共用的公共路径
+	   // ⟹ 三档钉级都有消费者、必须沉默；mode = "none" 时 drawAtlas = false 且
+	   // shadowParams.z(enabled) = 0，采样整段旁路给全亮 ⟹ 钉到哪一级都没人读。
+	   // 变异红线：① kCsmKeys 删掉本条目 → 覆盖率护栏的 blockKeys.size() 钉先红；② 谓词写成
+	   // 恒真 → 最后那条"出厂态不喊"红；③ 谓词恒假（或把 owner 写成 mode == csm）→ 下面的
+	   // REQUIRE / pcss 与 evssm 两臂红（③ 的两种坏法各只红一处，所以两臂都得在）。
+	   // ⚠ 出厂值 -1 = 默认 ⟹ 构造档必须用 ≠ -1 的值（判据是"偏离默认 + 宿主不成立"）。
+		const ShadowConfig off{.mode = ShadowMode::none, .csm{.forceCascade = 2}};
+		const auto fs = lintS(off);
+		REQUIRE(find(fs, "csm.force_cascade") != nullptr);
+		CHECK(find(fs, "csm.force_cascade")->severity == GateSeverity::inertNote);
+		for (const auto m : {ShadowMode::csm, ShadowMode::pcss, ShadowMode::evssm}) {
+			const ShadowConfig on{.mode = m, .csm{.forceCascade = 2}};
+			CHECK_MESSAGE(find(lintS(on), "csm.force_cascade") == nullptr, "mode=",
+				shadowModeName(m), " 档选级路径照跑 ⟹ 钉级有消费者，不该判死值");
+		}
+		// 反向：mode=none 但没配本键（出厂 -1 = 未偏离）⟹ 不喊
+		CHECK(find(lintS(ShadowConfig{.mode = ShadowMode::none}), "csm.force_cascade") == nullptr);
 	}
 }
 
@@ -831,7 +851,7 @@ TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = assets + shadow_lod ≥ 0（�
 //
 // 用途：gate_lint 的任何重构（塌表 / 换装配 / 改措辞 / 换发射顺序）都要能在**不重跑 GPU、
 // 不截图**的前提下判定「触发面与归因面有没有变」。上面的行为用例逐条钉逐门语义；本 harness
-// 钉的是 92 档全组合扫描下的**输出面**，两张基线随仓库走（/tmp 下的历史副本不是基线）：
+// 钉的是 94 档全组合扫描下的**输出面**，两张基线随仓库走（/tmp 下的历史副本不是基线）：
 //   · `tests/golden/gate_lint_findings.txt`     = 每档 `(门名, 级别枚举值)` 行 —— 触发面
 //   · `tests/golden/gate_lint_findings_msg.txt` = 每档 `(门名, 消息)` 行 —— 归因面
 // 行序 = 档内字典序（**集合语义**：块装配的 finding 发射顺序与独立行时代不同是允许的，
@@ -877,7 +897,8 @@ constexpr GateEnv kGoldenNoLlm{.staticGraphicsIndirect = true};
 /** pcss / evssm 调参块的「全偏离」形态（四字段都 ≠ 出厂值；8.0 = 偏离默认 16.0）。 */
 constexpr ShadowTuning kTuningAll{2.0, 40.0, 48.0, 8.0};
 
-/** 扫描表 92 档（88 + 4：csm 块四档（本批新键）；原 90 − 2：variant 交叉校验两档随 RgGraphVariant 枚举删除，2026-10-18 刀②；档序 = 基线文件档序；每档的期望输出以基线文件为准，行为语义见上方用例）。 */
+/** 扫描表 94 档（88 + 6：csm 块四档（slope_bias 批）+ csm.force_cascade 两档（诊断键批：
+//    owner-on-force 零 findings / off-none-force 恰一条 inertNote）；原 90 − 2：variant 交叉校验两档随 RgGraphVariant 枚举删除，2026-10-18 刀②；档序 = 基线文件档序；每档的期望输出以基线文件为准，行为语义见上方用例）。 */
 const std::vector<GoldenCase>& goldenCases() {
 	static const std::vector<GoldenCase> kCases{
 		// ———— factory：出厂配置 × 图/env 四世界 ————
@@ -892,6 +913,12 @@ const std::vector<GoldenCase>& goldenCases() {
 			.shadow = {.mode = ShadowMode::pcss, .csm{.slopeBias = 24.0}}},
 		{.name = "csm/off-none", .shadow = {.mode = ShadowMode::none, .csm{.slopeBias = 24.0}}},
 		{.name = "csm/off-none-default", .shadow = {.mode = ShadowMode::none}},
+		// 诊断键 csm.force_cascade 两档（宿主与 slope_bias 同一条：mode != "none"）：
+		// owner-on-force 必须**零 findings**（三档共用选级路径 ⟹ 钉级有消费者），
+		// off-none-force 必须**恰一条** inertNote（采样整段旁路 ⟹ 配了没人读）。
+		{.name = "csm/owner-on-force", .shadow = {.csm{.forceCascade = 2}}},
+		{.name = "csm/off-none-force",
+			.shadow = {.mode = ShadowMode::none, .csm{.forceCascade = 2}}},
 		// ———— pcss 块：宿主 = mode=="pcss"（含结构性错位键 min_footprint_texels）————
 		{.name = "pcss/owner-on", .shadow = {.mode = ShadowMode::pcss, .pcss = kTuningAll}},
 		{.name = "pcss/owner-on-mft-default",
@@ -1067,7 +1094,7 @@ const std::vector<GoldenCase>& goldenCases() {
 	return kCases;
 }
 
-/** 92 档全组合扫描 → 两份基线文本（触发面 keep / 归因面 msg）。校验与重生成**共用这一份**
+/** 94 档全组合扫描 → 两份基线文本（触发面 keep / 归因面 msg）。校验与重生成**共用这一份**
  *  装配代码：两条路各写一遍 = 两个真相源，改口径时必漂（本 harness 要拦的正是这个形态）。 */
 void buildGoldenBlobs(std::string& keep, std::string& msg) {
 	static const std::vector<RgPassPlan> kNoLightGraph = passesOfNoLightGraph();
@@ -1155,8 +1182,8 @@ std::string diffGoldenFile(const std::string& file, const std::string& current) 
 
 }  // namespace
 
-TEST_CASE("gate_lint 金标准 harness：92 档全组合扫描（默认 = 校验 committed golden；RGL_GATE_LINT_GOLDEN=<dir> = 重生成）") {
-	CHECK(goldenCases().size() == 92u);  // 扫描面哨兵：删档 = 回归网静默缩小（变异红线 ②）
+TEST_CASE("gate_lint 金标准 harness：94 档全组合扫描（默认 = 校验 committed golden；RGL_GATE_LINT_GOLDEN=<dir> = 重生成）") {
+	CHECK(goldenCases().size() == 94u);  // 扫描面哨兵：删档 = 回归网静默缩小（变异红线 ②）；加档 = 同步重生成两份基线
 	std::string keep, msg;
 	buildGoldenBlobs(keep, msg);
 	const char* const outDir = std::getenv("RGL_GATE_LINT_GOLDEN");

@@ -7,6 +7,9 @@
 ### csm/off-none
 csm.slope_bias	0
 ### csm/off-none-default
+### csm/owner-on-force
+### csm/off-none-force
+csm.force_cascade	0
 ### pcss/owner-on
 pcss.min_footprint_texels	1
 ### pcss/owner-on-mft-default

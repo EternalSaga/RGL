@@ -4,6 +4,7 @@ module;
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>  // glm::inverse（B6 从 v.view 恢复吸附中心）
 #include <cmath>                       // frexp/ldexp/isfinite（量化算子 = 2 的幂的契约）
+#include <cstring>                     // memcmp（"门关逐位不变"的**逐位**二字按字面判）
 #include <initializer_list>            // 必须：modules 下 std::initializer_list 不从 import 带进来
 
 // 阴影几何回归测试（批 12.1 · B1）——把 Phase 11 批 11.2 的 5a-3→5a-9 七轮排障
@@ -97,6 +98,27 @@ struct Aabb {
 glm::vec3 supportPoint(const Aabb& box, const glm::vec3& d) {
 	return glm::vec3{d.x >= 0.0f ? box.hi.x : box.lo.x, d.y >= 0.0f ? box.hi.y : box.lo.y,
 		d.z >= 0.0f ? box.hi.z : box.lo.z};
+}
+
+/**
+ * 采样端选级的**独立第二实现**（逐行转录 `rgl/shaders/shadow.slang` 的三段无条件比较）。
+ *
+ * 期望值出处 = shader 源码，**不抄被测 C++ 码**（skill rgl-test-discipline「断言独立于实现」）：
+ * forceShadowCascadeSplits 写出的 splits 让片元落到哪一级，只有拿 shader 那份逻辑去判才算
+ * 判据——两边都抄同一个 C++ 实现的话，编码写反也照样"对得上"。
+ * ⚠ 改 shader 选级逻辑必须同步本函数（同 test_shadow_forward 那条"提取式与测试同改"的契约）。
+ */
+uint32_t selectCascade(const glm::vec4& splits, float depth) {
+	uint32_t cascade = 0u;
+	if (depth > splits.x) cascade = 1u;
+	if (depth > splits.y) cascade = 2u;
+	if (depth > splits.z) cascade = 3u;
+	return cascade;
+}
+
+/** **逐位**相同（不是"值相等"）：+0.0 与 −0.0 在这里判不同——否则"门关逐位不变"是空话。 */
+bool bitwiseEqual(const glm::vec4& a, const glm::vec4& b) {
+	return std::memcmp(&a, &b, sizeof(glm::vec4)) == 0;
 }
 
 }  // namespace
@@ -402,7 +424,8 @@ TEST_CASE("projWithDepthRange：新近平面点 z=0、新远平面点 z=1（zero
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 组 3：cascadeSplitDistance / quantizeShadowDistance —— 切分与量化
+// 组 3：cascadeSplitDistance / quantizeShadowDistance / forceShadowCascadeSplits
+//       —— 切分、量化，与**强制选级诊断键**的 splits 编码
 // ═══════════════════════════════════════════════════════════════════════════
 
 TEST_CASE("cascadeSplitDistance：严格单调递增，末级恰为 far") {
@@ -521,6 +544,96 @@ TEST_CASE("同档两机位 ⟹ 各级级联半径与纹素逐位相同（阴影�
 			cascadeSplitDistance(nearQ, quantizeShadowDistance(2.5f), c, kActiveShadowCascades));
 		CHECK(frustumBoundingSphere(makeView(kPoses[0], 0.54f), subOut).radius != sA.radius);
 	}
+}
+
+// ─── forceShadowCascadeSplits（csm.force_cascade 的编码本体，诊断键）─────────
+
+TEST_CASE("forceShadowCascadeSplits：门关（force<0 / force>=count）**逐位**原样返回") {
+	// 判据来源 = 本仓「门关逐位不变」红线：出厂 -1 时写进 scene data 的字节必须与本键加入前
+	// 相同（实机形态 = just shot 出厂图 sha256 锚；这里是它的算术形态，零 GPU 零窗口）。
+	// 变异红线：① 删掉早退（恒覆写）→ 本用例红；② `force < 0` 写成 `force <= 0` → force=0
+	// 那一臂红（0 = 钉第 0 级，是**合法档**不是关）；③ 射程 `>= count` 漏等号写成 `> count`
+	// → force == count 那一臂红（越界必须原样返回，否则会去钉一级从未渲染的级联）；
+	// ④ 把返回改成"重新构造的等值 vec4"（+0.0 归一）→ −0.0 那一臂红（"逐位"两字的判据在此）。
+	Scene scene;
+	for (int i = 0; i < 256; ++i) {
+		const auto r = [&scene] { return static_cast<float>(scene.rng.uniform(-1e6, 1e6)); };
+		const glm::vec4 s{r(), r(), r(), r()};  // 任意有限值（含 0 附近与极大值）
+		for (const int force : {-1, -2, -1000000, 4, 5, 1000}) {
+			CHECK_MESSAGE(bitwiseEqual(forceShadowCascadeSplits(s, 4u, force), s),
+				"force=", force, " 必须原样返回，实得 ",
+				forceShadowCascadeSplits(s, 4u, force).x);
+		}
+	}
+	// NaN 载荷同样逐位不动（门关路径上没有任何算术，memcmp 判的是位型本身）
+	const glm::vec4 weird{std::nanf(""), 0.0f, -0.0f, 1e9f};
+	CHECK(bitwiseEqual(forceShadowCascadeSplits(weird, 4u, -1), weird));
+	CHECK(bitwiseEqual(forceShadowCascadeSplits(weird, 4u, 7), weird));
+	// 反向锚点：本用例的"逐位"不是恒真——+0.0 与 −0.0 是**两个不同**位型。
+	// 没有这四行，"逐位原样"会被读成"值相等"，而 ④ 那类变异就藏在 0 的符号位里。
+	CHECK(bitwiseEqual(forceShadowCascadeSplits(weird, 4u, -1), weird));
+	CHECK_FALSE(bitwiseEqual(glm::vec4{0.0f, -0.0f, 0.0f, -0.0f},
+		glm::vec4{0.0f, 0.0f, 0.0f, 0.0f}));
+}
+
+TEST_CASE("forceShadowCascadeSplits：编码 = (i<force)?0:1e9，四档互不相同 + 末槽恒 1e9") {
+	// 判据来源 = scene_context.cppm 该函数注释里的编码式（**独立写出**，不抄实现体）。
+	// 变异红线：① 三元写反（`(i<force)?1e9:0`）→ 四条 CHECK 全红；② 比较写成 `i <= force`
+	// → k=0 那一臂红（第 0 级不该有 0 槽）；③ 循环上界用 count 而不是 vec4 槽数 → 末槽
+	// 那条红；④ force 不参与（恒 0 或恒 1e9）→ 相邻档"必须不同"那两条红。
+	const glm::vec4 real{0.3047f, 0.5900f, 0.9346f, 1e9f};  // 真实 splits 形态（末级哨兵）
+	constexpr float N = 1e9f;
+	CHECK(forceShadowCascadeSplits(real, 4u, 0) == glm::vec4(N, N, N, N));
+	CHECK(forceShadowCascadeSplits(real, 4u, 1) == glm::vec4(0.0f, N, N, N));
+	CHECK(forceShadowCascadeSplits(real, 4u, 2) == glm::vec4(0.0f, 0.0f, N, N));
+	CHECK(forceShadowCascadeSplits(real, 4u, 3) == glm::vec4(0.0f, 0.0f, 0.0f, N));
+	// 🔴 反向用例（本文件最要紧的一条）：相邻两档必须**不同**。恒返回同一个数、或 force
+	// 根本没被用，都会让上面四条里"看起来对的那条"绿着——只有差分两臂能红。
+	CHECK_FALSE(forceShadowCascadeSplits(real, 4u, 2) == forceShadowCascadeSplits(real, 4u, 3));
+	CHECK_FALSE(forceShadowCascadeSplits(real, 4u, 0) == forceShadowCascadeSplits(real, 4u, 1));
+	// 🔴 5a-6 红线（NaN 全黑事故）在诊断档下也必须成立：末槽恒 = 1e9，写 0 的槽只出现在
+	// "**低于**目标级"那一侧，而目标级由射程闸门 force<count 保证是本帧真实渲染的级。
+	for (uint32_t k = 0; k < 4u; ++k) {
+		const glm::vec4 f = forceShadowCascadeSplits(real, 4u, static_cast<int>(k));
+		CHECK(f[3] == N);
+		for (uint32_t i = 0; i < 4u; ++i)
+			CHECK_MESSAGE(f[i] == (i < k ? 0.0f : N), "k=", k, " 槽 ", i);
+	}
+	// 射程跟着 count 走（count=2：force=2 越界 = 原样返回，不写不存在的级）
+	CHECK(bitwiseEqual(forceShadowCascadeSplits(real, 2u, 2), real));
+	CHECK(forceShadowCascadeSplits(real, 2u, 1) == glm::vec4(0.0f, N, N, N));
+}
+
+TEST_CASE("forceShadowCascadeSplits：拿 shader 那三段比较验钉级真的改选级（真实 splits）") {
+	// 判据出处 = `rgl/shaders/shadow.slang` 的选级逻辑（selectCascade 是它的**独立转录**），
+	// 不是被测 C++ 码——两边都抄同一份实现的话，编码写反也照样"对得上"。
+	// 真实 splits = 用户报障机位（债-139 两机位）count=4、量化后 n/f 的产物，2026-10-19 读数。
+	const glm::vec4 real{0.3047f, 0.5900f, 0.9346f, 1e9f};
+	// 先钉"真实 splits 下 depth=0.5 自然落在级 1"：0.5 > 0.3047 越 split0、0.5 > 0.59 不越
+	// （这条在，下面"钉到别的级"才有对照物）。
+	CHECK(selectCascade(real, 0.5f) == 1u);
+	// force=1 → 仍是级 1（钉到本来那一级 = 不改变）；force=2 → **必须**把它抬到级 2。
+	CHECK(selectCascade(forceShadowCascadeSplits(real, 4u, 1), 0.5f) == 1u);
+	CHECK(selectCascade(forceShadowCascadeSplits(real, 4u, 2), 0.5f) == 2u);
+	// 全深度扫描：钉到第 k 级 ⟹ **任何正深度**都落级 k（"全场景钉死"的定义）。深度集含
+	// 0 附近、三级分界的左右两侧、以及远超末级的值。
+	const float depths[] = {1e-7f, 0.05f, 0.3046f, 0.3047f, 0.5f,
+		0.5900f, 0.9346f, 1.0f, 17.0f, 1e8f};
+	for (uint32_t k = 0; k < 4u; ++k) {
+		const glm::vec4 f = forceShadowCascadeSplits(real, 4u, static_cast<int>(k));
+		for (const float d : depths)
+			CHECK_MESSAGE(selectCascade(f, d) == k, "k=", k, " depth=", d, " 实落级 ",
+				selectCascade(f, d), " splits=", f.x, " ", f.y, " ", f.z, " ", f.w);
+	}
+	// 反向锚点：不钉级时同一批深度**不是**全落同一级（否则上面那 40 条断言是"选级恒等于 k"）。
+	bool naturalDiffers = false;
+	for (const float d : depths)
+		naturalDiffers = naturalDiffers || selectCascade(real, d) != selectCascade(real, depths[0]);
+	CHECK(naturalDiffers);
+	// ⚠ 边界写清楚，别让它成为将来的"意外"：depth **恰为 0** 时 `depth > 0.0f` 不成立
+	// ⟹ 编码失效、落回级 0。可见片元的视深恒 > 0（近截面之前已被裁剪），实机打不到这条；
+	// 它同时说明"0 这一侧安全"的前提是**深度恒正**，不是"0 也参与比较"。
+	CHECK(selectCascade(forceShadowCascadeSplits(real, 4u, 2), 0.0f) == 0u);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

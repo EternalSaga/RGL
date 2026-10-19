@@ -133,16 +133,23 @@ export void renderListSystem(entt::registry& rg, RGL::Resources& resources,
  * 契约红线（未生效槽 splits 不得为 0 / texel 分母 = 单块边长 / params.w = shadowFar）
  * 随实现体注释，回归断言 = tests/test_render_list_shadow。
  * ⚠ 软影两区（shadowPcss / shadowEvssm）的调参**在实现内读 shadowConfig() 的两块**
- * （按档分立，批 N6b / 债-16⑤），不走本接缝的入参——入参只承载 draw 开关这一件事。
+ * （按档分立，批 N6b / 债-16⑤），不走本接缝的入参——入参承载"draw 开关"与"强制选级诊断键"
+ * 两件事：这两枚的判据都是**写进 scene data 的字节**，无单例直打比 setShadowConfig 再读回
+ * 更省一轮，也免掉测试改全局态（软影调参是"实现内读单例"的历史形态，别顺手把本键也并进去）。
  * @param out 出参：本帧 draw list（写 sceneData.shadowViewProj / Splits / TexelSizes / Params / Atlas）
  * @param shadowNear/shadowFar **量化后**的切分深度界（与 renderListSystem 建切片同源——
  *   splits 阈值与级联内容错位 = 边界处阴影闪跳）
  * @param volumes 各级光空间体（VP + XY 半宽；与剔除用同一批，先建体再同时用于剔除与矩阵）
  * @param shadowPassEnabled 阴影总开关（调用点 = 形态决策表 drawAtlas；false 只影响
  *   shadowParams.z，其余字段照常填写）
+ * @param forceCascade **诊断键**（`csm.force_cascade`）：>= 0 把全场景钉到该级采样，只覆写
+ *   写进 scene data 的 splits（→ forceShadowCascadeSplits）。🔴 **级联几何一律不受影响**——
+ *   入参 shadowNear/shadowFar 与 volumes 是真实几何，本键改的只是"片元被允许落在哪一级"，
+ *   否则测的就不是"同一套级联几何下换采样源"。-1 = 关：函数原样返回 splits ⟹ **写进
+ *   scene data 的字节逐位不变**（本仓「门关逐位不变」红线，锚 = just shot 出厂图 sha256）
  */
 export void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
-	std::span<const ShadowVolume> volumes, bool shadowPassEnabled);
+	std::span<const ShadowVolume> volumes, bool shadowPassEnabled, int forceCascade);
 
 /**
  * 阴影投影体候选（★18-B2 抬为可测接缝的契约类型；实体遍历内先攒，循环结束后才定光空间体）。

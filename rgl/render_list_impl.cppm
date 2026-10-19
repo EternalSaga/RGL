@@ -268,10 +268,11 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
 // emitShadowCasters）。拆出为纯结构搬运，无行为改动。
 /**
  * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 接缝 = shadowPassEnabled
- * 显式入参取代内部单例读取，调用点传形态决策表的 `drawAtlas`）。
+ * 显式入参取代内部单例读取，调用点传形态决策表的 `drawAtlas`；forceCascade 同走入参，
+ * 判据 = 写进 scene data 的 splits 字节，见下方填写处）。
  */
 void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
-    std::span<const ShadowVolume> volumes, bool shadowPassEnabled) {
+    std::span<const ShadowVolume> volumes, bool shadowPassEnabled, int forceCascade) {
     // 抽出函数体的原因同 collectShadowCasters / fillLightData：函数代码行阈值按函数
     // extent 计算（内嵌 lambda 也计入），不拆就过阈。
     for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
@@ -300,7 +301,13 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
             : kNoFar;
         texels[c] = volumes[c].xyRadius * 2.0f / static_cast<float>(shadowTileSize(cols));
     }
-    out.sceneData.shadowSplits = splits;
+    // 🔴 诊断键（csm.force_cascade）只覆写**写进 scene data 的那一份** splits：上面整个循环
+    // 与 volumes / shadowNear / shadowFar 照常执行 ⟹ 级联几何仍是真实几何，钉级换的只是
+    // "片元被允许落在哪一级"（否则测的就不是"同一套级联几何下换采样源"，差分失去意义）。
+    // 门关（forceCascade < 0）时该函数**原样返回** ⟹ 本行写出的字节逐位不变（本仓红线，
+    // 锚 = just shot 出厂图 sha256；判据本体 → scene_context.cppm forceShadowCascadeSplits）。
+    out.sceneData.shadowSplits =
+        forceShadowCascadeSplits(splits, kActiveShadowCascades, forceCascade);
     out.sceneData.shadowTexelSizes = texels;
     // params = (depthBias, normalOffsetScale, enabled, shadowFar)。**w 从"预留 0"改为
     // shadowFar**（5a-9）：采样端用它做末级距离淡出（shadow.slang ⑦，Filament 同款），
@@ -804,7 +811,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);
-	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes, shadowFormPlan(shadowConfig()).drawAtlas);
+	fillShadowData(fresh, shadowNear, shadowFar, shadowVolumes,
+		shadowFormPlan(shadowConfig()).drawAtlas,
+		shadowConfig().csm.forceCascade);  // 诊断键（csm.force_cascade）；-1 = 关 = splits 逐位不变
 	// 四张 per-objectSlot 表（矩阵/MVP/ObjectDraw/簇区间）一次镜像，见 mirrorObjectTables。
 	// 前三张住在 state（本 system 每帧填），第四张住在 ctx（装配层启动期填）。
 	mirrorObjectTables(fresh, rg, state);

@@ -382,6 +382,50 @@ export inline float cascadeSplitDistance(float near, float far, uint32_t cascade
 }
 
 /**
+ * 诊断仪器（**不是画质旋钮**）：把全场景钉死到第 `force` 级级联时该写进 scene data 的 splits。
+ *
+ * ## 为什么改四个数就等于改了选级
+ *
+ * 采样端选级是**三段无条件顺序覆盖**（`rgl/shaders/shadow.slang` 的
+ * `if (depth > splits.x) cascade = 1u;` 那三行），不是二分也不是查表。于是
+ * ```text
+ * splits[i] = (i < force) ? 0.0f : 1e9f      // i = 0..3
+ * ```
+ * 就把每个片元都推到第 force 级：低于目标级的分界恒判"已越过"（一路推上去），本级及以远的
+ * 分界恒判"未越过"（推不过去）。**shader 一个字不用动**——选级逻辑原样，动的只是它读到的数。
+ * 用途 = 分别渲染"只用级 c"与"只用级 c+1"两张图做差分，量相邻两级对阴影的分歧（债-139：
+ * 任何屏幕空间统计量都会被无关的真影边淹掉，只有"同一套级联几何、只换采样源"的差分无偏）。
+ * 钉级之后的画面本身是**错的**（全场景用一级覆盖），出厂 -1 = 关。
+ *
+ * ## 为什么 0.0f 这一侧安全
+ *
+ * `depth = dot(worldPos - eyePos, forward)` 是**视空间深度**，可见片元恒 > 0（近截面之前已被
+ * 裁剪掉），所以 `depth > 0.0f` 恒真 = "已越过该分界"，与片元实际在哪无关。
+ *
+ * 🔴 **但"未生效的槽不得留 0"那条红线没有被违反**——两者判的不是同一件事：那条红线防的是
+ * 留 0 把片元推到**一级从未被写过的级联**（零矩阵 → clip.w = 0 → 0/0 = NaN → 阴影因子恒 0，
+ * 实测整个广场全黑）。本编码推到的第 force 级由射程闸门 `force < count` 保证是**本帧真实
+ * 渲染的级**，它的 viewProj 与 texel 在 fillShadowData 的循环里照常填写。完整因果链不在这里
+ * 重抄 → @see render_list_impl.cppm `fillShadowData` 里"未生效的槽也必须写 kNoFar，不能留 0"。
+ *
+ * @param splits CPU 侧算出的**真实** splits（门关时原样返回，故按值收；级联几何不受本函数影响）
+ * @param count 本帧生效级数（= kActiveShadowCascades），force 的射程上界
+ * @param force 强制级号；< 0 = 关（诊断键出厂值），>= count = 越界，两者**逐位原样返回**
+ * @return 覆写后的四个分量；门关 = 与入参逐位相同（写进 scene data 的字节不变）
+ */
+export inline glm::vec4 forceShadowCascadeSplits(glm::vec4 splits, uint32_t count, int force) {
+	if (force < 0 || static_cast<uint32_t>(force) >= count)
+		return splits;
+	constexpr float kNoFar = 1e9f;  // = fillShadowData 的末级哨兵（那边是函数内局部量，不引它）
+	const uint32_t k = static_cast<uint32_t>(force);
+	// 循环上界取 splits **自身的槽位数**而不是 count：vec4 只有 4 槽，而 count 是运行期实参
+	// ——写满 4 槽在任何 count 下都不越界（count > 4 时多出来的 force 射程本来也被闸门挡掉）。
+	for (uint32_t i = 0; i < static_cast<uint32_t>(glm::vec4::length()); ++i)
+		splits[i] = i < k ? 0.0f : kNoFar;
+	return splits;
+}
+
+/**
  * Phase 11 批 11.2：把 proj 的近远平面换成另一对（供级联子视锥用）。
  *
  * GLM 零到一深度的透视 proj 深度映射为 `ndc = -A + B/t`（t = 视空间深度），

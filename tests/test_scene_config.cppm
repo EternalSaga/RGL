@@ -1971,16 +1971,66 @@ TEST_CASE("shadow_config：csm.slope_bias（斜率深度偏置）——出厂 16
 	}
 }
 
+TEST_CASE("shadow_config：csm.force_cascade（强制选级诊断键）——出厂 -1、0 不被吞、clamp [-1,7]") {
+	// 判据来源 = 本键的契约（-1 = 关 / 0..count-1 = 钉级 / 越界只夹不拒），口径与 slope_bias
+	// 那条同形。变异红线（逐条对应下面哪一臂）：① 默认值 -1 改成 0 → 「出厂默认」两条红
+	// （0 = 钉第 0 级，出厂画面从此不是出厂画面）；② `f ? *f : …` 写成真值判据 `f && *f`
+	// → 「0 不被吞」红（钉级 0 被读成关，量具最要紧的「级 0 vs 级 3」差分从此变成「关 vs 级 3」）；
+	// ③ clamp 上界
+	// 7 改成 64 → 「写 99 夹到 7」红；下界 -1 改成 -64 → 「写 -5 夹到 -1」红；④ clamp 整条
+	// 删掉 → 两条越界臂都红；⑤ 键轨迹漏记 / 回显表漏行 → 覆盖率护栏红（键数钉 14 先红）。
+	const auto load = [](std::string_view body) {
+		TempLua f("sh_fc", body);
+		return loadShadowConfig(f.pathStr());
+	};
+	{  // 出厂默认 = -1（**写字面量**而不是 `ShadowConfig{}` 符号：本键的出厂值是"门关逐位
+	   // 不变"红线的取数口径，只钉符号 = 默认值被人改了测不出来）
+		CHECK(ShadowConfig{}.csm.forceCascade == -1);
+		CHECK(load("return {}\n")->csm.forceCascade == -1);
+		TempLua e("sh_fc_empty", "return { csm = { } }\n");  // 空块 = 回落
+		CHECK(loadShadowConfig(e.pathStr())->csm.forceCascade == -1);
+		TempLua b("sh_fc_noblock", "return { mode = \"csm\" }\n");  // 整块缺失 = 回落
+		CHECK(loadShadowConfig(b.pathStr())->csm.forceCascade == -1);
+	}
+	{  // 显式给值生效；🔴 0 是**合法档**（钉第 0 级），不许被当缺省吞掉
+		CHECK(load("return { csm = { force_cascade = 0 } }\n")->csm.forceCascade == 0);
+		CHECK(load("return { csm = { force_cascade = 2 } }\n")->csm.forceCascade == 2);
+		CHECK(load("return { csm = { force_cascade = 3 } }\n")->csm.forceCascade == 3);
+		// 与 slope_bias 同时给：两键各读各的，互不串（同块两键的接线判据）
+		CHECK(load("return { csm = { slope_bias = 6.5, force_cascade = 2 } }\n")->csm.slopeBias == 6.5);
+		CHECK(load("return { csm = { slope_bias = 6.5, force_cascade = 2 } }\n")->csm.forceCascade == 2);
+	}
+	{  // 越界**夹到界值**（不是被拒，也不是原样通过）；-5 夹回 -1 = 夹回"关"这一侧
+		auto hi = load("return { csm = { force_cascade = 99 } }\n");
+		REQUIRE(hi.has_value());
+		CHECK(hi->csm.forceCascade == 7);
+		auto lo = load("return { csm = { force_cascade = -5 } }\n");
+		REQUIRE(lo.has_value());
+		CHECK(lo->csm.forceCascade == -1);
+		// 夹完仍是整数语义：写 1.7 → 截断为 1（消费端按整数比射程，不四舍五入到 2）
+		CHECK(load("return { csm = { force_cascade = 1.7 } }\n")->csm.forceCascade == 1);
+	}
+	{  // 块内拼错的子键：进 present、不进读集、不落到字段上（同 slope_bias 那条的形态）
+		TempLua f("sh_fc_typo", "return { csm = { force_cascad = 2 } }\n");
+		ShadowKeyTrace trace;
+		auto r = loadShadowConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(containsKey(trace.present, "csm.force_cascad"));
+		CHECK_FALSE(containsKey(trace.read, "csm.force_cascad"));
+		CHECK(r->csm.forceCascade == -1);  // 拼错的键没被当成 force_cascade 读进来
+	}
+}
+
 TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）+ 未知键判据") {
 	// diagnostics 同形护栏（docs/archive/gate_lint_plan.md §3-B）：回显表删一行 / 解析器漏记一键 /
 	// 两处任一侧改拼写 → set 相等立刻红。变异红线：kShadowEcho 删任一条目 → 本用例红。
-	TempLua f("sh_keys", "return { mode = \"csm\", izb = { on = true }, csm = { slope_bias = 16.0 }, pcss = { }, evssm = { } }\n");
+	TempLua f("sh_keys", "return { mode = \"csm\", izb = { on = true }, csm = { slope_bias = 16.0, force_cascade = 2 }, pcss = { }, evssm = { } }\n");
 	ShadowKeyTrace trace;
 	auto r = loadShadowConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
 	const auto echo = shadowConfigEchoKeys();
-	CHECK(echo.size() == 13u);         // 钉死键数：加键不更新回显表 → 这里先红
-	CHECK(trace.read.size() == 13u);   // 解析器恰好读一遍（重复读 = 记录点放错层）
+	CHECK(echo.size() == 14u);         // 钉死键数：加键不更新回显表 → 这里先红
+	CHECK(trace.read.size() == 14u);   // 解析器恰好读一遍（重复读 = 记录点放错层）
 	for (const auto& k : echo)
 		CHECK(containsKey(trace.read, k));  // 回显有而解析器不读 = 陈旧键
 	for (const auto& k : trace.read)
@@ -1990,6 +2040,10 @@ TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 
 	CHECK(containsKey(trace.present, "csm"));
 	CHECK(containsKey(trace.present, "csm.slope_bias"));
 	CHECK(containsKey(trace.read, "csm.slope_bias"));
+	// 同块第二枚键（强制选级诊断键）同形：present + read 都在。漏记一键 → 上面的 size 钉先红；
+	// 只漏 present 侧的采集 → 这两条红（"回显有、解析器不读"与"读了、下钻没采"是两种坏法）。
+	CHECK(containsKey(trace.present, "csm.force_cascade"));
+	CHECK(containsKey(trace.read, "csm.force_cascade"));
 	{  // 未知键判据：拼错的顶层键进 present 而不进 read（lint 的输入成立）；正确键不误报
 		TempLua g("sh_typo", "return { mode2 = \"csm\", mod = \"csm\", mode = \"csm\" }\n");
 		ShadowKeyTrace t2;
@@ -2004,7 +2058,7 @@ TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 
 	}
 }
 
-TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改动键（info 差集语义）；debug 全量 13 段") {
+TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改动键（info 差集语义）；debug 全量 14 段") {
 	const ShadowConfig d;
 	CHECK(describeShadowGates(d, d).empty());  // 反向用例：全默认一个都不喊
 	ShadowConfig c;
@@ -2017,10 +2071,19 @@ TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改�
 	CHECK(s.find("evssm.search_radius=48") != std::string::npos);
 	CHECK(s.find("pcss.sun_degrees") == std::string::npos);  // 未动的键不出现
 	const std::string all = describeAllShadowGates(d);
-	CHECK(std::ranges::count(all, '=') == 13);  // 全量 = 13 段 k=v（空格分隔）
+	CHECK(std::ranges::count(all, '=') == 14);  // 全量 = 14 段 k=v（空格分隔）
 	CHECK(all.find("mode=csm") != std::string::npos);
 	CHECK(all.find("izb.on=false") != std::string::npos);
 	CHECK(all.find("csm.slope_bias=0") != std::string::npos);  // 出厂值出可读文本（差集语义下不喊）
+	// 诊断键出厂 -1 也在回显里（钉级跑两臂时日志必须看得见那枚键与它的值，否则差分图的归因
+	// 只能靠「我记得我写了 --set」——那是回忆不是证据）。
+	// 🔴 期望写的是**拼好的文本**而不是数字比较：回显漏挂一行时这里红，而不是"数对不上"。
+	CHECK(all.find("csm.force_cascade=-1") != std::string::npos);
+	// 差集语义：钉到第 2 级才是"改动"，才会进 info 那一份（门关档不喊 = 出厂日志零噪声）
+	ShadowConfig f;
+	f.csm.forceCascade = 2;
+	CHECK(describeShadowGates(f, d).find("csm.force_cascade=2") != std::string::npos);
+	CHECK(describeShadowGates(d, d).find("force_cascade") == std::string::npos);
 }
 
 TEST_CASE("diagnostics 旧阴影键 fail-fast：9 键逐个出现 = 启动失败并指路 configs/shadow.lua；无旧键文件正常") {

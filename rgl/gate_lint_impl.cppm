@@ -317,6 +317,12 @@ const BlockKey kCsmKeys[]{
 		"mode = \"none\" ⟹ shadowFormPlan 的 drawAtlas = false，那个 pass 整个不存在 ⟹ 偏置没有"
 		"作用对象。⚠ 宿主**不是** `mode == \"csm\"`：pcss / evssm 两档同样画图集、同一条 shadowState"
 		"（斜率偏置与软影滤波档无关）"},
+	{"csm.force_cascade", [](const Ctx& c) { return deviated(c, &ShadowConfig::csm, &ShadowCsmTuning::forceCascade); },
+		"force_cascade 覆写的是**采样端选级要读的那份 splits**（fillShadowData → scene data）："
+		"mode = \"none\" ⟹ shadowFormPlan 的 drawAtlas = false 且 shadowParams.z(enabled) = 0，"
+		"采样端整段旁路直接给全亮 ⟹ 钉到哪一级都没人读。⚠ 宿主与 slope_bias 同为 "
+		"`mode != \"none\"`：选级那三段比较是 csm / pcss / evssm 三档共用的公共路径，"
+		"把它申报进「只有 csm 档才生效」门下是假申报（同上一条的教训）"},
 };
 
 const BlockKey kPcssKeys[]{

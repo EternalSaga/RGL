@@ -7,6 +7,9 @@
 ### csm/off-none
 csm.slope_bias	slope_bias 作用在**阴影深度 pass 的光栅阶段**（StateKit 写进 shadowState.depthBiasSlope）：mode = "none" ⟹ shadowFormPlan 的 drawAtlas = false，那个 pass 整个不存在 ⟹ 偏置没有作用对象。⚠ 宿主**不是** `mode == "csm"`：pcss / evssm 两档同样画图集、同一条 shadowState（斜率偏置与软影滤波档无关）
 ### csm/off-none-default
+### csm/owner-on-force
+### csm/off-none-force
+csm.force_cascade	force_cascade 覆写的是**采样端选级要读的那份 splits**（fillShadowData → scene data）：mode = "none" ⟹ shadowFormPlan 的 drawAtlas = false 且 shadowParams.z(enabled) = 0，采样端整段旁路直接给全亮 ⟹ 钉到哪一级都没人读。⚠ 宿主与 slope_bias 同为 `mode != "none"`：选级那三段比较是 csm / pcss / evssm 三档共用的公共路径，把它申报进「只有 csm 档才生效」门下是假申报（同上一条的教训）
 ### pcss/owner-on
 pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
 ### pcss/owner-on-mft-default
