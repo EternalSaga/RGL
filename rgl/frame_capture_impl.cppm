@@ -113,27 +113,45 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		captureArmed = true;
 		return true;
 	};
-	// GB 直读分支（captureRequest = gbuf 通道号）：deferred 图专属，RT 不存在则跳过并留观测
+	// 失败收口（2026-10-19）：原因字符串**同时**是日志文本与回给消费方的原因——一个意思写
+	// 两遍迟早漂（旧代码正是两处各写一份，结果两处都没兑现"warn 一次"）。清具名请求 = 让本
+	// 请求退出"每帧重演"；失败值由 hasFailure()/takeFailure() 取走，一条失败只兑现一个请求。
+	auto failWith = [&](std::string why) {
+		captureRequestName.clear();
+		if (auto logger = RLLogger::getInstance())
+			logger->warn("frame capture: {}", why);
+		captureFailure = std::move(why);
+	};
+	// GB 直读分支（captureRequest = gbuf 通道号）：deferred 图专属。**未命中必须置失败通道**
+	// （2026-10-19 补）——本分支的 `captureRequest` 在 record 末尾被无条件复位，不会像具名
+	// 分支那样每帧重演，但"没有失败原因"同样致命：消费方（RPC `/shot` 的 gbuf 路径）只会一直
+	// 等产物、等到超时，且 `pendingShot` 永不复位 = 端点被一次越界通道号打死到进程重启。
+	// 不做限次重试的理由：`dump_gbuf` 的既有语义是"每帧重新 request"（ecs_frame_diag），重试
+	// 由它自己负责；本类只负责把"这次为什么没产物"说清楚。
 	auto recordGBuffer = [&] {
-		// GB 直读：deferred 图专属（前向图无 gbuffer_* 附件 / RT 未建 = 跳过并留观测）
-		if (captureRequest < static_cast<int>(kGBufferAttachments.size())) {
-			const std::string name{kGBufferAttachments[captureRequest].name};
-			const auto slot = graphAttachmentSlot(graph.attachments, name)
-				.value_or(kRgNoAttachment);
-			if (auto* rt = slot != kRgNoAttachment ? rts.find(name) : nullptr) {
-				const auto from = layouts[slot];  // deferred 帧末 = SRO（light 采样后）
-				barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
-					vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
-					vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
-				if (copyOut(rt->image.image, rt->extent.width, rt->extent.height,
-				        rt->format, captureRequest, {}))
-					barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
-						vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
-						vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
-			} else if (auto logger = RLLogger::getInstance())
-				logger->warn("frame capture: dump_gbuf={} 但 RT '{}' 不存在（非 deferred 图？）",
-					captureRequest, name);
-		}
+		if (captureRequest >= static_cast<int>(kGBufferAttachments.size()))
+			return failWith(fmt::format("gbuf channel {} out of range [0, {})", captureRequest,
+				kGBufferAttachments.size()));
+		const std::string name{kGBufferAttachments[captureRequest].name};
+		const auto slot = graphAttachmentSlot(graph.attachments, name);
+		if (!slot.has_value())
+			return failWith(fmt::format(
+				"gbuf channel {} ('{}') is not in the compiled render graph (非 deferred 图？)",
+				captureRequest, name));
+		auto* rt = rts.find(name);
+		if (rt == nullptr)
+			return failWith(fmt::format(
+				"gbuf channel {} ('{}') is in the graph but its RT is not created",
+				captureRequest, name));
+		const auto from = layouts[*slot];  // deferred 帧末 = SRO（light 采样后）
+		barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
+			vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead,
+			vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+		if (copyOut(rt->image.image, rt->extent.width, rt->extent.height,
+		        rt->format, captureRequest, {}))
+			barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
+				vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
+				vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
 	};
 	// swapchain 回读分支（captureRequest = -1）：presentTransition 前回读后缓冲（present 前真实内容）
 	auto recordSwapchain = [&] {
@@ -157,23 +175,40 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	// 追踪表原值进出（转回 from）——本路径不接管布局，下游按追踪值继续推导。
 	auto recordNamedAttachment = [&] {
 		const std::string name = captureRequestName;
-		const auto slot = graphAttachmentSlot(graph.attachments, name)
-			.value_or(kRgNoAttachment);
-		if (auto* rt = slot != kRgNoAttachment ? rts.find(name) : nullptr) {
-			const auto from = layouts[slot];
-			barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
+		const auto slot = graphAttachmentSlot(graph.attachments, name);
+		// ⚠ 两种「未命中」分开处置（2026-10-19 修；此前两者同走"保持 pending"）：名字不在编译
+		//   好的图里 = **永久**失败——图不会自己长出附件。留着 pending 得到的是：① 每帧一条
+		//   warn（实测 46 秒刷 1505 条，而接口原本承诺"warn 一次"）② `pendingShot` 永不复位
+		//   ⟹ 之后每个 `/shot` 都吃 409，**一次拼错把端点打死到进程重启** ③ 客户端只能等到
+		//   超时（504），拿不到任何原因
+		if (!slot.has_value())
+			return failWith(fmt::format(
+				"attachment '{}' is not in the compiled render graph (未装饰的图 / 门未开？)", name));
+		auto* rt = rts.find(name);
+		if (rt == nullptr) {
+			// 图里有、RT 这帧还没建 = 暂时失败，可重试；但**限次**——RT 因装饰条件永不建时，
+			// 无限重试与上面那个 bug 同形。分类逻辑抽成纯函数（`classifyCaptureMiss`），为的是
+			// 它能在 `just test` 里被钉住，而不是只能开设备复现。
+			++captureRtMisses;
+			if (classifyCaptureMiss(true, captureRtMisses) == CaptureMiss::retryable)
+				return;  // 保持 pending，下个帧边界重试
+			return failWith(fmt::format(
+				"attachment '{}' is in the graph but its RT was never created ({} 帧内)",
+				name, captureRtMisses));
+		}
+		captureRtMisses = 0;
+		const auto from = layouts[*slot];
+		barrier(rt->image.image, from, vk::ImageLayout::eTransferSrcOptimal,
+			vk::PipelineStageFlagBits2::eColorAttachmentOutput
+				| vk::PipelineStageFlagBits2::eFragmentShader,
+			vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eShaderRead,
+			vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
+		if (copyOut(rt->image.image, rt->extent.width, rt->extent.height, rt->format, -1, name))
+			barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
+				vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
 				vk::PipelineStageFlagBits2::eColorAttachmentOutput
 					| vk::PipelineStageFlagBits2::eFragmentShader,
-				vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eShaderRead,
-				vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead);
-			if (copyOut(rt->image.image, rt->extent.width, rt->extent.height, rt->format, -1, name))
-				barrier(rt->image.image, vk::ImageLayout::eTransferSrcOptimal, from,
-					vk::PipelineStageFlagBits2::eTransfer, vk::AccessFlagBits2::eTransferRead,
-					vk::PipelineStageFlagBits2::eColorAttachmentOutput
-						| vk::PipelineStageFlagBits2::eFragmentShader,
-					vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eShaderRead);
-		} else if (auto logger = RLLogger::getInstance())
-			logger->warn("frame capture: 附件 '{}' 不存在（未装饰的图 / 门未开？）", name);
+				vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eShaderRead);
 	};
 	if (!captureRequestName.empty())
 		recordNamedAttachment();

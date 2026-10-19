@@ -64,6 +64,19 @@ export struct LlmCaptureFlow {
 		RLLogger* logger) {
 		if (llm && capture) {
 			std::optional<Error> error;
+			if (wanted() && renderer.hasFrameCaptureFailure()) {
+				// 回读源**注定**不存在（`dump_gbuf` 通道越界 / 图里没这个附件）⟹ 必须退出。
+				// `wanted()` 过了 delayFrames 就恒真，只等产物的写法在这里得到的是
+				// "进程永不退出 + 每帧一条 warn"——与 RPC `/shot` 端点被一次拼错打死是
+				// 同一个缺陷（都拿"暂时未就绪"的循环去等一个永久结论），2026-10-19 一并收。
+				const auto why = renderer.takeFrameCaptureFailure();
+				if (logger)
+					logger->error("llm_debug: 截图回读源不可用（{}）——请求退出，不再空等",
+						why.value_or("unknown"));
+				rg.ctx().get<AppExit>().requested = true;
+				return Error{ErrorCode::Unknown,
+					"llm_debug: capture source unavailable: " + why.value_or("unknown")};
+			}
 			if (wanted() && renderer.hasFrameCapture()) {
 				error = consumeShot(rg, renderer, logger);
 			}

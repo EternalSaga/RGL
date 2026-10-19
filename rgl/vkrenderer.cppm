@@ -174,6 +174,22 @@ export class Renderer {
 	[[nodiscard]] bool hasFrameCapture() const { return capturer.has(); }
 
 	/**
+	 * 捕获请求是否**注定失败**（转发 `FrameCapturer::hasFailure`，动机见其注释）。
+	 *
+	 * 消费方（RPC `/shot`、`/shotburst`）必须在「没产物就下帧重试」之前先问这个：
+	 * 只问 `hasFrameCapture()` 的循环在「回读源永不存在」时不会结束，于是跨帧响应
+	 * 句柄永不复位 ⟹ 之后每个截图请求都吃 409，**一次拼错附件名就把端点打死到重启**。
+	 * @return true = 有失败待取（此时 hasFrameCapture() 恒 false）
+	 */
+	[[nodiscard]] bool hasFrameCaptureFailure() const { return capturer.hasFailure(); }
+
+	/**
+	 * 取走捕获失败原因（取后即清，一条失败只兑现一个请求）。
+	 * @return 可直接进 400 应答体的原因；空 = 无失败
+	 */
+	std::optional<std::string> takeFrameCaptureFailure() { return capturer.takeFailure(); }
+
+	/**
 	 * 帧末扩展段 hook（Phase 10 调试层：imgui 面板；main 装配，缺省空）。
 	 * 调用点 = drawFrame ⑪.5 帧内捕获之后、⑫ presentTransition barrier 之前，
 	 * 参数 = 录制中的命令缓冲 + swapchain extent + 本帧后缓冲 view。

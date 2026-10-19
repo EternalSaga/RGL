@@ -28,6 +28,38 @@ export struct FrameCapture {
 };
 
 /**
+ * 捕获未命中的分类（**纯函数**，无设备可测——本类的 record/collect 要 VkDevice，
+ * 而"这次未命中该重试还是该判死"是纯逻辑，拆出来才能在 `just test` 里钉住）。
+ */
+export enum class CaptureMiss {
+	permanent,  ///< 重试永远不会命中 ⟹ 清请求 + 置 hasFailure()，别再每帧重演
+	retryable,  ///< 暂时没就绪 ⟹ 保持 pending，下个帧边界重试
+};
+
+/**
+ * 「图里有这个附件、但 RT 这帧还没建」的可重试预算（帧数）。
+ *
+ * 为什么要有上限而不是无限重试：无限重试的正确性依赖「RT 早晚会建」这个假设，而它一旦
+ * 不成立（RT 因门未开/装饰条件不满足而永不建）就退化成与"永久失败当可重试"同一个 bug。
+ * 8 帧 ≈ 一次 resize 重建的余量，又远小于"人眼能容忍的截图延迟"。
+ */
+export inline constexpr uint32_t kCaptureRtRetryBudget = 8;
+
+/**
+ * 判一次捕获未命中该重试还是该判死。
+ * @param inGraph 请求的名字/通道**在编译好的图里**吗（false = 图不会自己长出来 = 永久）
+ * @param missesSoFar 本请求已经因此未命中过几帧
+ * @param budget 可重试预算
+ * @return 分类
+ */
+export constexpr CaptureMiss classifyCaptureMiss(bool inGraph, uint32_t missesSoFar,
+	uint32_t budget = kCaptureRtRetryBudget) {
+	if (!inGraph)
+		return CaptureMiss::permanent;
+	return missesSoFar + 1u >= budget ? CaptureMiss::permanent : CaptureMiss::retryable;
+}
+
+/**
  * 帧内回读捕获器（llm_debug 截图 / dump_gbuf 诊断的唯一载体）。
  *
  * 生命周期跨帧三步：request（drawFrame 前挂请求，一次性）→ record（请求帧 ⑫
@@ -57,6 +89,8 @@ export class FrameCapturer {
 	void request(int gbufChannel = -1) {
 		captureRequest = gbufChannel;
 		captureRequestName.clear();  // 覆盖互斥：与 requestAttachment 二者只留其一
+		captureFailure.reset();      // 新请求 = 上一条失败作废（否则一次失败会毒化后续请求）
+		captureRtMisses = 0;
 	}
 
 	/**
@@ -73,11 +107,18 @@ export class FrameCapturer {
 	 * `ColorAttachmentOptimal`，source 依赖取"颜色附件写"。摘录
 	 * `PickingService::record` 留下的 `TransferSrcOptimal` 不会被本路径看到。
 	 * @param name 编译后图里的附件名（如 `PickingService` 的 `kObjectIdAttachmentName`）；
-	 *   图中无此附件 / RT 未建时 record 期 warn 一次并跳过（不静默出图）
+	 *   未命中分两种，处理**不同**（2026-10-19 修，此前两者同走"保持 pending"，实测把
+	 *   `/shot` 端点一次拼错就永久打死）：
+	 *     · **名字不在编译好的图里** = 永久失败 ⟹ warn 一次 + 清请求 + 置 hasFailure()
+	 *       （图不会自己长出附件，重试只是每帧刷一条日志）
+	 *     · 图里有、RT 这帧还没建 = 暂时失败 ⟹ 保持 pending 重试，但**限次**
+	 *       （`kCaptureRtRetryBudget`），到点同样转 hasFailure()，否则 RT 永不建时洪水照旧
 	 */
 	void requestAttachment(std::string_view name) {
 		captureRequestName = name;
 		captureRequest = -2;
+		captureFailure.reset();
+		captureRtMisses = 0;
 	}
 
 	/**
@@ -87,13 +128,19 @@ export class FrameCapturer {
 	 * 永不复位，`record` 每帧都录一条回读。llm_debug 路径靠"每帧重新 request"（ecs
 	 * `requestBeforeDraw`）且截完即退，把这个问题盖住了；RPC `/shot` 让进程继续跑，
 	 * 于是**第一张之后每帧都在做全分辨率回读**（1280×720 r32_uint ≈ 3.7MB/帧）。
-	 * 清在 take 而非 record：record 未命中（acquire 跳帧）时请求须保持 pending 重试。
+	 * ⚠ 原注释写的理由是「record 未命中（acquire 跳帧）时请求须保持 pending 重试」——
+	 *   **这句把两件事混成了一件事**（2026-10-19 实测纠正）：acquire 超时是 `drawFrame`
+	 *   提前 return，`record` 根本不被调用（见 `vkrenderer_impl` ③「acquire 100ms 超时
+	 *   跳帧」），请求因此天然保持 pending，**不需要靠"未命中时不清"来保**。而一旦走进
+	 *   未命中分支，就说明图里已经查过这个名字了 = 永久性结论，继续不清就得到上面那个
+	 *   每帧重演的循环。两种未命中的正确处置见 `requestAttachment` 注释。
 	 * `dump_gbuf` 的连续直读语义不受影响——它每帧重新 request。
 	 * @return 本帧捕获产物；空 = 本帧无捕获产物
 	 */
 	std::optional<FrameCapture> take() {
 		captureRequest = -2;
 		captureRequestName.clear();
+		captureRtMisses = 0;
 		return std::move(captureResult);
 	}
 
@@ -103,6 +150,32 @@ export class FrameCapturer {
 	 * @return true = 捕获产物就绪（take 可取）
 	 */
 	[[nodiscard]] bool has() const { return captureResult.has_value(); }
+
+	/**
+	 * 捕获请求是否已经**注定失败**（2026-10-19 修"一次拼错附件名打死 /shot 端点"）。
+	 *
+	 * 为什么必须有这个通道：消费方（RPC `/shot`、`/shotburst`、llm 截图）原来的写法是
+	 * 「没产物就下个帧边界重试」。这个循环只在「未命中是暂时的」时才成立，而
+	 * **请求的附件名不在编译好的图里**是永久性的——图不会自己长出附件。于是：
+	 *   · `record` 每帧 warn 一次（实测 46 秒刷 **1505** 条，而本类接口原本承诺"warn 一次"）
+	 *   · `pendingShot` 永不复位 ⟹ 之后**每一个** `/shot` 都吃 409
+	 *     `another /shot is still pending`，直到进程重启 = 一次拼错把端点永久打死
+	 *   · 客户端只能等到超时（504），拿不到任何原因
+	 * ⟹ 失败必须变成一个**可被消费方读走的值**，而不是一个每帧重演的状态。
+	 * @return true = 有失败待取（此时 has() 恒 false，消费方该报错并复位自己的 pending）
+	 */
+	[[nodiscard]] bool hasFailure() const { return captureFailure.has_value(); }
+
+	/**
+	 * 取走失败原因（取后即清，与 take() 的"取走即清"同语义：一条失败只兑现一个请求，
+	 * 不许留在里面把下一个合法请求也判死）。
+	 * @return 失败原因（可直接进 400 应答体）；空 = 无失败
+	 */
+	std::optional<std::string> takeFailure() {
+		auto out = std::move(captureFailure);
+		captureFailure.reset();
+		return out;
+	}
 
 	/**
 	 * ⑪.5：presentTransition 前录制回读拷贝（请求存在时）。后缓冲：追踪布局 →
@@ -152,6 +225,8 @@ export class FrameCapturer {
 	RGL::VmaBuffer captureStaging;              // host-visible 回读缓冲（按需增长重建）
 	VkDeviceSize captureStagingSize = 0;
 	void* captureMapped = nullptr;              // 常驻映射指针（createBuffer 不回传 mapped，随分配自存）
+	std::optional<std::string> captureFailure;  // 永久失败原因（hasFailure/takeFailure 消费，见其注释）
+	uint32_t captureRtMisses = 0;               // 「图里有、RT 这帧没建」的连续未命中帧数（限次用）
 };
 
 }  // namespace RGL
