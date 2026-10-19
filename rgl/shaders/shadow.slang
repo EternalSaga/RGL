@@ -13,8 +13,10 @@
 //
 // **shadowFar 淡出强度 k**（5a-9）：atten = saturate(k·(1 − t²))，t = depth / shadowFar。
 //   k=4 → t < 0.866 全影、最后 13% 距离平滑收尾；Filament 用 10（最后 5%），我们取更宽的
-//   尾巴以覆盖量化远界的跳变。**当前 shadowFar ≡ 相机远平面**（切在几何之外），故默认机位
-//   与街道机位实测差异 0 px —— 它是"将来把 shadowFar 调短换性能"（Phase 9 余量 3.1ms 的
+//   尾巴以覆盖量化远界的跳变。**shadowFar = 相机远界向上取整到 2 的幂**（2026-10-19 债-139
+//   改，原 ≡ 量化后的相机远平面）⟹ shadowFar ≥ 相机 far，淡出只在"相机 far 落在本档上沿
+//   13.4% 以内"时才咬到最远一簇像素（t > 0.866）；刚跨档时 shadowFar ≈ 2×far ⟹ 全画面不淡出。
+//   它是"将来把 shadowFar 调短换性能"（Phase 9 余量 3.1ms 的
 //   主要 lever）时的必需件：那时远界落在画面中间，没有淡出就是一条硬边。管道阳性测试：
 //   k 临时改 1 → 默认机位 5.998% 像素**只变亮 0 变暗**（淡出特征签名）。
 static const float kShadowFarFadeK = 4.0;
@@ -401,7 +403,8 @@ float sampleShadow1Tap(float3 worldPos, float3 N)
     // SamplerState 是普通采样器（非比较采样器），故手动比较：返回 1 = 受光
     const float4 lit = float4(ref <= d0 ? 1.0 : 0.0, ref <= d1 ? 1.0 : 0.0,
         ref <= d2 ? 1.0 : 0.0, ref <= d3 ? 1.0 : 0.0);
-    // ⑦ shadowFar 淡出（5a-9）：末级切片只覆盖到 shadowFar（= 量化后的相机远平面），
+    // ⑦ shadowFar 淡出（5a-9）：末级切片只覆盖到 shadowFar（= 相机远界向上取整到 2 的幂，
+    //   2026-10-19 债-139 改；口径见本文件头注），
     //   再远处走"出块=全亮"旁路 = **硬切齐刷刷断掉**（用户最早报的那类硬边）。这里按
     //   Filament 的做法（surface_light_directional.fs:66-71 + ColorPassDescriptorSet.cpp:315）
     //   在归一化视深上做二次淡出：atten = saturate(k·(1 − t²))，t = depth / shadowFar。

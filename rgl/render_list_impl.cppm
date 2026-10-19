@@ -660,7 +660,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// ③ 切分深度界先**量化**（quantizeShadowDistance）：自适应 near/far 随相机连续变 →
 	//   不量化则半径/splits 逐帧连续变 → 光空间投影缩放滑移 = 影子随视角"游动"
 	//   （2026-09-29 用户实测：井盖阴影随相机平移时有时无）。fillShadowData 的 splits
-	//   用同一对量化值——两处必须同源。
+	//   用同一对量化值——两处必须同源。⚠ 格距 2026-10-19 从 1/8 改成 2 的幂（债-139：
+	//   1/8 格跨档太密 = "飞相机时影子一跳一跳"，实测读数在该函数注释）。
 	const float shadowNear = quantizeShadowDistance(viewProj.nearPlane);
 	const float shadowFar = quantizeShadowDistance(viewProj.farPlane);
 	// 级 0 近平面固定值 / nearC·farC 直传理由 → computeCascadeSpheres 注释

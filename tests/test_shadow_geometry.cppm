@@ -3,6 +3,7 @@ module;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>  // glm::inverse（B6 从 v.view 恢复吸附中心）
+#include <cmath>                       // frexp/ldexp/isfinite（量化算子 = 2 的幂的契约）
 #include <initializer_list>            // 必须：modules 下 std::initializer_list 不从 import 带进来
 
 // 阴影几何回归测试（批 12.1 · B1）——把 Phase 11 批 11.2 的 5a-3→5a-9 七轮排障
@@ -24,6 +25,7 @@ export module test_shadow_geometry;
 import rlstd;
 import test_support;
 import scene_context;
+import scene_data;  // kActiveShadowCascades（级联级数；本文件组 3 的同档判据要逐级走一遍）
 
 namespace RGL {
 namespace {
@@ -429,41 +431,95 @@ TEST_CASE("cascadeSplitDistance：count=1 时唯一一级就是 far（单级退�
 	expectNear(cascadeSplitDistance(nearZ, farZ, 0, 4), expect0, 1e-5, 1e-5);
 }
 
-TEST_CASE("quantizeShadowDistance：桶内恒定、跨桶单调、1/8 网格对齐") {
-	// 这条量化是 5a-7 的另一半：距离量化让"小幅移动落同一桶 → 半径/splits 完全恒定"
-	//（否则影子连续滑动）。桶内恒等是它的全部意义，必须钉死。
+TEST_CASE("quantizeShadowDistance：格距 = 2 的幂、桶内恒定、幂等、只放大不缩小") {
+	// 契约（scene_context.cppm 该函数注释）：向上取整到 2 的幂；恰为 2 的幂时取自身。
+	// 为什么从 1/8 格改成 2 的幂 = 债-139 实测（旧格跨档太密 = 飞相机时影子一跳一跳），
+	// 跨档频率那条判据单独成用例（下一条），这里只钉量化算子本身。
 	Scene scene;
 	for (int i = 0; i < 512; ++i) {
 		const double d = scene.rng.uniform(0.01, 300.0);
 		INFO(d);
 		const float q = quantizeShadowDistance(static_cast<float>(d));
-		// 向上取整到 1/8 格
-		const double grid = std::ceil(q * 8.0) / 8.0;
-		expectNear(q, grid, 0.0, 1e-5);
-		// 同一个桶内的任意输入必须给出**同一个**量化值（桶内恒定）。
-		// quantize = ceil(d·8)/8 ⟹ d ∈ ((k−1)/8, k/8] 全部映射到 k/8 = q，
-		// 故"同桶"取 **q 往下**的邻近值（往上就已跨桶了——这是本断言第一版的错，
-		// 症状是 4241 条失败，教训与 5a-8c 同源：判据写反时全红，但红的方向能定位）。
+		// ① 输出必是 2 的幂（尾数恰 0.5）
+		int e = 0;
+		CHECK(std::frexp(q, &e) == 0.5f);
+		// ② 只放大不缩小（覆盖性宁大勿小的方向不变），且不超过 2 倍（格距就是 2 的幂）
+		CHECK(q >= static_cast<float>(d) - 1e-4f);
+		CHECK(q < 2.0f * static_cast<float>(d) + 1e-4f);
+		// ③ 桶内恒定：(q/2, q] 内任意输入必须给出**同一个** q。这是量化的全部意义——
+		//    桶内相机怎么动，级联半径/纹素/splits 都逐位不变。
 		for (double frac : {-0.999, -0.9, -0.3, -0.01, 0.0}) {
-			const double in = q + frac / 8.0;  // 同格内的邻近值
+			const double in = q + frac * q / 2.0;  // 同档内往下取（往上就已跨档）
 			if (in <= 0.0)
 				continue;
 			INFO(d << " " << frac << " " << in);
-			expectNear(quantizeShadowDistance(static_cast<float>(in)), q, 0.0, 1e-5);
+			CHECK(quantizeShadowDistance(static_cast<float>(in)) == q);
 		}
-		// 量化只会放大不会缩小（向上取整）——这一条保证"覆盖性宁大勿小"的方向不变
-		CHECK(q >= static_cast<float>(d) - 1e-4f);
+		// ④ 幂等（旧 1/8 实现不满足这条：它把 2^k 抬到 2^k，新实现靠"恰为 2 的幂取自身"成立）
+		CHECK(quantizeShadowDistance(q) == q);
 	}
+	// ⑤ 退化输入原样返回（不产生 NaN / 不抛）
+	CHECK(quantizeShadowDistance(0.0f) == 0.0f);
+	CHECK(std::isfinite(quantizeShadowDistance(-1.0f)));
 }
 
-TEST_CASE("quantizeShadowDistance：跨桶严格递增（相邻桶不留空隙）") {
+TEST_CASE("quantizeShadowDistance：跨档严格递增，且 far 翻倍只跨一档") {
 	double prev = 0.0;
-	for (int k = 1; k <= 64; ++k) {
-		const double d = static_cast<double>(k) / 8.0;
+	for (int k = -4; k <= 12; ++k) {
+		const double d = std::ldexp(1.0, k);
 		const double q = quantizeShadowDistance(static_cast<float>(d));
 		INFO(d << " " << q);
-		CHECK(q > prev);
+		CHECK(q > prev);  // 恰为 2 的幂 → 取自身，故相邻档必严格变大
+		CHECK(q == d);
 		prev = q;
+	}
+	// 档宽 = 2 倍 ⟹ "far 从 x 涨到 2x⁻" 全程不跨档，涨到 2x 才跨一档
+	CHECK(quantizeShadowDistance(1.9999f) == quantizeShadowDistance(1.0001f));
+	CHECK(quantizeShadowDistance(2.0f) == 2.0f);
+}
+
+TEST_CASE("债-139 回归：用户报障两机位的自适应远界必须落同一档") {
+	// 这条就是本债的**根因回归**，数字全部来自 2026-10-19 实机读数（两机位 = camera_saved
+	// 原文坐标，纯前推 0.056；projectionSystem 的 far = 相机到场景球心距离 + 球半径）。
+	// 旧 1/8 格：1.713496 → 1.750 vs 1.764820 → 1.875 ⟹ **跨档** ⟹ 整套级联盒半径/纹素
+	// 缩放 5–7% ⟹ 整张阴影图重新量化 ⟹ 实测 0.32–0.40% 像素阴影状态翻转（同机位钉远界
+	// 的无地板对照实测）。本用例在旧实现下**必红**，改回 1/8 格立刻红。
+	const float farA = 1.713496f;
+	const float farB = 1.764820f;
+	CHECK(quantizeShadowDistance(farA) == quantizeShadowDistance(farB));
+	// 近界同理（自适应 near 落在 0.05 下限，两机位同值，但同样不得跨档）
+	CHECK(quantizeShadowDistance(0.05f) == quantizeShadowDistance(0.05f));
+	// 反向用例：真跨档时必须不同（否则上面那条 CHECK 是"恒返回同一个数"糊过去的）
+	CHECK(quantizeShadowDistance(1.713496f) != quantizeShadowDistance(2.5f));
+	// 且跨档后纹素格**嵌套**：粗档纹素是细档的整数倍（2 的幂 ⟹ 2 倍），
+	// 这是"跨档时影边最多挪半个粗纹素"的算术前提。
+	const double texelFine = quantizeShadowDistance(farA);
+	const double texelCoarse = quantizeShadowDistance(2.5f);
+	CHECK(texelCoarse / texelFine == std::round(texelCoarse / texelFine));
+}
+
+TEST_CASE("同档两机位 ⟹ 各级级联半径与纹素逐位相同（阴影图是世界函数的前提）") {
+	// 这条钉的是"桶内恒定"传导到几何上：near/far 落同一档 ⇒ 每级子视锥的包围球半径
+	// 逐位相同 ⇒ texel = 2r/块边长 逐位相同。配合 buildShadowVolume 的世界锚定吸附
+	// （组 4 已独立钉死），合起来才是"相机在同档内怎么动，阴影图都是同一个世界函数"。
+	// 反向用例：把 far 挪出档（下面 third 那路）必须让半径**不同**，否则本用例是恒真。
+	const float nearQ = quantizeShadowDistance(0.05f);
+	const float farQ = quantizeShadowDistance(1.713496f);
+	REQUIRE(farQ == quantizeShadowDistance(1.764820f));
+	const auto proj = makeProj({45.0f, 16.0f / 9.0f, 0.05f, 1.713496f});
+	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+		const float nearC = c == 0 ? 0.02f : cascadeSplitDistance(nearQ, farQ, c - 1u, kActiveShadowCascades);
+		const float farC = cascadeSplitDistance(nearQ, farQ, c, kActiveShadowCascades);
+		const auto sub = projWithDepthRange(proj, nearC, farC);
+		// 两路**独立构造**的 view（同档、不同机位姿态）→ 半径必须逐位相同（姿态无关）
+		const Bounds sA = frustumBoundingSphere(makeView(kPoses[0], 0.54f), sub);
+		const Bounds sB = frustumBoundingSphere(makeView(kPoses[3], 0.59f), sub);
+		INFO(c << " " << sA.radius << " " << sB.radius);
+		CHECK(sA.radius == sB.radius);  // 逐位：同档 ⇒ 同半径 ⇒ 同纹素
+		// 反向：跨档必须不同（信号必须在，否则上一条是"半径与 far 无关"的假绿）
+		const auto subOut = projWithDepthRange(proj, nearC,
+			cascadeSplitDistance(nearQ, quantizeShadowDistance(2.5f), c, kActiveShadowCascades));
+		CHECK(frustumBoundingSphere(makeView(kPoses[0], 0.54f), subOut).radius != sA.radius);
 	}
 }
 

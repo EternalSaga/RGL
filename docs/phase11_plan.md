@@ -749,7 +749,7 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 | 根源 | 修法（scene_context / render_list_impl） |
 |---|---|
 | AABB 法姿态依赖（世界 AABB 随 yaw 变，且比精确球大 16%） | `frustumBoundingSphere(view, proj)` 闭式精确外接球：球心视轴 `zc`、`r=√((f−zc)²+rf²)`，n/f 从 proj 深度行反推（RH_ZO `n=B/A, f=B/(1+A)`）——**姿态无关、不碰平面符号约定**；r×1.001 防 float32 角点出球 |
-| 自适应 near/far 连续变（两机位 f=1.3813 vs 1.4345） | `quantizeShadowDistance`（1/8 格向上取整），CPU 切片与 shader splits **同用量化值**；同桶内 r/splits 完全恒定 |
+| 自适应 near/far 连续变（两机位 f=1.3813 vs 1.4345） | `quantizeShadowDistance`（**当时** 1/8 格向上取整；⚠ 2026-10-19 债-139 实测该格距跨档太密 = 每 0.136m 重新量化整张阴影图，**已改成 2 的幂**，理由与读数 → `scene_context.cppm` 该函数注释 + 总账 债-139），CPU 切片与 shader splits **同用量化值**；同桶内 r/splits 完全恒定 |
 | snap 格传图集整幅 2048 而块实为 1024（半纹素吸附 → PCF 抖） | 传 `shadowTileSize(cols)` |
 
  验证：报障两机位 + 中点三图井盖阴影一致（修复前互相矛盾）；开关对拍 6.17% 全变暗
