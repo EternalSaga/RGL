@@ -172,11 +172,13 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
 			meshletKeys.push_back(k);
-	CHECK(rules.size() == 41u);       // 独立行（19 行 nullptr 挂号 + 22 行谓词；债-129 S2：
+	CHECK(rules.size() == 40u);       // 独立行（18 行 nullptr 挂号 + 22 行谓词；债-129 S2：
 	                                  // meshlet.debug/tint 三条 → meshlet.instrument 一条，
-	                                  // meshlet.switch 两条 → meshlet.mode 一条（互斥行整删））
-	CHECK(blocks.size() == 6u);       // pcss / evssm / 三探针 / meshlet
-	CHECK(blockKeys.size() == 19u);   // 3 + 4 + 2 + 2 + 2 + 6
+	                                  // meshlet.switch 两条 → meshlet.mode 一条（互斥行整删）；
+	                                  // csm.slope_bias 批：预留空块的 `{"csm",…,nullptr}` 挂号行
+	                                  // 随该块填入第一枚键删除，改由 kGateBlocks 的 csm 块覆盖）
+	CHECK(blocks.size() == 7u);       // csm / pcss / evssm / 三探针 / meshlet
+	CHECK(blockKeys.size() == 20u);   // 1 + 3 + 4 + 2 + 2 + 2 + 6
 	CHECK(echo.size() == 30u);
 	CHECK(shadowEcho.size() == 13u);
 	CHECK(meshletKeys.size() == 8u);  // 整块 8 枚（债-106 红线：接管整块 = 一枚都不能少；
@@ -441,7 +443,7 @@ TEST_CASE("gate_lint warn 组（shadow）：izb.dump_frame × izb 关") {
 	}
 }
 
-TEST_CASE("gate_lint inertNote 组（shadow）：izb.grid 与两档调参块按 mode 判死值") {
+TEST_CASE("gate_lint inertNote 组（shadow）：izb.grid 与三块调参键按 mode 判死值（csm 的宿主 = 图集画不画）") {
 	const auto def = passesOf(deferredRenderGraphDesc());
 	const auto lintS = [&](const ShadowConfig& s) {
 		return lint(DiagnosticsConfig{}, def, kHappyEnv, s);
@@ -487,6 +489,27 @@ TEST_CASE("gate_lint inertNote 组（shadow）：izb.grid 与两档调参块按 
 		const auto fs = lintS(s);
 		CHECK(find(fs, "pcss.sun_degrees") != nullptr);
 		CHECK(find(fs, "evssm.sun_degrees") == nullptr);
+	}
+	{  // csm.slope_bias：宿主 = **图集画不画**（mode != none），**不是** mode == csm。
+	   // 斜率偏置作用在阴影深度 pass 的光栅阶段（StateKit 的 shadowState），pcss / evssm 两档
+	   // 同样画 CSM 图集、同一条 shadowState ⟹ 那两档必须沉默。变异红线：把 ownerActive 写成
+	   // `mode == csm`（照抄 pcss/evssm 那两块的形状）→ 下面 pcss / evssm 两臂立刻红
+	   // （假申报的形态正是"合法组合被判成死值"，同 meshlet.mode 的 overlay 档那条教训）。
+	   // ⚠ 本键出厂值 = 0，而 inertNote 的触发条件是「**偏离**默认 + 宿主不成立」⟹ 构造档与
+	   //   金标准扫描档位都必须用 ≠ 0 的值（下面取 24），否则"配了没人读"这个前提不成立、
+	   //   REQUIRE 假红（2026-10-19 出厂值 16→8 时实测撞过：改了默认值忘改构造值）。
+		const ShadowConfig off{.mode = ShadowMode::none, .csm{.slopeBias = 24.0}};
+		const auto fs = lintS(off);
+		REQUIRE(find(fs, "csm.slope_bias") != nullptr);
+		CHECK(find(fs, "csm.slope_bias")->severity == GateSeverity::inertNote);
+		for (const auto m : {ShadowMode::csm, ShadowMode::pcss, ShadowMode::evssm}) {
+			const ShadowConfig on{.mode = m, .csm{.slopeBias = 24.0}};
+			CHECK_MESSAGE(find(lintS(on), "csm.slope_bias") == nullptr, "mode=",
+				shadowModeName(m), " 档图集照画 ⟹ slope_bias 有消费者，不该判死值");
+		}
+		// 反向：mode=none 但**没配**本键（出厂 0 = 未偏离）⟹ 不喊——判据是"配了没人读的值"，
+		// 不是"档不对"（出厂态必须零 findings，否则 gate_lint 基线用例红）
+		CHECK(find(lintS(ShadowConfig{.mode = ShadowMode::none}), "csm.slope_bias") == nullptr);
 	}
 }
 
@@ -808,7 +831,7 @@ TEST_CASE("gate_lint meshlet.mdi_shadow：宿主 = assets + shadow_lod ≥ 0（�
 //
 // 用途：gate_lint 的任何重构（塌表 / 换装配 / 改措辞 / 换发射顺序）都要能在**不重跑 GPU、
 // 不截图**的前提下判定「触发面与归因面有没有变」。上面的行为用例逐条钉逐门语义；本 harness
-// 钉的是 88 档全组合扫描下的**输出面**，两张基线随仓库走（/tmp 下的历史副本不是基线）：
+// 钉的是 92 档全组合扫描下的**输出面**，两张基线随仓库走（/tmp 下的历史副本不是基线）：
 //   · `tests/golden/gate_lint_findings.txt`     = 每档 `(门名, 级别枚举值)` 行 —— 触发面
 //   · `tests/golden/gate_lint_findings_msg.txt` = 每档 `(门名, 消息)` 行 —— 归因面
 // 行序 = 档内字典序（**集合语义**：块装配的 finding 发射顺序与独立行时代不同是允许的，
@@ -854,7 +877,7 @@ constexpr GateEnv kGoldenNoLlm{.staticGraphicsIndirect = true};
 /** pcss / evssm 调参块的「全偏离」形态（四字段都 ≠ 出厂值；8.0 = 偏离默认 16.0）。 */
 constexpr ShadowTuning kTuningAll{2.0, 40.0, 48.0, 8.0};
 
-/** 扫描表 88 档（90 − 2：variant 交叉校验两档随 RgGraphVariant 枚举删除，2026-10-18 刀②；档序 = 基线文件档序；每档的期望输出以基线文件为准，行为语义见上方用例）。 */
+/** 扫描表 92 档（88 + 4：csm 块四档（本批新键）；原 90 − 2：variant 交叉校验两档随 RgGraphVariant 枚举删除，2026-10-18 刀②；档序 = 基线文件档序；每档的期望输出以基线文件为准，行为语义见上方用例）。 */
 const std::vector<GoldenCase>& goldenCases() {
 	static const std::vector<GoldenCase> kCases{
 		// ———— factory：出厂配置 × 图/env 四世界 ————
@@ -862,6 +885,13 @@ const std::vector<GoldenCase>& goldenCases() {
 		{.name = "factory/no-light-dark", .noLight = true, .world = kGoldenDark},
 		{.name = "factory/no-light-happy", .noLight = true},
 		{.name = "factory/def-headless", .world = kGoldenDark},
+		// ———— csm 块：宿主 = mode != "none"（**图集画不画**，不是 mode=="csm"：斜率偏置作用在
+		//      阴影深度 pass 的光栅阶段，pcss / evssm 档同吃它 → 那两档必须沉默，见 kCsmKeys）————
+		{.name = "csm/owner-on-csm", .shadow = {.csm{.slopeBias = 24.0}}},
+		{.name = "csm/owner-on-pcss",
+			.shadow = {.mode = ShadowMode::pcss, .csm{.slopeBias = 24.0}}},
+		{.name = "csm/off-none", .shadow = {.mode = ShadowMode::none, .csm{.slopeBias = 24.0}}},
+		{.name = "csm/off-none-default", .shadow = {.mode = ShadowMode::none}},
 		// ———— pcss 块：宿主 = mode=="pcss"（含结构性错位键 min_footprint_texels）————
 		{.name = "pcss/owner-on", .shadow = {.mode = ShadowMode::pcss, .pcss = kTuningAll}},
 		{.name = "pcss/owner-on-mft-default",
@@ -1037,7 +1067,7 @@ const std::vector<GoldenCase>& goldenCases() {
 	return kCases;
 }
 
-/** 88 档全组合扫描 → 两份基线文本（触发面 keep / 归因面 msg）。校验与重生成**共用这一份**
+/** 92 档全组合扫描 → 两份基线文本（触发面 keep / 归因面 msg）。校验与重生成**共用这一份**
  *  装配代码：两条路各写一遍 = 两个真相源，改口径时必漂（本 harness 要拦的正是这个形态）。 */
 void buildGoldenBlobs(std::string& keep, std::string& msg) {
 	static const std::vector<RgPassPlan> kNoLightGraph = passesOfNoLightGraph();
@@ -1125,8 +1155,8 @@ std::string diffGoldenFile(const std::string& file, const std::string& current) 
 
 }  // namespace
 
-TEST_CASE("gate_lint 金标准 harness：88 档全组合扫描（默认 = 校验 committed golden；RGL_GATE_LINT_GOLDEN=<dir> = 重生成）") {
-	CHECK(goldenCases().size() == 88u);  // 扫描面哨兵：删档 = 回归网静默缩小（变异红线 ②）
+TEST_CASE("gate_lint 金标准 harness：92 档全组合扫描（默认 = 校验 committed golden；RGL_GATE_LINT_GOLDEN=<dir> = 重生成）") {
+	CHECK(goldenCases().size() == 92u);  // 扫描面哨兵：删档 = 回归网静默缩小（变异红线 ②）
 	std::string keep, msg;
 	buildGoldenBlobs(keep, msg);
 	const char* const outDir = std::getenv("RGL_GATE_LINT_GOLDEN");

@@ -1908,10 +1908,73 @@ TEST_CASE("shadow_config：izb 子表形态（on+grid+dump_frame；grid clamp [6
 	}
 }
 
+TEST_CASE("shadow_config：csm.slope_bias（斜率深度偏置）——出厂 16、显式值生效、clamp [0,64]、0 不被吞") {
+	// 判据来源 = 本批实测（出厂默认 16 的读数 → ShadowCsmTuning::slopeBias 注释）+ 闭式口径
+	// 「clamp 不是恒取界、0 是合法档（= 关闭）」。
+	// 变异红线（实测形态，逐条跑过）：① 默认值 16.0 改成 15.0 → 「出厂默认」两条红；
+	// ② std::clamp 整条删掉 → 上下界两条红；③ 把 `v ? *v : into.slopeBias` 写成真值判据
+	// `v && *v ? …`（= 「0 当缺省」）→ 「0 不被吞」红（0 = 关闭档，被读成缺省 = 门关红线从此
+	// 关不拢）；④ 键轨迹里的键名改拼写 → 回显覆盖率护栏红（🔴 不能整行删：`trace` 会变成
+	// 未用参数被 -Werror=unused-parameter 拦下，拿到的是"编译红"而不是"判据红"，同 skill
+	// 「谓词类变异要保留参数使用」）；⑤ 回显表删掉本行 → 覆盖率护栏 + 本用例的 present 断言红。
+	const auto load = [](std::string_view body) {
+		TempLua f("sh_csm", body);
+		return loadShadowConfig(f.pathStr());
+	};
+	{  // 出厂默认 = 0.0（🔴 这里**刻意写字面量**而不是 `ShadowConfig{}` 符号：本键的出厂值是
+	   // 红线锚的取数口径，只钉符号 = 「默认值被人改了」测不出来；其余回落断言仍吃符号。
+	   // 为什么是 8 不是 16 → `ShadowCsmTuning::slopeBias` 注释里的定档表：16 那一档靶上
+	   // 闭式真实影带存活率 = 0%，等于拿真影子换读数）
+		CHECK(ShadowConfig{}.csm.slopeBias == 0.0);
+		auto r = load("return {}\n");
+		REQUIRE(r.has_value());
+		CHECK(r->csm.slopeBias == 0.0);
+		TempLua g("sh_csm_empty", "return { csm = { } }\n");  // 空块 = 回落（预留块的老形态）
+		auto e = loadShadowConfig(g.pathStr());
+		REQUIRE(e.has_value());
+		CHECK(e->csm.slopeBias == 0.0);
+	}
+	{  // 显式给值生效（界内原样 + 上界 clamp）
+		CHECK(load("return { csm = { slope_bias = 6.5 } }\n")->csm.slopeBias == 6.5);
+		CHECK(load("return { csm = { slope_bias = 64.0 } }\n")->csm.slopeBias == 64.0);
+		// ⚠ 出厂值 = 0 之后，**两条曾经有效的断言退化成恒真，已删**（2026-10-19）：
+		//   ① 「显式 0 不被当缺省吞掉」——默认就是 0，吞与不吞同值；
+		//   ② 「clamp 下界 −1 → 0」——夹到 0 与回落默认 0 同值，结果分不出来。
+		//   别把它们"顺手补回来"当成覆盖率：那种断言红了也不指向任何缺陷。
+		//   门关（本键 = 0）的真实证据在**消费点**（`test_state_kit` 断言 `depthBiasEnable ==
+		//   false`）与截图逐位对拍（skill rgl-verify 的门关口径），不在解析器里。
+		CHECK(load("return { csm = { slope_bias = -1 } }\n").has_value());  // 越界不被拒（只夹）
+	}
+	{  // 反向用例（clamp 上界；下界见上方说明——默认 0 下不可判，已删）：
+	   // 越界**夹到界值**——不是被拒（解析仍成功），也不是原样通过
+		auto hi = load("return { csm = { slope_bias = 1000 } }\n");
+		REQUIRE(hi.has_value());
+		CHECK(hi->csm.slopeBias == 64.0);
+	}
+	{  // csm 存在但不是表 = 报错不静默（"配置写了、什么都没发生"是本项目最怕的失效形态；
+	   // 判据本体 = checkTableOrAbsent，csm 自本批起与 pcss/evssm 同吃这道闸门）
+		TempLua f("sh_csm_scalar", "return { csm = 5 }\n");
+		auto r = loadShadowConfig(f.pathStr());
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().message.find("csm must be a table") != std::string::npos);
+	}
+	{  // 块内拼错的子键：进 present（下钻采集）、不进读集、**不落到字段上**
+	   // （批 N6a 时代 csm 无点分成员 ⟹ 不钻，"写了不认识的子键"既不报错也不生效；
+	   //  填入第一枚键后 declaresNestedKeys 认它 ⟹ 本用例钉的是"从此会喊"）
+		TempLua f("sh_csm_typo", "return { csm = { slope_bia = 5 } }\n");
+		ShadowKeyTrace trace;
+		auto r = loadShadowConfig(f.pathStr(), &trace);
+		REQUIRE(r.has_value());
+		CHECK(containsKey(trace.present, "csm.slope_bia"));
+		CHECK_FALSE(containsKey(trace.read, "csm.slope_bia"));
+		CHECK(r->csm.slopeBias == 0.0);  // 拼错的键没被当成 slope_bias 读进来（回落出厂 0）
+	}
+}
+
 TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 回显表键集合（双向）+ 未知键判据") {
 	// diagnostics 同形护栏（docs/archive/gate_lint_plan.md §3-B）：回显表删一行 / 解析器漏记一键 /
 	// 两处任一侧改拼写 → set 相等立刻红。变异红线：kShadowEcho 删任一条目 → 本用例红。
-	TempLua f("sh_keys", "return { mode = \"csm\", izb = { on = true }, csm = { }, pcss = { }, evssm = { } }\n");
+	TempLua f("sh_keys", "return { mode = \"csm\", izb = { on = true }, csm = { slope_bias = 16.0 }, pcss = { }, evssm = { } }\n");
 	ShadowKeyTrace trace;
 	auto r = loadShadowConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
@@ -1922,8 +1985,11 @@ TEST_CASE("shadow_config 回显覆盖率护栏：解析器读过的键集合 == 
 		CHECK(containsKey(trace.read, k));  // 回显有而解析器不读 = 陈旧键
 	for (const auto& k : trace.read)
 		CHECK(containsKey(echo, k));        // 解析器读而回显不列 = 撒谎行
-	// csm = {} 是定案形状里的预留块：present 有它、读集也有它（未知键 lint 不喊）
+	// csm 块：顶层表名在 present 里（未知键 lint 的前缀判据认它），字段键 `csm.slope_bias`
+	// 既在 present（下钻采集）也在读集（= 回显成员）
 	CHECK(containsKey(trace.present, "csm"));
+	CHECK(containsKey(trace.present, "csm.slope_bias"));
+	CHECK(containsKey(trace.read, "csm.slope_bias"));
 	{  // 未知键判据：拼错的顶层键进 present 而不进 read（lint 的输入成立）；正确键不误报
 		TempLua g("sh_typo", "return { mode2 = \"csm\", mod = \"csm\", mode = \"csm\" }\n");
 		ShadowKeyTrace t2;
@@ -1954,7 +2020,7 @@ TEST_CASE("shadow_config 回显 describe：全默认 = 空串；改动只列改�
 	CHECK(std::ranges::count(all, '=') == 13);  // 全量 = 13 段 k=v（空格分隔）
 	CHECK(all.find("mode=csm") != std::string::npos);
 	CHECK(all.find("izb.on=false") != std::string::npos);
-	CHECK(all.find("csm=reserved") != std::string::npos);  // 预留块出可读文本（差集永不喊）
+	CHECK(all.find("csm.slope_bias=0") != std::string::npos);  // 出厂值出可读文本（差集语义下不喊）
 }
 
 TEST_CASE("diagnostics 旧阴影键 fail-fast：9 键逐个出现 = 启动失败并指路 configs/shadow.lua；无旧键文件正常") {

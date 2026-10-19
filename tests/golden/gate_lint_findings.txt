@@ -2,6 +2,11 @@
 ### factory/no-light-dark
 ### factory/no-light-happy
 ### factory/def-headless
+### csm/owner-on-csm
+### csm/owner-on-pcss
+### csm/off-none
+csm.slope_bias	0
+### csm/off-none-default
 ### pcss/owner-on
 pcss.min_footprint_texels	1
 ### pcss/owner-on-mft-default

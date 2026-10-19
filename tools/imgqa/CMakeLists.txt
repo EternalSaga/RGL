@@ -20,6 +20,9 @@ add_executable(imgqa
     cli_table_diffblock.cpp
     # `blend-sort` 的 spec 段（债-132，同上一条的拆法：主表撞 500 行、specsSwimAndProbe 撞 120 行）。
     cli_table_blend.cpp
+    # `shadow-grain` 的 spec 段（同 blend 段的拆法：主表撞 500 行、specsSwimAndProbe 撞 120 行，
+    # 缝按仪器切）。
+    cli_table_grain.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -59,6 +62,9 @@ add_executable(imgqa
     judgments_table_block.cpp
     # `blend-sort` 判据段（债-132，4 条），缝按仪器切（同 block / ssr 段）。
     judgments_table_blend.cpp
+    # `shadow-grain` 判据段（2 条：痤疮上界 + slope_bias 接线阳性锚点），缝按仪器切
+    # （`judgments_table_shadow.cpp` 把头注缝声明为「三条全部属于 shadow-kernel-scale」）。
+    judgments_table_grain.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -85,6 +91,12 @@ add_executable(imgqa
     # `blend-sort` 口径层（债-132）的自检段：投影锚点 / 合成闭式 / 显示链金标准 / 判别力 /
     # 三条拒跑 / 挂号，全部**不启引擎**（合成 BlendPiece 直打 `blend_sort_metric.cpp`）。
     selftest_blend_sort.cpp
+    # `shadow-grain` 口径层（影场颗粒度）的自检段 = **判据 4**：任务钦定四条算子自检
+    # （棋盘/竖条纹 = 恰 1.0、34 宽斜坡 = 恰 1/33、常数 = 恰 0）+ 逐带存活率（在场 = 恰 1 /
+    # 半高 = 恰 0.5 / 被抹 = 恰 0 / 抖动 = 恰 2 + 三条守卫）+ 线性域锚点 / eps 守卫 /
+    # clip / 窗口纪律 + 三条判决线挂号，全部闭式不启引擎（合成 cov 场直打
+    # `shadow_grain_metric.cpp`）。
+    selftest_grain.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -188,6 +200,18 @@ add_executable(imgqa
     # 三条判决线。常数唯一出处 = `shadow_kernel_metric.h`（两处各抄一份 = 第二份真相）。
     shadow_kernel_metric.cpp
     shadow_kernel_scale.cpp
+    # `shadow-grain`：出厂档不许吃掉真实影带（程序化 shadow_grain 靶·多缝深组 + 六臂 +
+    # 闭式存活率刻度）。拆 TU 的缝 = **口径 vs 仪器内部**：`shadow_grain_metric.cpp` 是
+    # 四个纯算子（覆盖度场 / 跳变密度 / 逐带跳变计数 / 逐带存活率，selftest 用闭式直接测，
+    # 不启引擎）；仪器内部再按职责切（护栏：单文件 < 500 代码行；先例 ao_noise /
+    # temporal_residual）：`shadow_grain.cpp` = 臂表 + 采集 + 回显对账 + 在场闸门 + 入口，
+    # `shadow_grain_target.cpp` = manifest 测量接口 + 投影窗/列区间，`shadow_grain_judge.cpp`
+    # = 三条判决线。跨 TU 类型与量具常数唯一出处 = `shadow_grain.h`（口径常数在
+    # `shadow_grain_metric.h`）。
+    shadow_grain_metric.cpp
+    shadow_grain_target.cpp
+    shadow_grain_judge.cpp
+    shadow_grain.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器

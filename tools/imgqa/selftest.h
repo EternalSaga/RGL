@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 47 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 48 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -18,6 +18,9 @@
 //                                    `analytic.cpp` 闭式解 / `aa_coverage.cpp` 的覆盖率反解
 //     · `selftest_shadow.cpp`      = **阴影族两台量具**（shadow-softness / shadow-kernel-scale）：
 //                                    profile 生成面（lua 覆写门）+ 度量算子面（闭式）
+//     · `selftest_grain.cpp`       = **shadow-grain 口径层**（影场颗粒度，判据 3）：任务钦定
+//                                    四条算子自检（棋盘/竖条纹=1.0、34 宽斜坡=1/33、常数=0）+
+//                                    线性域锚点 / eps 守卫 / clip / 窗口纪律，全部闭式不启引擎
 //     · `selftest_ao_residual.cpp` = `ao_metrics.cpp` 的度量层 + `temporal_residual.cpp` 的
 //                                    时域绝对残差（折叠 / 区域纪律 / τ 闭式 / 梯度能量）
 //     · `selftest_bands.cpp`       = **不读图、不启引擎的纯度量层**：bandTableOf 分带 /
@@ -44,7 +47,7 @@
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}'   # = 441
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}                   # = 466
 //   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。）
 //   🔴 改这个数字的仪式：只在**逐条可红**的断言进出时改。曾删掉 `topLevelValueOf` 的两条断言
 //   ——npos 分支经 findKeyHits 不可达 ⟹ 改前改后都绿，**买了信心不买覆盖**，那种断言不配进这个数。
@@ -132,7 +135,7 @@ std::string captureStdout(F fn)
     return out;
 }
 
-// ── 47 条测试的声明（定义按仪器族分散在十个 TU；调用顺序只写在 `cmdSelftest`）──
+// ── 48 条测试的声明（定义按仪器族分散在十一个 TU；调用顺序只写在 `cmdSelftest`）──
 void testSrgb(Checker& c);
 void testObjectId(Checker& c);
 void testRegion(Checker& c);
@@ -161,6 +164,7 @@ void testShadowSoftnessMetrics(Checker& c);
 void testShadowKernelScale(Checker& c);
 void testShadowKernelScaleSampling(Checker& c);
 void testShadowKernelScaleInstrument(Checker& c);
+void testShadowGrain(Checker& c);
 void testDiffStructMetric(Checker& c);
 void testDiffStructDomainGuard(Checker& c);
 void testDiffBlockAnchors(Checker& c);

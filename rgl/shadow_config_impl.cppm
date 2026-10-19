@@ -142,6 +142,25 @@ void applyTuningBlock(sol::table& root, std::string_view table, ShadowTuning& in
 }
 
 /**
+ * CSM 档调参块读取（configs/shadow.lua 的 `csm`；缺表/缺键 = 全默认）。形态与
+ * `applyTuningBlock` 同构：键轨迹**总是**记 `csm.slope_bias`（回显覆盖率护栏的输入），
+ * 值 clamp [0, 64]（防手滑，与 pcss 两半径的 clamp 口径同形。量程上限不是实测出来的档：
+ * offset = m·dZ/dpixel 对 m 单调，出厂 16 已在"抬掠射面自遮"这个方向上走得很远，64 只是
+ * 给"手滑多写一个 0"留的闸门，不代表 64 处有什么语义）。
+ * @param root 配置根表
+ * @param into 写入目标（ShadowConfig::csm）
+ * @param trace 键轨迹
+ */
+void applyCsmBlock(sol::table& root, ShadowCsmTuning& into, ShadowKeyTrace& trace) {
+	trace.read.emplace_back("csm.slope_bias");
+	const sol::optional<sol::table> block = root["csm"];
+	if (!block)
+		return;
+	sol::optional<double> v = (*block)["slope_bias"];
+	into.slopeBias = std::clamp(v ? *v : into.slopeBias, 0.0, 64.0);
+}
+
+/**
  * 子表存在性 + 类型闸门：键存在但不是表 = 配置笔误，**报错不静默回落**（本项目最怕
  * 的失效形态 = 「配置写了、什么都没发生」）。
  * @param root 配置根表
@@ -203,8 +222,9 @@ struct ShadowGateEcho {
 /**
  * 门回显表 = 「阴影门 ↔ lua 键名 ↔ 怎么打印」的单一真相源（diagnostics 的 kGateEcho
  * 同构）：**加门 = 加一行**，回显与 shadowConfigEchoKeys() 自动跟上；忘加的人被
- * tests/test_scene_config.cppm 的覆盖率护栏拦下。`csm` 是定案形状里的**预留空块**
- * （CSM 档暂无调参键），回显恒 "reserved"（差集语义下永不进 info 行）。
+ * tests/test_scene_config.cppm 的覆盖率护栏拦下。`csm.slope_bias` 取代了批 N6a 定案形状里
+ * 的预留空块条目（当时 `csm` 无调参键、回显恒 "reserved"）——本表从此**只有真键**，
+ * 没有"占位行"。
  */
 // ⚠ **原生数组**（尺寸自动推导），不是 `std::array<T, N>`：N 写错时 std::array 不报错，
 // 而是把剩余元素**零填充** ⟹ 空键名 + **空调用 std::function = SIGSEGV**（实测踩过：删两个
@@ -214,7 +234,7 @@ const ShadowGateEcho kShadowEcho[]{
 	{"izb.on", [](const ShadowConfig& c) { return fmt::format("{}", c.izb); }},
 	{"izb.grid", [](const ShadowConfig& c) { return fmt::format("{}", c.izbGrid); }},
 	{"izb.dump_frame", [](const ShadowConfig& c) { return fmt::format("{}", c.izbDumpFrame); }},
-	{"csm", [](const ShadowConfig&) { return std::string("reserved"); }},
+	{"csm.slope_bias", [](const ShadowConfig& c) { return fmt::format("{}", c.csm.slopeBias); }},
 	{"pcss.sun_degrees", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.sunDegrees); }},
 	{"pcss.search_radius", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.searchRadius); }},
 	{"pcss.max_penumbra", [](const ShadowConfig& c) { return fmt::format("{}", c.pcss.maxPenumbra); }},
@@ -231,7 +251,9 @@ const ShadowGateEcho kShadowEcho[]{
  * 回显表是否声明了 `块.` 前缀的点分键（= 该块是**固定字段块**，可下钻；债-129 第三刀，
  * runtime_config_impl 同构）。izb 块的 `on` 子键自硬切起**就是**回显成员（回显/门名 =
  * `izb.on`，扁平布尔双读已删——「扁平键双读 = 两个真相源」红线的活体违反，2026-10-17
- * 主 agent 裁）。`csm` 是预留空块（键表无 `csm.` 声明）⟹ 不钻。已知存量：`scene.lua`
+ * 主 agent 裁）。csm/pcss/evssm 三块各有点分成员 ⟹ 都钻（批 N6a 时代 `csm` 是预留空块、
+ * 无 `csm.` 声明故不钻，那扇"写了不认识的子键也不报错"的门随第一枚键落地一起关上）。
+ * 已知存量：`scene.lua`
  * 的 `taa.enabled`（键随批 14.6 已删，env_band / nm_rig 两靶残留）会被本护栏 warn——
  * 已知存量，待裁决，见 docs/archive/配置正交性_plan.md；为凑「存量零告警」删靶或改 `aa` 是禁手。
  * @param block 顶层键名（候选块名）
@@ -298,9 +320,9 @@ void lintUnknownShadowKeys(const ShadowKeyTrace& trace) {
 
 /**
  * 「文件里实际出现的键」采集（diagnostics 同构；未知键 lint 的输入）。顶层键照旧记；
- * 债-129 第三刀：回显表声明了 `块.` 点分前缀的块（izb/pcss/evssm）**下钻一层**，
+ * 债-129 第三刀：回显表声明了 `块.` 点分前缀的块（izb/csm/pcss/evssm）**下钻一层**，
  * 子键以 `块.子键` 追加；非表值不钻（izb 扁平布尔由 applyIzbKey 的类型闸门报错）、
- * csm 预留块不钻（判据见 declaresNestedKeys）。
+ * 无点分成员的块不钻（判据见 declaresNestedKeys）。
  * @param root 配置根表
  * @param trace 键轨迹（present 追加目标）
  */
@@ -398,7 +420,7 @@ std::string describeAllShadowGates(const ShadowConfig& cfg) {
 	auto rootObj = doFileRoot(lua, path);
 	if (!rootObj)
 		return std::unexpected(std::move(rootObj).error());
-	// 子表类型闸门覆盖的三张表（csm = 定案形状里的预留空块，无调参键）
+	// 子表类型闸门覆盖的三张表（都存在时必须是表；csm 自本批起有真键，仍留在闸门名单里）
 	constexpr std::array<const char*, 3> kSubTables{{"csm", "pcss", "evssm"}};
 
 	try {
@@ -421,15 +443,14 @@ std::string describeAllShadowGates(const ShadowConfig& cfg) {
 		if (auto err = applyIzbKey(root, cfg, *trace); err)
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 				fmt::format("shadow config ({}): {}", path, *err)});
-		// csm/pcss/evssm：存在必须是表（类型错 = 报错不静默）。csm = 预留空块：只记读集
-		// 不取值（pcss/evssm 的读集 = 各自三个字段键，表名本身不重复记——覆盖率护栏
-		// 断言 read 集合 == 回显表键集合）。
-		trace->read.emplace_back("csm");
+		// csm/pcss/evssm：存在必须是表（类型错 = 报错不静默）。三块的读集 = 各自的**字段键**
+		// （表名本身不重复记——覆盖率护栏断言 read 集合 == 回显表键集合）。
 		for (const char* sub : kSubTables) {
 			if (auto err = checkTableOrAbsent(root, sub); err)
 				return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 					fmt::format("shadow config ({}): {}", path, *err)});
 		}
+		applyCsmBlock(root, cfg.csm, *trace);
 		applyTuningBlock(root, "pcss", cfg.pcss, *trace);
 		applyTuningBlock(root, "evssm", cfg.evssm, *trace);
 

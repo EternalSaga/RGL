@@ -68,6 +68,11 @@ Projector makeProjector(const Engine::Camera& cam, int cols, int rows);
 /// 地面 y=0 上的 (x,z) → 像素。投到相机背后或屏外 = false（该样本作废，不夹到边缘）。
 bool projectTo(const Projector& p, double x, double z, double& px, double& py);
 
+/// 任意世界点 (x,y,z) → 像素（`projectTo` 的三维母版；ndc→像素的换算口径唯一出处）。
+/// `shadow-grain` 的判据窗口住在**竖直墙面**上，地面特化版吃不到；两处各抄一份
+/// 「竖直 fov + aspect 压横轴 + y 翻转 + 像素边界 0..cols」= 第二份真相，改一处漂一处。
+bool projectPoint3(const Projector& p, const std::array<double, 3>& w, double& px, double& py);
+
 /// 双线性取字节域 luma（`byteLuma` 的输出面）。投出屏 / 贴边取不到 2×2 = false。
 bool sampleLuma(const cv::Mat& luma, const Projector& p, double x, double z, double& out);
 

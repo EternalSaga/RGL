@@ -5,6 +5,7 @@ export module state_kit;
 import rlstd;
 import rlvk;
 import shader;
+import shadow_config;      // shadowConfig().csm.slopeBias（rlbase 配置单例，向下 import 合法）
 import pass_vocabulary;  // kAllPassStates（状态名词表单一真相源）+ stateNamesCoverAll
 
 namespace RGL {
@@ -105,11 +106,28 @@ export class StateKit {
 		// ① depthWrite = true + ② depthCompare = LESS（阴影图 = 光视最近深度，clear 1.0）；
 		// ③ cullMode = **None**（双面写入）——配合"RADV 无保守光栅外扩余量"的结论
 		// （docs/phase11_plan.md §9：maxExtraPrimitiveOverestimationSize = 0，薄几何/单面片
-		// 无法靠 fattening 挡漏光）。**尚未调**：slope-scaled depth bias 与采样侧 normal
-		// offset 要等深度-only 管线接上后按实测调（现在填数就是猜），见 §10.4 取舍 1。
+		// 无法靠 fattening 挡漏光）。
+		// 深度-only 管线接上后按实测调的两件事（旧注释原话"尚未调"，原始记录 =
+		// docs/phase11_plan.md §10.4 取舍 1），本批**调掉一件、留一件**：
+		//   · slope-scaled depth bias = 已接上，见下面两行（键 = csm.slope_bias，出厂 16）。
+		//   · 采样侧 normal offset = **仍未做**：它改的是 shadow.slang 的采样点沿法线偏移，
+		//     与这里的光栅侧偏置是两个独立旋钮（实测斜率偏置已把掠射面痤疮压到 0.079/0.068，
+		//     够不够、要不要再叠 normal offset 是下一刀的事，别在这里替它占位）。
 		shadowState.depthWrite = true;
 		shadowState.depthCompareOp = vk::CompareOp::eLess;
 		shadowState.cullMode = vk::CullModeFlagBits::eNone;
+		// **硬件斜率深度偏置**（configs/shadow.lua 的 `csm.slope_bias`）：掠射面自阴影痤疮的
+		// 光栅侧解法，单位 = Vulkan depthBiasSlopeFactor（无量纲），默认 16 的实测读数与
+		// 「为什么不是常数 bias」→ `ShadowCsmTuning::slopeBias` 注释。0 = 关（连 enable 一起关）
+		// ⟹ 与本键加入前**逐位相同**，这是门关逐位不变证明的取数口径。
+		// 🔴 **时序契约**（本行读单例的前提，实测构造顺序而非猜测）：StateKit 是 Renderer 的
+		//   成员（vkrenderer.cppm），Renderer 在 main 的 assembleBackEnd（main_impl.cppm 装配段）
+		//   里构造，而 `setShadowConfig()` 在更早的 loadAllConfigs（同文件 :148）——main 的第一段。
+		//   同一窗口内 runGateLint（:776）读 shadowConfig() 是同一先例，不是新发明的依赖。
+		//   `just test` 里不加载配置 → 拿到的是 `ShadowConfig{}` 出厂默认（单例注释承诺的形态），
+		//   不是未初始化内存。
+		shadowState.depthBiasSlope = static_cast<float>(shadowConfig().csm.slopeBias);
+		shadowState.depthBiasEnable = shadowState.depthBiasSlope > 0.0f;
 		// 批 11.3-1d：IZB mask pass —— 零附件光空间重放（viewport = 光网格 G×G）：
 		// 无深度测试/写入（遮挡判定在 frag 走链，光栅只出覆盖）、双面（投影体背面也
 		// 遮光）、**OVERESTIMATE 保守覆盖**（FTIZB 正确性命门：cell 被三角"擦边"必须

@@ -1897,6 +1897,296 @@ def scene_blend_sort() -> Scene:
     return s
 
 
+# ---------------------------------------------------------------------------
+# 场景 10：shadow_grain —— 影场颗粒度的**槽影带**靶（imgqa shadow-grain 的常驻靶）
+# ---------------------------------------------------------------------------
+# ## 为什么必须新造靶（penumbra_ladder 教训的复刻，别删这段）
+# 「影子随相机游动」修了九轮而指标全绿：`imgqa swim` 测的是**世界不变性**（同一个世界点的
+# 影值变没变）——它测的性质是对的，且确实该绿（纹素吸附工作正常）。用户看到的是另一件事：
+# 门板上的自阴影痤疮**钉死在世界表面**，相机一动屏幕像素就扫过它。现有判据网里没有任何
+# 一条测得到「影场在世界空间上的高频程度」，本靶补的就是这个洞（判据 = `imgqa shadow-grain`，
+# 口径与三条判据的理由住 tools/imgqa/shadow_grain.cpp 头注释）。
+# bistro 门板是**发现地**但不是合格靶：固定屏幕矩形不可常驻（区域必须来自几何）。本靶把
+# 发现地读图确认的几何形态（见下「机制」）**程序化重造**：槽的数量/深度/周期全部闭式，
+# 判据窗口的密度上界有闭式刻度（2·count/(cols−1)），阳性锚点才有资格当闸门。
+#
+# ## 机制（2026-10-18 读图定案；更早的「掠射+normal map 椒盐」模型已被实测证伪）
+# bistro 门板窗口的 72 个二值翻转**全部单向**（slope=0 遮 / slope=16 受光），列分布集中在
+# 两列 = 门板的**竖直拼缝槽**（concave moldings）。槽机制闭式：前墙（朝光）+ 后退 d 的背板，
+# 竖直缝槽内背板被前墙右缘遮光，影带宽度 s = d·du/dn（du = 光沿墙 u 轴分量、dn = 朝光分量），
+# 带与受光区的**光深度差 = d·dn**。三股偏置里：
+#   · 采样端常数 bias（kShadowDepthBias = 0.0015 NDC，shadow.slang `ref = ndc.z − params.x`）
+#     与 normal offset（1.5 texel 沿法线，②）都把比较推向**受光**——带要活过 slope=0 档，
+#     要求 d·dn > 常数 bias + 1.5 texel 的补偿；
+#   · 光栅端斜率偏置（`csm.slope_bias`，16·dZ/dpixel）把前墙的存储深度**推远**——带要在
+#     slope=16 档被抹掉，要求 d·dn < 16·dn/1024 NDC + 上项。
+# 合并成**尺度不变**的分离窗（span = 级联光空间跨度，texel = span/1024）：
+#   span·(0.0015/dn + 1.5/1024) < d < span·(0.0015/dn + 17.5/1024)
+# 窗宽 = 16·texel（dn 约掉）；dn=0.6 时 d ∈ (0.0040, 0.0196)·span。投影系统按 SceneBounds
+# 自适应 near/far ⟹ span ∝ 机位距离 ⟹ 整套几何随 D 缩放自相似（换 D 只换 px 刻度）。
+# ⚠ 已证伪、别再试的两条（各烧过一轮实机）：
+#   ① 「完美平面 + normal map 掠射椒盐」：平面上法线偏移**数学上永不**自遮
+#     （stored − ref = δ·cosθ/dn > 0 恒受光），γ=8°/amp=20° 实测两档 cov ≡ 0；
+#   ② 「与墙平行的薄板遮挡体」：薄板与墙同掠射，它的影被**自己的** slope 偏置抹掉
+#     （b=3 实测影侧探针 0.000）。遮挡体若用「朝日竖板」则影缘噪声带（normal map × 杠杆臂）
+#     淹没信号（T=30 m 实测两档同 0.0338）。
+#
+# ## 几何机关（每条都有构建期 assert，改任何一条 assert 会响）
+#   ① 墙法线 N 水平且 N·L̂ = GRAIN_DN = 0.6（与 bistro 门同量级；太阳仰角 48° 限死
+#      dn ≤ 0.667，「掠射」在机制里根本不需要——见上「已证伪①」）。方位分支取 du > 0
+#      的那个（影带落在**每个缝槽的右缘**，闭式可算，assert ②）。
+#   ② 机位沿 +N 正对墙心（视轴 = −N，up = Ŷ）⟹ 墙面 ⊥ 视轴 ⟹ 墙上映射是**精确的相似
+#      变换**（px/m 各向同性），region 投出来是轴对齐屏幕矩形——区域来自几何（manifest
+#      世界坐标角点 + 相机投影），不是手填屏幕矩形。
+#   ③ 前墙 = 共面 quad 块拼成的**单 piece**（缝槽 = 相邻块之间的竖直缺口；合并是因为
+#      调色板只有 10 色，墙块各自成 piece 会撞「piece 两两可分」校验——颜色不进判据，
+#      区域来自几何）；背板 = **每缝深一块**比前墙**小**的 quad，各退本组 d 沿 −N。
+#      region 内唯一影结构 = 全部缝的竖直带，每条 2 个二值跳变 ⟹ 闭式密度 = 2·count/(cols−1)。
+#   ⑥ 背板覆盖 = 「穿过本缝的视线打在背板平面的落点区间」± 裕量，落点 = u·(D+d)/D（背板
+#      比墙远 d，同一条视线打得更朝外）。只盖「缝本身」的背板会在外侧缝露出黑背景
+#      （off=0 ⟹ cov=0 = 死缝）——2026-10-19 首版加密靶实机翻车记录；assert ⑤/⑤′ 钉住
+#      「盖住落点区间」且「相邻背板不重叠」（重叠 = 谁可见变成深度竞争的二义）。
+#   ④ 光线**向上**爬 d·Lv/dn（太阳仰角 48° > 45° ⟹ 该值 > d）：带在背板上存在的前提是
+#      入射光线被**墙顶**放走之前先穿过缺口 ⟹ 墙顶必须高出 region 上界 ≥ d·Lv/dn + 裕量
+#      （assert ④；漏了这条 = region 上部两档同受光、密度掉档）。
+#   ⑤ 光 = 交付默认 SUN（ProfileOpts::lightDir 同值），机位/帧号/尺寸都是量具的组成部分。
+#
+# ## 靶子加密：从单缝深到多缝深（2026-10-19 本批，用户点名）
+# 首版只有 0.30 m 一个缝深——出厂 slope_bias 定档 8 的实测表（configs/shadow.lua）只证明了
+# 「d=0.30 的真影带在 8 之下存活率 100%」，而 `rgl/shadow_config.cppm::slopeBias` 注释自己
+# 登记了盲区：「更细的缝会不会在 8 之下就被提前抹掉，现在没有东西在守」。本靶把缝深做成
+# **多档交错排在同一行**（每档一条缝；**不是**每组四条横向铺开——铺到 5 m 宽会撑大
+# SceneBounds、推高级联 span、分离窗整体右移，d=0.30 在 slope=0 下都被 PCF 糊死，
+# 实机翻车记录写在 GRAIN_GROOVES 常量注释里）。每条缝独立出密度/存活率读数、独立过
+# slope=0 在场闸门——画不出带的死缝由闸门抛（rc=3），绝不许静默进判据
+# （penumbra_ladder 的「靶瞎了与带被正确抹除给出同一个绿」教训）。
+# 缝深选点判据（按尺度不变分离窗，span 由引擎级联决定、生成器不可知）：
+#   · 下界：d > span·(0.0015/dn + 1.5/1024)（slope=0 存活）。本靶（宽 ≈1.29 m）实测定锚：
+#     d=0.10 在 slope=0 仍**在场**（探针 0.834、存活率 1.000）⟹ 下界 < 0.10（旧窄靶上
+#     「d=0.12 cov 0.345」的锚点随 span 标定作废，别照抄）。再细的缝先撞 assert ⑧
+#     （带宽 < 4 px 探针放不下），进不了靶。
+#   · 带宽下限：band·s_px ≥ 4 px（assert ⑧）——在场探针取闭式带中央 50%，< 4 px 连 2 px
+#     探针都放不下。
+#   · 上界（slope=16 抹除）与「8 之下提前抹除」正是本靶要**测**的，不是选点约束。
+# 定稿缝深 [0.30, 0.24, 0.20, 0.17, 0.14]（2026-10-19 实机扫描：五条全部 slope=0 在场；
+# slope=8 出厂档下 d≤0.20 被整条抹光、d=0.24 带缘抖动——J1 因此**红**，那是本靶要守的
+# 新发现，读数表住 tools/imgqa/shadow_grain.cpp 头注「跑起来该看到什么」）。
+
+
+GRAIN_DN = 0.6                 # 墙朝光分量 N·L̂（分离窗下界 ∝ 0.0015/dn，见头注「机制」）
+GRAIN_CENTER = (0.0, 2.0, 0.0)  # 墙心（离地 2 m 纯取景考虑，场景无地面）
+GRAIN_D = 6.0                  # 机位沿 +N 距墙心（米）；span ∝ D，整套几何随它自相似
+GRAIN_FOV = 70.0               # 竖直 fov（度）；s_px = 360/(D·tan(fov/2))，密度闭式的 px 刻度
+GRAIN_CAPTURE = (1280, 720)    # 采集尺寸（imgqa 仪器写死同值；assert ⑥ 按它算取景）
+# 缝深组（米）：**分离窗里唯一没被 assert 钉死的量**——span 由引擎级联决定，生成器不可知。
+# 每个缝深一条缝、按深度**交错排在同一行**（不是每组四条横向铺开——实测横向铺到 5 m 宽
+# 会把 SceneBounds 撑大 → 级联 span 变大 → 分离窗整体右移，d=0.30 的带在 slope=0 下都被
+# PCF 糊到 cov 0.36，2026-10-19 首版加密靶实机翻车记录）。总宽必须保持 ≈ 首版 1.15 m 量级
+# 才不漂 span。选点判据与实测锚点见头注「靶子加密」；改它必须重跑 `imgqa shadow-grain`
+# 确认每条缝 slope=0 在场（画不出带的死缝会被仪器闸门抛，不许静默进判据）。
+GRAIN_GROOVES = [0.30, 0.24, 0.20, 0.17, 0.14]
+GRAIN_SEG = 0.10               # 相邻缝之间的共面墙块宽（litProbe 取其中一块的中心）
+GRAIN_SLIVER = 0.04            # 带左缘到缝左缘的受光窄条（带在缝右缘，见机关①）
+GRAIN_BACK_MARGIN = 0.05       # 背板在「缝的视线落点区间」外的覆盖裕量（米，见机关⑥）
+GRAIN_REGION_END = 0.04        # 最外缝的 cell 缘到 region 缘的裕量（米）
+GRAIN_REGION_H = 0.50          # 判据窗口高（米）
+
+
+def grain_frame() -> dict:
+    """靶的闭式几何帧（墙正交标架 + 槽/带/region 尺寸）。纯函数，assert 与生成共用。"""
+    L = _norm((-SUN[0], -SUN[1], -SUN[2]))          # 指向光源
+    Lv = L[1]
+    dn = GRAIN_DN
+    hL = math.sqrt(1.0 - Lv * Lv)                   # |L̂ 的水平分量|
+    a = dn / hL                                     # N 在太阳方位上的投影系数
+    assert a < 1.0, f"shadow_grain: ① dn={dn} 超过太阳方位上限 {hL:.3f}（墙做不出来）"
+    h = _norm((L[0], 0.0, L[2]))
+    p = (h[2], 0.0, -h[0])                          # 水平 ⊥ h
+    b = math.sqrt(max(0.0, 1.0 - a * a))
+    N = U = None
+    du = 0.0
+    for bb in (b, -b):                              # 两个方位解，取 du > 0 的（带在缝右缘）
+        N = (a * h[0] + bb * p[0], 0.0, a * h[2] + bb * p[2])
+        U = (N[2], 0.0, -N[0])                      # u = Ŷ × N
+        du = U[0] * L[0] + U[1] * L[1] + U[2] * L[2]
+        if du > 0:
+            break
+    groups = []
+    for d in GRAIN_GROOVES:                       # 每个缝深一条缝（交错排行，见常量注释）
+        band = d * du / dn                        # 槽底影带宽 s（头注「机制」闭式）
+        gapW = band + GRAIN_SLIVER                # 缝宽
+        groups.append({"depth": d, "band": band, "gapW": gapW, "cell": gapW + GRAIN_SEG})
+    totalW = sum(g["cell"] for g in groups)
+    u = -totalW / 2.0
+    for g in groups:                              # 缝的 u 区间（墙心为原点）
+        g["gapLo"], g["gapHi"] = u, u + g["gapW"]
+        g["cellLo"], g["cellHi"] = u, u + g["cell"]
+        g["bandU"] = (g["gapHi"] - g["band"], g["gapHi"])   # 带 = 缝右缘往左 s（背板坐标）
+        # 机关⑥：相机穿过缝 [gapLo,gapHi] 的视线打在**退 d** 的背板上，落点 u·(D+d)/D
+        # （比缝本身更朝外）⟹ 背板必须盖住落点区间，否则缝里看到的是黑背景（cov 恒 0 =
+        # 死缝；2026-10-19 首版加密靶「背板只盖组跨度」实机翻车记录）。
+        k = (GRAIN_D + g["depth"]) / GRAIN_D
+        hits = sorted((g["gapLo"] * k, g["gapHi"] * k))
+        g["backLo"], g["backHi"] = hits[0] - GRAIN_BACK_MARGIN, hits[1] + GRAIN_BACK_MARGIN
+        u = g["cellHi"]
+    regionW = totalW + 2.0 * GRAIN_REGION_END
+    regionH = GRAIN_REGION_H
+    climb = max(g["depth"] for g in groups) * Lv / dn   # 机关④（最深缝决定墙顶余量）
+    wallW = regionW + 0.30
+    wallH = regionH + 2.0 * (climb + 0.05)
+    s_px = (GRAIN_CAPTURE[1] / 2.0) / (GRAIN_D * math.tan(math.radians(GRAIN_FOV / 2.0)))
+    return {"L": L, "N": N, "U": U, "dn": dn, "du": du, "Lv": Lv, "groups": groups,
+            "totalW": totalW, "climb": climb,
+            "regionW": regionW, "regionH": regionH, "wallW": wallW, "wallH": wallH,
+            "pxPerMeter": s_px}
+
+
+def scene_shadow_grain() -> Scene:
+    gf = grain_frame()
+    N, U = gf["N"], gf["U"]
+    C = GRAIN_CENTER
+    groups = gf["groups"]
+    rw, rh = gf["regionW"], gf["regionH"]
+    wallW, wallH = gf["wallW"], gf["wallH"]
+
+    def wall_point(u: float, v: float) -> tuple:
+        return (C[0] + u * U[0], C[1] + v, C[2] + u * U[2])
+
+    def back_point(u: float, v: float, d: float) -> tuple:   # 背板（退 d 沿 −N）
+        return (C[0] + u * U[0] - d * N[0], C[1] + v, C[2] + u * U[2] - d * N[2])
+
+    allGaps = [(g["gapLo"], g["gapHi"]) for g in groups]
+    # 前墙块 = 全部缺口在墙上的补集。
+    edges = [-wallW / 2.0]
+    for lo, hi in allGaps:
+        edges += [lo, hi]
+    edges += [wallW / 2.0]
+    segs = [(edges[2 * i], edges[2 * i + 1]) for i in range(len(allGaps) + 1)]
+    # litProbe = 中间墙块中心（恒受光参照；离一切带缘 ≥ 3 px，assert ⑩）。
+    joints = [(groups[i]["gapHi"] + groups[i + 1]["gapLo"]) / 2.0 for i in range(len(groups) - 1)]
+    assert joints, "shadow_grain: 缝数 < 2，litProbe（墙块中心）无处可放"
+    probeU = joints[len(joints) // 2]
+
+    s = Scene(
+        name="shadow_grain",
+        purpose="影场颗粒度靶：朝光墙 + 多缝深交错缝槽（每个缝深一条竖直缝、背板各退本组 d），"
+                "槽底闭式影带；逐带存活率闭式 = 跳变/(2·rows)（imgqa shadow-grain）",
+        honesty=("前墙几何严格共面，唯一的深度结构 = 缝槽里的背板（缝深组 GRAIN_GROOVES 是"
+                 "分离窗里唯一没被 assert 钉死的量，选点判据与实测锚点见源码头注「靶子加密」；"
+                 "更细的缝画不出带，会被仪器闸门抛掉，不许静默进判据。总宽保持 ≈ 首版量级是"
+                 "刻意的——横向铺开会撑大 SceneBounds、推高级联 span、把分离窗整体右移，"
+                 "2026-10-19 实机翻车记录写在常量注释里））。级联 texel 尺度随相机自适应"
+                 "漂移，本靶的机位/尺寸/帧号都是量具的组成部分（imgqa 仪器写死同值）；"
+                 "换机位 = 换靶，闭式刻度与全部 assert 都要重推。带在缝的**右缘**"
+                 "（du > 0 的方位分支，构建期钉），左右不对称是设计不是漂移。"),
+        cameras={"grain": {"position": [_f32(C[i] + GRAIN_D * N[i]) for i in range(3)],
+                           "target": list(C), "fovDegrees": GRAIN_FOV}},
+        extra={
+            "defaultLight": {"direction": list(SUN), "intensity": 12.0,
+                             "source": "configs/scene.lua light 段（= ProfileOpts::lightDir 同值）"},
+            "wallDn": GRAIN_DN,
+            "grooves": [{"depthM": _f32(g["depth"]), "bandM": _f32(g["band"]),
+                         "gapWM": _f32(g["gapW"]), "cellM": _f32(g["cell"]),
+                         "segM": GRAIN_SEG, "sliverM": GRAIN_SLIVER,
+                         "backUM": [_f32(g["backLo"]), _f32(g["backHi"])]} for g in groups],
+            "closedForm": {
+                "bandU": [[_f32(x) for x in g["bandU"]] for g in groups],
+                "pxPerMeter": gf["pxPerMeter"],
+                "densityRegion": f"{len(groups)} 缝 × 2 缘 ⟹ region 每行 {2 * len(groups)} "
+                                 "次二值跳变 ⟹ density = 2·count/(cols−1)",
+                "survival": "带存活率 = 闭式带±裕量内的水平跳变数 / (2·rows)"
+                            "（带在场闭式 = 1、被抹 = 0；分母是闭式刻度，不抄实测）。"
+                            "存活窗/探针窗的列区间由仪器从 bands 角点投影导出（±3 px 裕量"
+                            "与中央 50%），生成器 assert ⑪ 钉住「邻带存活窗互不重叠」",
+                "separationWindow": "span·(0.0015/dn + 1.5/1024, 0.0015/dn + 17.5/1024)"
+                                    "（slope=0 存活下界 / slope=16 抹除上界，头注「机制」）",
+            },
+            # ── 测量接口（imgqa shadow-grain 读本块，**不在 C++ 里重抄几何** = 不造第二真相）──
+            "measure": {
+                "regionCorners": [[_f32(x) for x in wall_point(u, v)] for u, v in
+                                  ((-rw / 2, -rh / 2), (-rw / 2, rh / 2),
+                                   (rw / 2, rh / 2), (rw / 2, -rh / 2))],
+                # 每个缝深组 = 本组各带（bands = 背板深度上的两个世界角点，v 下缘 / v 上缘；
+                # 仪器投影成列区间，存活窗 = 列区间 ± 裕量、探针 = 中央 50%）。
+                "groups": [{
+                    "depthM": _f32(g["depth"]),
+                    "bands": [[[_f32(x) for x in back_point(g["bandU"][0], -rh / 2.0, g["depth"])],
+                               [_f32(x) for x in back_point(g["bandU"][1], rh / 2.0, g["depth"])]]],
+                } for g in groups],
+                "litProbe": [_f32(x) for x in wall_point(probeU, 0.0)],
+                "captureSize": list(GRAIN_CAPTURE),
+            },
+        },
+    )
+    P = s.pieces.append
+
+    def piece(quads, name, intent, color):
+        """多 quad 一 piece（前墙 = 全部墙块合并：调色板只有 10 色，墙块各自成 piece
+        会撞「piece 两两可分」校验；颜色不进判据——区域来自几何、cov 同像素约掉 albedo）。"""
+        pos, idx = [], []
+        for q in quads:
+            b = len(pos)
+            pos += [tuple(_f32(x) for x in p) for p in q]
+            idx += [b, b + 1, b + 2, b, b + 2, b + 3]
+        P(Piece(name, Geom(pos, [tuple(_f32(x) for x in N) for _ in pos], idx),
+                PAL[color], roughness=0.9, radial=False, closed=False, intent=intent))
+
+    # 前墙（绕序：p(u0,v0)→p(u1,v0)→p(u1,v1)→p(u0,v1)，cross ∥ +N，assert ⑨ 兜底）。
+    piece([[wall_point(u0, -wallH / 2.0), wall_point(u1, -wallH / 2.0),
+            wall_point(u1, wallH / 2.0), wall_point(u0, wallH / 2.0)] for u0, u1 in segs],
+          "wall_front",
+          f"前墙（共面，朝光 dn={GRAIN_DN}，{len(segs)} 块合并一 piece）：恒受光 = 密度地板"
+          f"与受光参照；缺口 = {len(allGaps)} 条缝（缝深 {GRAIN_GROOVES} 交错排）",
+          color="red")
+    # 各缝背板：盖住「穿过本缝的视线在背板上的落点区间」± 裕量（机关⑥），且互不重叠
+    # （assert ⑤）——只在**本缝**里可见。
+    back_colors = ["yellow", "orange", "chartreuse", "green", "cyan", "azure", "magenta",
+                   "purple"]
+    for gi, g in enumerate(groups):
+        piece([[back_point(g["backLo"], -(rh + 0.10) / 2.0, g["depth"]),
+                back_point(g["backHi"], -(rh + 0.10) / 2.0, g["depth"]),
+                back_point(g["backHi"], (rh + 0.10) / 2.0, g["depth"]),
+                back_point(g["backLo"], (rh + 0.10) / 2.0, g["depth"])]],
+              f"groove_back_{gi}",
+              f"缝深 {g['depth']:.2f} m 的背板（退 d 沿 −N，盖住视线落点区间，机关⑥）："
+              "slope=0 档带被前墙右缘遮光、大 slope 档被斜率偏置抹除——出厂档存活率判据"
+              "就发生在它的像素上",
+              color=back_colors[gi % len(back_colors)])
+
+    # ---- 构建期断言（口头承诺不算数；编号对应源码头注「几何机关」+「靶子加密」）----
+    s_px = gf["pxPerMeter"]
+    assert gf["du"] > 0.05, f"shadow_grain: ② du={gf['du']:.3f} ≤ 0.05，带侧分支失稳"
+    assert GRAIN_SLIVER >= 0.02 and GRAIN_SEG * s_px >= 6.0, \
+        "shadow_grain: ③ sliver < 2 cm 或墙块 < 6 px（带贴缝左缘 / litProbe 邻域跨线）"
+    assert wallH / 2.0 >= rh / 2.0 + gf["climb"] + 0.04, \
+        f"shadow_grain: ④ 墙顶余量不足（climb={gf['climb']:.3f} m，region 上部的带会被" \
+        "入射光从墙顶放走 = 两档同受光）"
+    assert all(abs(g["backLo"]) < wallW / 2.0 and abs(g["backHi"]) < wallW / 2.0
+               for g in groups), \
+        "shadow_grain: ⑤ 背板没被前墙包住（墙缘外会露背板）"
+    assert all(groups[i]["backHi"] < groups[i + 1]["backLo"] for i in range(len(groups) - 1)), \
+        "shadow_grain: ⑤′ 相邻背板重叠（不同深度的板在同一视线区间 = 谁可见变成深度竞争的" \
+        "二义，闭式带不再成立——缝太密或背板裕量太大）"
+    assert rw / 2.0 * s_px <= GRAIN_CAPTURE[0] / 2 - 16 \
+        and rh / 2.0 * s_px <= GRAIN_CAPTURE[1] / 2 - 16, \
+        f"shadow_grain: ⑥ region 投出画外（px/m={s_px:.1f}，裕量 16 px）"
+    assert rw * s_px >= 48.0 and rh * s_px >= 40.0, \
+        "shadow_grain: ⑦ 判据窗口 < 48×40 px（分母太小，闭式刻度失稳）"
+    assert all(g["band"] * s_px >= 4.0 for g in groups), \
+        "shadow_grain: ⑧ 某缝带宽 < 4 px（PCF ±0.5 texel 抹平带不可见，且中央 50% 探针放不下" \
+        " 2 px——该缝深超出本靶可测范围，删组或换机位重推，不许留死缝）"
+    cross_un = (U[1] * 0.0 - U[2] * 1.0, U[2] * 0.0 - U[0] * 0.0, U[0] * 1.0 - U[1] * 0.0)
+    assert sum(cross_un[i] * N[i] for i in range(3)) > 0.99, \
+        "shadow_grain: ⑨ 绕序/法线核对失败（cross(U,Ŷ) ≠ N）"
+    bandEdges = [e for g in groups for e in g["bandU"]]
+    assert min(abs(probeU - e) for e in bandEdges) * 0.95 * s_px >= 3.0, \
+        "shadow_grain: ⑩ litProbe（墙块中心）离某带缘 < 3 px（含 5% 背板透视收缩），探针邻域会跨线"
+    assert (GRAIN_SEG + GRAIN_SLIVER) * 0.9 * s_px >= 10.0, \
+        "shadow_grain: ⑪ 邻带存活窗重叠（带缘到邻带缘 < 10 px，±3 px 存活窗会互吃跳变）"
+    assert GRAIN_BACK_MARGIN >= 0.03, \
+        "shadow_grain: ⑫ 背板覆盖裕量 < 3 cm（机关⑥ 落点区间的容差没了）"
+    return s
+
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
@@ -1906,6 +2196,7 @@ SCENES = {
     "ssr_rig": scene_ssr_rig,
     "ssr_rig_empty": scene_ssr_rig_empty,
     "blend_sort": scene_blend_sort,
+    "shadow_grain": scene_shadow_grain,
 }
 
 

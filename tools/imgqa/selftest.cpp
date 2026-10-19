@@ -257,8 +257,10 @@ void testJudgmentFamilies(Checker& c)
     // `probe-gbuffer-metalrough`，2026-10-18 图变体收敛刀①，docs/archive/图变体收敛_plan.md §6.1-1）。
     // 65 → 69：债-132 结案的 `blend-sort` 四条（背景区钉显示链 / 两个 α 各钉一次非预乘 over /
     // 重叠区钉合成次序），见 judgments_table_blend.cpp。
+    // 69 → 71 → 72：`shadow-grain` 首版两条（痤疮上界 + 锚点，69→71）→ 2026-10-19 判决
+    // 方向纠正：两条退役、三条新立（J1 存活率 / J2 接线锚点 / J3 出厂档对账），见 judgments_table_grain.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 69（族拆分最容易掉条目）", all.size() == 69, std::to_string(all.size()));
+    c.chk("判据总数 == 72（族拆分最容易掉条目）", all.size() == 72, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -539,6 +541,7 @@ int cmdSelftest()
     testShadowKernelScale(c);
     testShadowKernelScaleSampling(c);
     testShadowKernelScaleInstrument(c);
+    testShadowGrain(c);
     testDiffStructMetric(c);
     testDiffStructDomainGuard(c);
     testDiffBlockAnchors(c);

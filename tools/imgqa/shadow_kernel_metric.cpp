@@ -63,9 +63,9 @@ Projector makeProjector(const Engine::Camera& cam, int cols, int rows)
     return p;
 }
 
-bool projectTo(const Projector& p, double x, double z, double& px, double& py)
+bool projectPoint3(const Projector& p, const std::array<double, 3>& w, double& px, double& py)
 {
-    const std::array<double, 3> d{x - p.pos[0], -p.pos[1], z - p.pos[2]};  // 地面 y = 0
+    const std::array<double, 3> d{w[0] - p.pos[0], w[1] - p.pos[1], w[2] - p.pos[2]};
     const double zc = dot3(d, p.f);
     if (zc <= 1e-3)
         return false;  // 相机背后
@@ -76,6 +76,11 @@ bool projectTo(const Projector& p, double x, double z, double& px, double& py)
     px = (xd * 0.5 + 0.5) * p.cols;
     py = (0.5 - yd * 0.5) * p.rows;
     return true;
+}
+
+bool projectTo(const Projector& p, double x, double z, double& px, double& py)
+{
+    return projectPoint3(p, {x, 0.0, z}, px, py);  // 地面 y = 0（算式逐字节走同一份）
 }
 
 bool sampleLuma(const cv::Mat& luma, const Projector& p, double x, double z, double& out)

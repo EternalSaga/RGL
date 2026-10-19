@@ -1127,6 +1127,28 @@ struct ShadowScanSample {
 /// 缺靶（.glb / .manifest.json）= 抛，**不 SKIP**。
 int cmdShadowKernelScale();
 
+// ═══════════════════════════════════════════ 影场颗粒度（shadow-grain）
+//
+// 缺陷本体 = 门板上的**自阴影痤疮**（读图定案 = 竖直拼缝槽的槽底影带族）：噪声钉死在
+// 世界表面 ⟹ 世界不变性判据（`imgqa swim`）对它结构性失明（swim 测的性质是对的、该绿；
+// 本条测的是它量程外的另一问——影场在世界空间上的高频程度）。判据本体与全部口径理由 =
+// `tools/imgqa/shadow_grain.cpp` 头注释；cov/density/逐带跳变/逐带存活率四条算子住
+// `shadow_grain_metric.{h,cpp}`，被 `just imgqa selftest` 用闭式直接测（判据 4，不启引擎）。
+
+/**
+ * 槽影带的 slope 偏置响应（靶 = 程序化 `shadow_grain`·多缝深组，六臂
+ * none/dflt/x8/deliv/csm0/csm32）。**无 flag**：靶 / 臂 / 帧号 / 阈值都是量具的组成部分，
+ * 能调 = 能调绿。三条判决线（2026-10-19 判决方向纠正后）：
+ * `shadow-grain-band-survival`（**J1**：出厂默认档逐带真影带存活率 ≥ 50%，取最严一条——
+ * 守「出厂档不许吃掉真实影带」，首版「出厂态密度必须低」方向已被实验证伪退役）·
+ * `shadow-grain-wiring-anchor`（**J2 接线阳性锚点**：0 臂与 32 臂密度显著不同且高臂趋 0，
+ * 它红时 J1 的绿一律不作数）· `shadow-grain-factory-identity`（**J3 出厂档对账**：
+ * 「不写键」臂 ≡ 显式 8.0 臂 ≡ 交付配置臂逐位——J1 读数成为陈述的 precondition）。
+ * 另有逐条缝的在场闸门（跑在 csm0 臂，画不出带的死缝 = 抛，不是 Verdict）。
+ * 缺靶（.glb / .manifest.json）= 抛，**不 SKIP**。
+ */
+int cmdShadowGrain();
+
 // ═══════════════════════════════════════════ 透明合成次序（blend-sort，债-132 结案）
 //
 // 缺陷本体不是某一处写错的代码，而是**透明没有深度排序**这件事本身：正确性全靠

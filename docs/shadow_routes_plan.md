@@ -74,9 +74,10 @@ error 并列出四合法值，`cullReplayName` 同口径）/ `ShadowTuning` / `S
    `izb = { on, grid, dump_frame }`——N6a 要求把旧 `izb_grid` / `izb_dump_frame` 一起搬进
    shadow.lua，`ShadowConfig` 因此比 §2 草案多 `izbGrid`（clamp [64,2048]）与
    `izbDumpFrame`（负数=0）两字段。其他类型（如字符串）= 报错不静默。
-2. **`csm = { }` 预留空块进回显表**（恒 `csm=reserved`，差集语义下永不进 info 行）——
+2. **`csm = { }` 预留空块进回显表**（当时恒 `csm=reserved`，差集语义下永不进 info 行）——
    未知键 lint 的已知集判据 = 回显表键名前缀（diagnostics 同判据），预留块不挂号就会被
-   喊成未知键。
+   喊成未知键。⚠ **后被推翻（2026-10-18）**：`csm` 块填入第一枚键 `slope_bias`（硬件斜率深度
+   偏置，出厂 16），占位行随之删除、回显成员 = `csm.slope_bias`，该块从此被下钻采集子键。
 3. **旧键「仍被读」但「出现即炸」**：`applyScalarGates` 的 `readBool("shadow_pass")` 等
    读取行**保留**（键轨迹/回显覆盖率护栏的 39 键集合不变），fail-fast 在读取之前拦——
    报错路径永远先于取值路径，不存在「静默映射」的缝隙。

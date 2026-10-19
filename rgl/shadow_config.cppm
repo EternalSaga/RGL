@@ -68,6 +68,74 @@ export struct ShadowTuning {
 };
 
 /**
+ * CSM 档调参块（configs/shadow.lua 的 `csm`）。
+ *
+ * 批 N6a 的定案形状里它是**预留空块**（当时无调参键，回显恒 "reserved"、gate_lint 只以
+ * nullptr 行挂号）；本批填入第一枚键，形状与 pcss / evssm 两块同构（回显表里以 `csm.` 点分
+ * 前缀声明 ⟹ 未知子键护栏自动对它下钻，写错键名不再"不报错也不生效"）。
+ */
+export struct ShadowCsmTuning {
+	/**
+	 * 硬件**斜率深度偏置**（slope-scaled depth bias；`csm.slope_bias`；clamp [0, 64] 防手滑，
+	 * 口径与 pcss 两半径的 clamp 同形）。
+	 *
+	 * **单位** = Vulkan 的 `depthBiasSlopeFactor`（`vkCmdSetDepthBias` 第三形参）：**无量纲的
+	 * 斜率系数**，既不是深度值也不是纹素数。光栅阶段给每个片元的深度加 `offset = m · dZ/dpixel`
+	 * （m = 本值，dZ/dpixel = 该片元所在表面在窗口坐标系下的深度变化率），深度测试与写入用的
+	 * 都是加完之后的值——所以它是"按表面陡峭程度自动加容差"，而不是一个固定的偏移量。
+	 *
+	 * **消费点**：`StateKit` 构造期读它写进 shadow pass 的 `RenderState::depthBiasSlope`
+	 * （rgl/state_kit.cppm），只作用在阴影深度 pass（其余 pass 的 slope 恒 0）。
+	 *
+	 * ## 本键为什么存在（接线史，别再走一遍）
+	 *
+	 * 批 11.2 就把 `RenderState::depthBiasSlope` 与 `shadowState` 的基建建好了，注释写着
+	 * 「**尚未调**」——**真相是它从来没接通**：`applyDynamicState` 曾写
+	 * `setDepthBias(scale, slope, 0.0f)`，而 `vkCmdSetDepthBias` 的形参序是
+	 * (constant, **clamp**, slope)，clamp 在 slope 前面 ⟹ slope 字段被送进 clamp 位、真斜率恒 0。
+	 * 填非零值时 VVL 立刻报 `depthBiasClamp is 1.0 (not 0.0f), but the depthBiasClamp feature
+	 * was not enabled`——**一调就红，而红的是接线不是参数**，所以它一直停在"尚未调"。
+	 * 接线已修（`rgl/shader.cppm`，全 pass 默认 0 ⟹ 修复本身逐位不变）。
+	 *
+	 * ## 默认 0（关闭）的定档依据（2026-10-19 实测；口径与扫描表见 `imgqa shadow-grain`）
+	 *
+	 * 定档必须**同时**看"稳定性收益"与"真实遮挡存活率"两列。只看左边会一路调到 16 去
+	 * （本仓第一天就差点这么定，主 agent 也错过一次）；而右边那列**必须按缝深逐档扫**，
+	 * 只看一个缝深会得出"8 是零损失最右端"的错误结论（那是 d=0.30 的局部事实）：
+	 *
+	 * | 本值 | 两机位覆盖度差（越小越稳） | 全图阴影面积 | 靶上真实槽底影带存活率<br>（d=0.30/0.24/0.20/0.17/0.14 m） |
+	 * |---|---|---|---|
+	 * | **0** | 0.069 | 29.6% | **1.00 / 1.00 / 1.00 / 1.00 / 1.00** |
+	 * | 4 | 0.060 | 28.6% | 1.00 / 1.00 / 1.00 / 1.00 / **0.00** |
+	 * | 6 | — | — | 1.00 / 1.00 / 1.23 / 0.00 / 0.00 |
+	 * | 8 | 0.057 | 28.0% | 1.00 / 1.40 / **0.00 / 0.00 / 0.00** |
+	 * | ≥12 | 0.017 | 26.8% | 0.00 / 0.00 / 0.00 / 0.00 / 0.00 |
+	 *
+	 * ⟹ **本键的收益区间与它的真影子损失区间重合**：任何非零值都会把某个量级的真实遮挡带
+	 * 整条抹光（存活率 0.00 = 抹光，不是变淡），而 bistro 上的稳定性收益只有 17%（0→8）。
+	 * 拿 17% 的稳定性换掉一档真实遮挡，不划算 ⟹ 取 0。
+	 *
+	 * 🔴 **护栏**：`imgqa shadow-grain` 的 J1 就是守这张表的——把本值调大（哪怕调到 8）
+	 *   它会**立刻红**并点名被抹光的那条缝。改本值前先跑它。它的灵魂变异（默认 8→16 → J1 红）
+	 *   已在交付时实跑验红，所以这条护栏不是装饰。
+	 *
+	 * **与常数 depth bias 的分工**：常数项（`RenderState::depthBiasScale`，全仓无人写、恒 0）
+	 * 是**整面统一**加一段容差，写大把陡峭面与缓面一起吃掉；斜率项只按 dZ/dpixel 加容差。
+	 * 实测常数项推到能压住门板（0.02）时，全图阴影面积掉到 23.3%（−21%），比本键同收益档
+	 * 更贵 ⟹ 两个都不是这个问题的解。
+	 *
+	 * **0 = 关闭**（消费点随之给 `depthBiasEnable = false`）⟹ 与本键加入前的历史**逐位相同**，
+	 * 这条"门没开就不许夹带任何改动"的取数口径见 skill `rgl-verify` 的逐位回归方法学。
+	 *
+	 * 🔴 **别把本键当成"影子随相机漂"的解**：用户报障的那块门面，其阴影经分辨率 ×4 探针
+	 *   （图集 2048→8192，纹素细 4 倍）验证**不随精度消失**（覆盖度 0.071→0.087，不降反升）
+	 *   ⟹ 它是真实遮挡，不是量化伪影；它随相机变是**算错**。级联边界只解释约 30%
+	 *   （单级联实验：0.069 → 0.048），**剩余根因未定 → 债-139**。
+	 */
+	double slopeBias = 0.0;
+};
+
+/**
  * 阴影配置（configs/shadow.lua → ShadowConfig）。**代码默认 = 交付形态**
  * （mode=csm、**izb=false**）。izbGrid / izbDumpFrame 是 izb 子块的诊断两键（语义沿用旧
  * izb_grid / izb_dump_frame）。
@@ -96,6 +164,7 @@ export struct ShadowConfig {
 	                                      ///< **默认 false 的理由见上方整段**，别当笔误改回 true
 	uint32_t izbGrid = 512;              ///< 光空间 IZB 网格边长 G（izb.grid；clamp [64, 2048]）
 	uint32_t izbDumpFrame = 0;           ///< 第 N 帧起回读 head 直方图打日志（izb.dump_frame；0=关）
+	ShadowCsmTuning csm{};               ///< CSM 档调参（阴影深度 pass 的光栅阶段消费，与软影滤波档无关）
 	ShadowTuning pcss{};                 ///< PCSS 档调参（mode=pcss 时消费）
 	ShadowTuning evssm{};                ///< EVSSM 档调参（mode=evssm 时消费）
 };

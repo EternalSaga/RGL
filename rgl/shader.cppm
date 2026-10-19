@@ -449,7 +449,14 @@ export void applyDynamicState(vk::raii::CommandBuffer& cmd, const vk::Rect2D& ar
 	// vkrenderer_passrec replayIzbMaskSegment）。
 	cmd.setRasterizerDiscardEnable(state.rasterizerDiscard);
 	cmd.setDepthBiasEnable(state.depthBiasEnable);
-	cmd.setDepthBias(state.depthBiasScale, state.depthBiasSlope, 0.0f);
+	// 🔴 **形参顺序陷阱**（2026-10-18 实测）：`vkCmdSetDepthBias` 的签名是
+	// (constantFactor, **clamp**, slopeFactor)——clamp 在 slope **前面**，与直觉相反。
+	// 曾写成 `(scale, slope, 0)` ⟹ slope 字段被送进 clamp 位、真斜率恒 0 ⟹
+	// slope-scaled depth bias **在 API 层面根本接不通**（填非零值时 VVL 立刻报
+	// `depthBiasClamp is 1.0 (not 0.0f), but the depthBiasClamp feature was not enabled`，
+	// 这也解释了为什么它一直停在"尚未调"：一调就红，红的是接线不是参数）。
+	// 全 pass 的 slope/scale 默认 0 ⟹ 本行改前后逐位相同（门关红线不受影响，已实测）。
+	cmd.setDepthBias(state.depthBiasScale, 0.0f, state.depthBiasSlope);
 
 	// Depth & stencil
 	cmd.setDepthTestEnable(state.depthTest);

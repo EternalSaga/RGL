@@ -44,6 +44,9 @@ module;
  * - 把任一成员指针指错（`{"ao", &StateKit::lightState}`）→ 地址互异红（两名字同址）。
  * - 词表加名而本文件不动 → 派生的 kAllNames 自动跟上（这正是派生的目的）；
  *   词表**改名**（如 ao→ssao）→ 组 4 的逐段字面断言红。
+ * - 删掉 StateKit ctor 里 shadowState 的 depthBias* 两行（configs/shadow.lua 的
+ *   `csm.slope_bias` 的消费点）→ 组 6 的「shadow 段吃 csm.slope_bias」红；把两行写成
+ *   对所有 pass 生效 → 同一条用例末尾的 13 名反向锚点红。
  */
 #include <doctest/doctest.h>
 #include <initializer_list>  // 必须：modules 下 std::initializer_list 不从 import rlstd 带进来
@@ -57,6 +60,7 @@ import rlstd;
 import rlvk;
 import state_kit;
 import shader;  // RenderState
+import shadow_config;      // setShadowConfig / ShadowConfig（消费点接线的输入面）
 import pass_vocabulary;  // kAllPassStates（状态名词表单一真相源；本文件的名单由它派生）
 
 namespace RGL {
@@ -246,6 +250,43 @@ TEST_CASE("shadow 段：depth-only，LESS 写光视最近深度 + cull=None 双�
     // 源码注释说「depth-only（无色附件）」——所以 colorWriteMask 的取值无关紧要
     //（该 pass 没有颜色附件可写），**不是**必须清零。别把它当契约。
     CHECK(s.colorBlend == false);
+}
+
+TEST_CASE("shadow 段吃 csm.slope_bias：出厂 16 开 enable、0 连 enable 一起关（消费点接线）") {
+    // 判据来源 = 配置契约（出厂默认 16 → ShadowCsmTuning::slopeBias 注释的实测读数）+
+    // 「0 = 关闭」这条键语义本身。为什么必须有它：渲染期唯一能证明"消费点接上了"的手段是
+    // 截图对拍（贵、要设备），而"配置解析对了但没人读"恰好是本项目最怕的失效形态
+    //（配置写了、什么都没发生）。本用例把那条贵判据的**最小替身**放进 just test。
+    // 变异红线：① 删掉 StateKit ctor 里 shadowState 的 depthBias* 两行 → 前三条断言全红
+    //（enable 恒 false、slope 恒 0）；② `depthBiasEnable = (slope > 0)` 改成恒 true → 0 档
+    // 那条红（门关红线从此关不拢）；③ 值错投进 depthBiasScale（rgl/shader.cppm 注释记的那个
+    // 形参顺序坑的同款错位）→ slope==16 与 scale==0 两条红；④ 消费点改读 pcss/evssm 块 →
+    // 两档断言全红；⑤ 把两行写进**所有** pass（而不是 shadowState）→ 末尾 13 名反向锚点红。
+    // ⚠ 单例是进程级的：本用例**只用 CHECK**（REQUIRE 失败会跳过末尾的还原，把脏值留给后续用例）。
+    const ShadowConfig saved = shadowConfig();
+    ShadowConfig c;
+    c.csm.slopeBias = 16.0;  // 刻意取 16：既 ≠ 0（关闭档）也 ≠ 出厂 8 ⟹ 断到"真读了配置"而非"读到自己默认"
+    setShadowConfig(c);
+    const StateKit kit{true};  // 状态在 ctor 期一次性写入 ⟹ 必须先 set 再构造
+    CHECK(kit.stateFor("shadow").depthBiasEnable == true);
+    CHECK(kit.stateFor("shadow").depthBiasSlope == 16.0f);
+    CHECK(kit.stateFor("shadow").depthBiasScale == 0.0f);  // 常数项仍是 0（两者分工见键注释）
+    {  // 反向：0 = 关闭档 ⟹ enable 跟着关（"slope=0 却 enable=true" = 白设一次状态）
+        c.csm.slopeBias = 0.0;
+        setShadowConfig(c);
+        const StateKit kit0{true};
+        CHECK(kit0.stateFor("shadow").depthBiasEnable == false);
+        CHECK(kit0.stateFor("shadow").depthBiasSlope == 0.0f);
+    }
+    // 其余 13 段一律不受影响（斜率偏置只给阴影深度 pass）
+    for (const auto n : kAllNames) {
+        if (n == std::string_view{"shadow"})
+            continue;
+        INFO("state = " << n);
+        CHECK(kit.stateFor(n).depthBiasEnable == false);
+        CHECK(kit.stateFor(n).depthBiasSlope == 0.0f);
+    }
+    setShadowConfig(saved);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

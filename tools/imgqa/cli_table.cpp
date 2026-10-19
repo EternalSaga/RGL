@@ -518,6 +518,10 @@ std::vector<SubcommandSpec> allSpecs()
     // `blend-sort` 排在 shadow/probe 那一段之后（施工单要求它紧跟 `shadow-kernel-scale`；
     // 主表撞护栏后正文搬进 `cli_table_blend.cpp`，这里就是它在 -h 里的位置）。
     append(blendSortSpecs());
+    // `shadow-grain` 排在 blend-sort 之后（正文住 `cli_table_grain.cpp`）。刻意**不**插进
+    // shadow-kernel-scale 与 blend-sort 之间——那会让上一条注释的位置声明失效；-h 顺序
+    // 只是打印序，同族相邻的好处在下一条 append 注释里已让位于既有声明的字面真。
+    append(shadowGrainSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

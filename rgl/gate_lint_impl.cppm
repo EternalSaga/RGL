@@ -83,12 +83,15 @@ constexpr bool deviated(const Ctx& c, const T RuntimeConfig::* field) {
 }
 
 /**
- * 调参块偏离默认判定（N6b 阴影侧）。`ShadowTuning` 没有 operator!= ⟹ 逐字段比；
+ * 调参块偏离默认判定（N6b 阴影侧）。`ShadowTuning` / `ShadowCsmTuning` 没有 operator!= ⟹ 逐字段比；
  * 两个成员指针分开传（`&ShadowConfig::pcss` + `&ShadowTuning::sunDegrees`）而不是
  * 传"字段路径"抽象——后者要么引模板参数包要么引 lambda，都不比这行更好读。
+ * 块类型与字段类型都作模板参数（同一份判据吃 ShadowTuning/double 与 ShadowCsmTuning/double，
+ * 再写一个重载就是第三份判据本体）。
  */
-constexpr bool deviated(const Ctx& c, const ShadowTuning ShadowConfig::* block,
-	const double ShadowTuning::* field) {
+template <typename Block, typename Field>
+constexpr bool deviated(const Ctx& c, const Block ShadowConfig::* block,
+	const Field Block::* field) {
 	return c.shadow.*block.*field != c.shadowDefaults.*block.*field;
 }
 
@@ -238,7 +241,9 @@ const GateRule kGateRules[]{
 		"没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里"
 		"**任何 mode 下都不生效**。要调核宽请写进 evssm 块",
 		[](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::minFootprintTexels); }},
-	{"csm", GateSeverity::inertNote, "", nullptr},  // 预留空块（CSM 档暂无调参键）
+	// csm.slope_bias 的「宿主不成立」塌进 kGateBlocks 的 csm 块（债-129 拍板 D 的块级 owner
+	// 声明形态，与 pcss.* / evssm.* 同构）；批 N6a 时代这里是一行 `{"csm", …, nullptr}` 给
+	// 预留空块挂号，随该块填入第一枚键一起删除。
 	{"mode", GateSeverity::inertNote, "", nullptr},  // 本身是软影滤波轴总开关
 	// 探针子键（picking_probe.x/y、ui_click_probe.x/y、camera_probe.key/holdFrames）的
 	// 「frame=0（宿主）⟹ 子键是死值」塌进 kGateBlocks 的三个探针块（宿主 = 各自 frame 键）。
@@ -298,6 +303,21 @@ const GateRule kGateRules[]{
 };
 
 // ———— 块内键表（kGateBlocks 的 keys 指这里；独立出来是 std::span 不吃花括号列表的寿命要求）————
+
+/**
+ * csm 块（本批第一枚键）。逐键消息自带「宿主为什么是 `mode != none` 而不是 `mode == csm`」：
+ * 斜率偏置作用在**阴影深度 pass 的光栅阶段**（StateKit 的 shadowState），而 pcss / evssm 两档
+ * 同样画 CSM 图集、走同一条 shadowState ⟹ 把它申报进「只有 csm 档才生效」门下是**假申报**
+ * （比没申报更坏：会让 `mode = "pcss"` × 本键偏离 这个合法组合被判成死值，同 meshlet.mode
+ * 的 overlay 档那条教训）。
+ */
+const BlockKey kCsmKeys[]{
+	{"csm.slope_bias", [](const Ctx& c) { return deviated(c, &ShadowConfig::csm, &ShadowCsmTuning::slopeBias); },
+		"slope_bias 作用在**阴影深度 pass 的光栅阶段**（StateKit 写进 shadowState.depthBiasSlope）："
+		"mode = \"none\" ⟹ shadowFormPlan 的 drawAtlas = false，那个 pass 整个不存在 ⟹ 偏置没有"
+		"作用对象。⚠ 宿主**不是** `mode == \"csm\"`：pcss / evssm 两档同样画图集、同一条 shadowState"
+		"（斜率偏置与软影滤波档无关）"},
+};
 
 const BlockKey kPcssKeys[]{
 	{"pcss.sun_degrees", [](const Ctx& c) { return deviated(c, &ShadowConfig::pcss, &ShadowTuning::sunDegrees); }},
@@ -373,10 +393,15 @@ const BlockKey kMeshletKeys[]{
  * 块级宿主声明表（债-129 第二刀 D）。发射 = 对 `present && !ownerActive` 的每枚键出一条
  * finding（门名 = 键名、级别 = 块级、消息 = 键级覆盖优先缺省落块级）。与独立行的分工见 GateBlock 注释：
  * 块只报「宿主不成立」，额外根因在 kGateRules 的残留行里（owner 项已删，不双报）。
- * 宿主不只有布尔：pcss / evssm 的宿主是**选张器** `mode == X`（ownerActive 是 lambda，
- * 这正是它不收 bool 成员指针的原因）。
+ * 宿主不只有布尔：pcss / evssm 的宿主是**选张器** `mode == X`、csm 的宿主是**图集画不画**
+ * `mode != none`（ownerActive 是 lambda，这正是它不收 bool 成员指针的原因；两枚宿主不同形 =
+ * 「块前缀 ≠ 宿主」的活样本，逐块判据见各自的 keys 表注释）。
  */
 const GateBlock kGateBlocks[]{
+	{"csm.", "mode", [](const Ctx& c) { return c.shadow.mode != ShadowMode::none; },
+		GateSeverity::inertNote,
+		"mode = \"none\"：不画阴影深度 pass，本键没有作用对象（宿主判据与逐键归因见 kCsmKeys）",
+		std::span{kCsmKeys}},
 	{"pcss.", "mode", [](const Ctx& c) { return c.shadow.mode == ShadowMode::pcss; },
 		GateSeverity::inertNote,
 		"mode != \"pcss\"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）",
