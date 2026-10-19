@@ -1,6 +1,6 @@
 # 渲染能力观测单源化计划
 
-> **状态：批 1、批 2 已落地**（2026-10-19 用户拍板四条，结论见 §7；批 3 错误面收口与批 4 探针未动，批 4 另有三条待定）。批 2 落地时新增一条拍板：**FSR 判据的出口 = `/state` 增 `fsr` 兄弟段**——FSR 是图外 compute，`capabilities` 段按 §3.1 只装编译图事实，塞不进去（「velocity 附件在图」推不出「FSR context 构造了」，设备轴 shader16 降级档就是反例）。§3.5 那句「RT / FSR / TAA / render-scale 判据改成读 `/state.capabilities`」按此执行：RT / TAA / render-scale 读 `capabilities` + `render` 段，FSR 四条读 `fsr` 段（申报侧 gateOpen/temporalConfig × 生效侧 usable/temporalEffective/尺寸/jitter）。
+> **状态：批 1、批 2、批 3、批 4 已落地**（2026-10-19 用户拍板四条，结论见 §7；批 4 的三条待定也已在落地时裁决，见 §7 末与「批 4 落地记录」）。批 2 落地时新增一条拍板：**FSR 判据的出口 = `/state` 增 `fsr` 兄弟段**——FSR 是图外 compute，`capabilities` 段按 §3.1 只装编译图事实，塞不进去（「velocity 附件在图」推不出「FSR context 构造了」，设备轴 shader16 降级档就是反例）。§3.5 那句「RT / FSR / TAA / render-scale 判据改成读 `/state.capabilities`」按此执行：RT / TAA / render-scale 读 `capabilities` + `render` 段，FSR 四条读 `fsr` 段（申报侧 gateOpen/temporalConfig × 生效侧 usable/temporalEffective/尺寸/jitter）。
 > 一句话：把「引擎当前具备哪些渲染能力」从**被正则捞的日志文案**收成**一个运行期可查询的结构化出口**，
 > 并且**消费者同批改过去**——消费者不同批，这条计划就该像债-129 S1b 一样被砍掉。
 >
@@ -140,6 +140,8 @@ add 和 del 失败正好说明渲染图动态能力不足」。
 
 **预期读数（写在这里，跑出来不符就是新发现）**：`del` 全灭在 `not-adopted`；`add` 能过附件关、死在
 `rt-alloc` 或 `entry-wiring`。若某条真做成了，说明动态能力比注释声称的强——那也是有效读数。
+⚠ 批 4 实跑的结论：`del` 半边符合预期；`add` 半边**两条都不符**——词表最终三档（删了三档），
+`add` 死得比预期更早（gate-off），而 `rt-alloc` 实测根本不是墙。逐条 → 「批 4 落地记录」。
 
 ### 3.7 🔴 探针必须有消费者，否则它就是又一个休眠端点
 
@@ -230,8 +232,79 @@ JSON 的优势具体只有一条：**正则不中 ⟹ None ⟹ 与"该能力不�
 ⚠ 迁移会新增失败模式（smoke 从"起引擎、拿日志、判"变成要开 rpc 门、在引擎活着时连进去）。这些是
 **会响**的失败，按规则 3 一律 FAIL 出声即可；不要为了绕开它们而放宽上面三条。
 - **批 3**：错误面收口（§4 表）+ `docs/技术概念.md` §RPC 指向能力段。
-- **批 4**：`/decorate` 探针（§3.6）+ 矩阵读数落台账（§3.7）。排最后：它要靠批 1 的能力段来确认"尝试前后
+- **批 4**（已落地 2026-10-19，落地记录见下）：`/decorate` 探针（§3.6）+ 矩阵读数落台账（§3.7）。排最后：它要靠批 1 的能力段来确认"尝试前后
   图变成什么样"，否则 `done` 无从验证。
+
+### 批 4 落地记录（2026-10-19）
+
+**做了**：
+
+- `POST /decorate {feature, op}`（`op ∈ {add, del}`）登记进 `rgl/rpc_schema.lua`（response 段 +
+  共享 shape `decorateDiff`）→ `just reflect` 三份生成物同步。回包**恒 200**，内容是一次尝试的
+  结果事实：`done` / `refusedAt`（词表见下）/ `reason` / 尝试前后的能力快照差异（名单口径 =
+  编译产物，与批 1 能力段同源——`done` 由它验证，不是自证）。纯逻辑住
+  `rgl/debug_rpc_decorate.cppm`（零设备可测）；改图**不新开路径**——attempt 走
+  `Renderer::requestPassToggle` 既有复合事务（安全点执行），结果经 `PassToggleOutcome` 观测格
+  跨一帧回读（与 `/shot` 同形态的跨帧兑现）。意图被单槽覆盖 / 探针在途 = **409**（会话状态
+  冲突属协议层，不进词表——词表每一档都必须有真实生产者，事务根本没跑的情形生产者不存在）。
+- **`feature` 放宽到七个**（用户已同意）：四个 `*Decorated` + highlight / picking / shadow。
+  理由（也写进特征表注释）：只放四个的话，矩阵里全是同一堵墙（not-adopted）重复四次，
+  读数没有信息量；放宽后 highlight 的往返与其余的停点才分得开。
+- **矩阵量具 = `just decorate-matrix`**（`tools/decorate_matrix.py`，stdlib-only）：add/del ×
+  全部 feature 跑两遍，阳性对照与可复现是量具自带判据（红 = 退出码 1，读数不入账），输出追加
+  进 `qa/log/decorate_matrix.jsonl`。不进 `just gates`（要真设备，gates 的无设备性质是设计的
+  一部分），入口在 Justfile 注释里可发现。
+- **判据**：常驻 = `tests/test_debug_rpc_decorate.cppm`（分类决策顺序 / 词表覆盖双向 / 快照差异
+  四半边 / 回包条件性两半 / 特征表吃生成常量）+ rules_rpc **面 7**（C++ 档常量 ==
+  `kRefusedVocabulary` 数组 == schema note 词表 三方对账 + feature oneOf ↔ 特征表）。实机 =
+  `tools/rpc_endpoints_live.py` 第 11 段（第二实例 picking=true：阳性对照两格 + diff 与
+  `/state.capabilities` 交叉对账 + 档位归因 + 反向 400 三条）。
+
+**词表最终形态 = 三档**（计划原表五档删三档，逐条理由 = `debug_rpc_decorate.cppm` 尾部
+「删档记录」）：`not-adopted`（生产者 = 分类函数对 `isDynamic` 为假的判定，镜像 `withdrawPass`
+对不在册名字的报错）、`gate-off`（生产者 = `decorateGateOpen` 读 `diagnostics()` /
+`RuntimeConfig` 现值）、`trial-compile`（生产者 = `applyPassToggles` 事务失败回包；默认矩阵
+没有一格走到——合法意图的试编译都该过，这本身是读数；可达性由单测注入失败钉住）。
+**删**：`attachment-append-only`（append-only 是真约束但不是拒绝点——`withdrawPass` 的既有
+语义就是附件不跟撤、成功返回；探针从不试图撤附件）、`rt-alloc`（**推翻计划预期**：RT 领建不是
+墙——`ensureOffscreenAttachments` 每帧遍历当前编译图逐个 ensure，附件进图后下一帧 RT 自动建好）、
+`entry-wiring`（装配只在启动跑一次是真实现状，但探针够不到它：add 在「没有运行期申报单」那步
+就停了；这一档的事实写进 gate-off 的 reason 与台账说明，不占词表）。
+
+**矩阵读数（2026-10-19 本机实跑，配置 = 默认 runtime + picking=true；台账同读数）**：
+
+| feature  | del                    | add                          |
+|----------|------------------------|------------------------------|
+| highlight| **done=true**（撤成，diff 少一个 pass）| **done=true**（回插，diff 多回一个 pass）|
+| picking  | not-adopted            | done=true（已在场，幂等）    |
+| shadow   | not-adopted            | done=true（已在场，幂等）    |
+| taa      | not-adopted            | gate-off                     |
+| velocity | not-adopted            | gate-off                     |
+| ao_apply | not-adopted            | gate-off                     |
+| ssr      | not-adopted            | gate-off                     |
+
+与 §3.6 预期读数的分歧（照实报）：`del` 全灭在 `not-adopted` **符合预期**；`add` 没落到
+「rt-alloc 或 entry-wiring」，而是**更早一格**死在 gate-off——装饰器是 desc 改写函数、不产
+`RgPassDeclaration`，运行期连「要插什么」这张单子都不存在（只有 highlight 的
+`planHighlightDecoration` 产），所以探针连附件追加那一步都发起不了。rt-alloc 那半截预期被
+实测推翻（见上面删档理由 2）。
+
+🔴 **这条读数怎么读，比读数本身重要**：add 全灭**可能只说明没人写过运行期 add 的调用路径，
+不等于「引擎做不到」**。两者在读数上一模一样，含义差很远（排期问题 vs 架构问题）——阳性对照
+（del/add highlight 往返真成）证明运行期改图的机制本身是通的，其余 feature 缺的是启动期装饰
+到运行期申报单的交接（单子 + 管线条目 + 堆槽 + 色输入链），那是「没接线」，不是「路走不了」。
+把「没实现」读成「不可能」并据此冻结值得做的方向，这种事项目里真发生过。这句话同时刻在三处：
+量具输出（`ADD_CAVEAT`）、台账每行的 `caveat` 字段、本段。
+
+⚠ **但这条 caveat 自己也有作用域，别读宽**（主 agent 复核时补）：阳性对照证明的是**改图机制**这一半
+是通用的（申报单 → 安全点复合事务 → 试编译 → 重编译 → 逐 slot 表结转 → RT 每帧自动 ensure，
+没有一环是 highlight 独享），它**没有**证明**特征接线**那一半也走得通——highlight 是个不碰色输入
+优先级链、不接 FSR、不加管线条目与堆槽的简单 pass。所以「没接线，不是路走不了」这句话：
+对「图能不能被运行期改」是高置信，对「ssr 真接起来走不走得通」目前**只是外推**。
+要把这半也变成实测，需要的正是探针本来要量的那个东西——一个真去接线的实现。
+
+**没做，且故意不做**：不承诺把 add 做成（§3.7 划下的边界）；§7.2 的「当场立债」**没立**——
+按本计划倾向只落台账，等真有需求再拿这份读数去定价。
 
 ## 6. 检查与测试
 
@@ -259,15 +332,16 @@ JSON 的优势具体只有一条：**正则不中 ⟹ None ⟹ 与"该能力不�
    （要还原的跨 pass 补丁原值只存在于装饰之前那一刻）。
 4. **探针方向成立**：add / del 的**尝试本身**就是产品，成败是读数（用户原话见 §3.6）。
 
-**新增待拍板（批 4 开工前）**：
+**批 4 开工前三条待定的裁决（2026-10-19 落地时逐条给）**：
 
-1. **`refusedAt` 词表的粒度**：上面那五档是按"现存的拒绝点"划的。要不要更细（例如把 `entry-wiring` 再拆
-   成"RT 条目领建"与"色输入优先级链接线"两档）？粗了读数无法指导还债，细了每多一档就多一处必须有人
-   产它的契约。
-2. **探针跑出来的"能力不足"要不要当场立债**：预期 `del` 全灭。是记一条"动态装饰能力"的债并附矩阵读数，
-   还是先只落台账、等真有需求再立？（本计划倾向后者——探针的价值就是给定价提供事实，见 §3.7 末段。）
-3. **`feature` 的取值范围**：只放四个 `*Decorated` 特征，还是连 picking / shadow 这类"启动期装饰"一起放？
-   放得越宽，矩阵越大、`not-adopted` 之外的档位越早被真正触发。
+1. **`refusedAt` 词表的粒度** → 落地形态 = **三档**（`not-adopted` / `gate-off` /
+   `trial-compile`），比原表**粗**：铁律是"每一档必须有真实生产者可达"，原表五档里
+   `attachment-append-only` 不是拒绝点、`rt-alloc` 实测根本不是墙、`entry-wiring` 探针够不到
+   （逐条理由 → 批 4 落地记录 + `debug_rpc_decorate.cppm` 删档记录）。没有一档为凑表而留。
+2. **探针跑出来的"能力不足"要不要当场立债** → **不立**，按本计划倾向只落台账
+   （`qa/log/decorate_matrix.jsonl`），等真有需求再拿读数定价。
+3. **`feature` 的取值范围** → 用户同意放宽：七个（四个 `*Decorated` + highlight / picking /
+   shadow）。理由：只放四个的话矩阵全是同一堵墙重复四次。
 
 ## 8. 调研记录（便于复核）
 

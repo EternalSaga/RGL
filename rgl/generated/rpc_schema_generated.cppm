@@ -37,6 +37,7 @@ export enum class RpcRouteId {
     shotburst,
     resize,
     pass,
+    decorate,
     quit,
 };
 
@@ -141,11 +142,51 @@ export namespace rpc_field::pass {
     inline constexpr std::string_view on{"on"};
 }  // namespace rpc_field::pass
 
+/** `/decorate` 的请求字段名常量（改 schema 里的 name = 引用处编译不过）。 */
+export namespace rpc_field::decorate {
+    inline constexpr std::string_view feature{"feature"};
+    inline constexpr std::string_view op{"op"};
+}  // namespace rpc_field::decorate
+
+/** `/decorate` 的 `feature` 白名单取值常量：处理函数按它分支，吃常量而不是再抄一遍
+ *  字面量 ⟹ 改 schema 里的取值 = 那个分支编译不过（不这样就是第二份副本）。 */
+export namespace rpc_value::decorate::feature {
+    inline constexpr std::string_view highlight{"highlight"};
+    inline constexpr std::string_view picking{"picking"};
+    inline constexpr std::string_view shadow{"shadow"};
+    inline constexpr std::string_view taa{"taa"};
+    inline constexpr std::string_view velocity{"velocity"};
+    inline constexpr std::string_view ao_apply{"ao_apply"};
+    inline constexpr std::string_view ssr{"ssr"};
+}  // namespace rpc_value::decorate::feature
+
+/** `/decorate` 的 `op` 白名单取值常量：处理函数按它分支，吃常量而不是再抄一遍
+ *  字面量 ⟹ 改 schema 里的取值 = 那个分支编译不过（不这样就是第二份副本）。 */
+export namespace rpc_value::decorate::op {
+    inline constexpr std::string_view add{"add"};
+    inline constexpr std::string_view del{"del"};
+}  // namespace rpc_value::decorate::op
+
 namespace rpc_schema_detail {
 
 inline constexpr std::array<std::string_view, 2> kOneOf_camera_mode{
     std::string_view{"trackball"},
     std::string_view{"fps"},
+};
+
+inline constexpr std::array<std::string_view, 7> kOneOf_decorate_feature{
+    std::string_view{"highlight"},
+    std::string_view{"picking"},
+    std::string_view{"shadow"},
+    std::string_view{"taa"},
+    std::string_view{"velocity"},
+    std::string_view{"ao_apply"},
+    std::string_view{"ssr"},
+};
+
+inline constexpr std::array<std::string_view, 2> kOneOf_decorate_op{
+    std::string_view{"add"},
+    std::string_view{"del"},
 };
 }  // namespace rpc_schema_detail
 
@@ -208,6 +249,12 @@ inline constexpr std::array<RpcFieldDef, 3> kRequestFields_pass{
     RpcFieldDef{.name = rpc_field::pass::on, },
 };
 
+/** `/decorate` 的请求字段表（顺序 = schema 书写顺序 = 检查顺序；空表 = 一个字段都不收）。 */
+inline constexpr std::array<RpcFieldDef, 2> kRequestFields_decorate{
+    RpcFieldDef{.name = rpc_field::decorate::feature, .kind = RpcFieldKind::string, .required = true, .oneOf = rpc_schema_detail::kOneOf_decorate_feature, .error = "'feature' must be one of highlight|picking|shadow|taa|velocity|ao_apply|ssr", },
+    RpcFieldDef{.name = rpc_field::decorate::op, .kind = RpcFieldKind::string, .required = true, .oneOf = rpc_schema_detail::kOneOf_decorate_op, .error = "'op' must be \"add\" or \"del\"", },
+};
+
 /** `/quit` 的请求字段表（顺序 = schema 书写顺序 = 检查顺序；空表 = 一个字段都不收）。 */
 inline constexpr std::array<RpcFieldDef, 0> kRequestFields_quit{
 };
@@ -225,7 +272,7 @@ export struct RpcRouteDef {
 };
 
 /** 全部端点（注册顺序与 `GET /` 回包顺序 = 本表顺序 = schema 记录顺序）。 */
-export inline constexpr std::array<RpcRouteDef, 9> kRpcRoutes{
+export inline constexpr std::array<RpcRouteDef, 10> kRpcRoutes{
     RpcRouteDef{RpcRouteId::routes, RpcRouteMethod::get, "GET", "/", "路由与能力发现（frame = 装配态帧计数，纯观测）", 2000u, false, kRequestFields_routes},
     RpcRouteDef{RpcRouteId::state, RpcRouteMethod::get, "GET", "/state", "相机姿态 + 全部参数页 + 渲染/图/能力段快照（label 发现面）", 2000u, false, kRequestFields_state},
     RpcRouteDef{RpcRouteId::camera, RpcRouteMethod::post, "POST", "/camera", "写相机姿态（任意子集，缺字段不改；角度一律度）", 2000u, false, kRequestFields_camera},
@@ -234,11 +281,12 @@ export inline constexpr std::array<RpcRouteDef, 9> kRpcRoutes{
     RpcRouteDef{RpcRouteId::shotburst, RpcRouteMethod::post, "POST", "/shotburst", "连续 N 帧采集（整批交齐才应答，N 上限 1024 帧 + 逐张写盘，故给 120s）", 120000u, false, kRequestFields_shotburst},
     RpcRouteDef{RpcRouteId::resize, RpcRouteMethod::post, "POST", "/resize", "headless 改交换链尺寸（冒烟用；窗口模式出声拒）", 2000u, false, kRequestFields_resize},
     RpcRouteDef{RpcRouteId::pass, RpcRouteMethod::post, "POST", "/pass", "pass 级动态开关（复合事务的安全点入口；toggle_frames = 逐帧翻转）", 2000u, true, kRequestFields_pass},
+    RpcRouteDef{RpcRouteId::decorate, RpcRouteMethod::post, "POST", "/decorate", "动态能力探针（能力观测批 4）：尝试 add/del 一个装饰，回包恒 200 = 一次尝试的结果事实", 2000u, false, kRequestFields_decorate},
     RpcRouteDef{RpcRouteId::quit, RpcRouteMethod::post, "POST", "/quit", "置 AppExit = 下个帧边界干净退出（自动化测试收尾用）", 2000u, false, kRequestFields_quit},
 };
 
 /** 端点条数（消费 = 注册循环的日志读数与单测的覆盖锚）。 */
-export inline constexpr size_t kRpcRouteCount = 9;
+export inline constexpr size_t kRpcRouteCount = 10;
 
 /**
  * 按路径查路由身份。

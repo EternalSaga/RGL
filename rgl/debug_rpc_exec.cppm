@@ -7,6 +7,7 @@ import rlstd;
 import debug_rpc;    // DebugRpcServer（返回类型 + 停机入口）
 import asset_table;  // AssetTable（材质写通道 / 参数页构建）
 import vk_renderer;  // Renderer（/shot 帧捕获宿主）
+import runtime_config;  // RuntimeConfig（/decorate 探针读配置门：aa / velocityField / ssr.enabled）
 
 namespace RGL {
 
@@ -30,6 +31,8 @@ namespace RGL {
  * @param registry 场景 registry（ConfigReloadHook ctx 挂点 + Camera/面板态）
  * @param assets 资产表（材质写通道 + 参数页构建）
  * @param renderer 渲染器（/shot 帧捕获）
+ * @param runtime runtime.lua 生效值（`/decorate` 探针的配置门读数；**只读**，门是创建期量，
+ *   热重载改了它而图没变 = 探针读到的是配置现值，这一分歧不在本批判据范围，见 exec 侧注释）
  * @param llmActive llm 截图模式在跑（true = `/shot` 拒 409——防抢帧卡死 llm 退出）
  *
  * 端点与各自的超时**不在本文件抄**（抄一次漂一次）——名单 = `rgl/rpc_schema.lua`，
@@ -41,6 +44,6 @@ namespace RGL {
  *   声明序须在 registry / assets / backEnd 之后 = 析构序其先，帧循环后可显式 stop）
  */
 export std::unique_ptr<DebugRpcServer> wireDebugRpc(entt::registry& registry,
-	AssetTable& assets, Renderer& renderer, bool llmActive);
+	AssetTable& assets, Renderer& renderer, const RuntimeConfig& runtime, bool llmActive);
 
 }  // namespace RGL

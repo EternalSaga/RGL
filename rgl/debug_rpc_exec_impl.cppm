@@ -19,6 +19,7 @@ import debug_rpc_shape;   // 批 2：请求形状校验（消费 rpc_schema.lua 
 import debug_rpc_payload;  // B2-5：应答形状闸 + 参数页↔JSON 编解码（拆出去顶的是文件行数红线）
 import debug_rpc_capabilities;  // 能力观测批 1：capabilities 段拼装 + 批 3 失败类别→状态码（纯函数，判据在 tests/）
                            //   + 批 2：fsr 段拼装（申报侧 × 生效侧八枚事实，同一纯函数模块）
+import debug_rpc_decorate;     // 能力观测批 4：/decorate 探针（词表 + 分类 + 会话 + 结算全在这一家）
 import scene_context;    // 能力观测批 2：SceneEnv 的 FSR 申报侧两枚 + 抖动生效值
 import rpc_schema_generated;  // 路由表（分发的唯一来源；真相源 = rgl/rpc_schema.lua）
 import asset_table;  // AssetTable（参数页构建）
@@ -72,13 +73,17 @@ struct RpcWiring {
 	/** @param rg 场景 registry（相机/面板态 + ConfigReloadHook 所在 ctx）
 	 *  @param assetTable 资产表（材质写通道）
 	 *  @param rendererRef 渲染器（帧捕获）
+	 *  @param runtimeRef runtime.lua 生效值（/decorate 的配置门读数，只读）
 	 *  @param llmRunning llm 截图模式在跑（/shot 拒 409） */
-	RpcWiring(entt::registry& rg, AssetTable& assetTable, Renderer& rendererRef, bool llmRunning)
-		: registry(rg), assets(assetTable), renderer(rendererRef), llmActive(llmRunning) {}
+	RpcWiring(entt::registry& rg, AssetTable& assetTable, Renderer& rendererRef,
+		const RuntimeConfig& runtimeRef, bool llmRunning)
+		: registry(rg), assets(assetTable), renderer(rendererRef), runtime(runtimeRef),
+		  llmActive(llmRunning) {}
 
 	entt::registry& registry;
 	AssetTable& assets;
 	Renderer& renderer;
+	const RuntimeConfig& runtime;  // /decorate 探针的配置门（aa / velocityField / ssr.enabled）
 	const bool llmActive;                    // llm 截图模式在跑（/shot 会抢帧 → 拒）
 	std::optional<RpcResponder> pendingShot;  // 在途 /shot（跨帧响应句柄）
 	// ── /shotburst（批 12.6 T4）：连续 N 帧一次性采集 ──
@@ -105,6 +110,10 @@ struct RpcWiring {
 	std::string passToggleName;      ///< 翻转目标 pass 名
 	uint32_t passToggleRemaining = 0;  ///< 还要翻几帧（0 = 没在跑）
 	bool passToggleNext = false;     ///< 下一帧要置的状态（每帧取反）
+	// ── /decorate 动态能力探针（能力观测批 4）：会话状态本体在 debug_rpc_decorate ──
+	// 改图走 Renderer 既有复合事务（安全点执行），收单在帧边界、结果要下一帧才读得到；
+	// 探针**不新开一条写图路径**（申报 ≠ 发射权在运行期的形态）。
+	DecorateSession decorate;
 };
 
 /** GET /state：相机姿态 + 全部参数页（label 发现面，/param 按 label 寻址）。 */
@@ -735,6 +744,9 @@ void rpcDispatch(RpcWiring& w, const RpcRequest& request, RpcResponder responder
 		case RpcRouteId::pass:
 			reply(rpcHandlePass(w, body));
 			return;
+		case RpcRouteId::decorate:  // 应答可跨帧兑现（句柄按值交出，见函数头）
+			rpcHandleDecorate(w.renderer, w.runtime, w.frame, w.decorate, body, responder);
+			return;
 		case RpcRouteId::quit:  // body 恒可解析（上面已兜 400），本端点无参
 			reply(rpcHandleQuit(w));
 			return;
@@ -756,12 +768,12 @@ void rpcDispatch(RpcWiring& w, const RpcRequest& request, RpcResponder responder
  *    收单，否则已就绪的捕获会被新 /shot 判 409 busy）。
  */
 std::unique_ptr<DebugRpcServer> wireDebugRpc(entt::registry& registry, AssetTable& assets,
-	Renderer& renderer, bool llmActive) {
+	Renderer& renderer, const RuntimeConfig& runtime, bool llmActive) {
 	if (!diagnostics().rpc)
 		return nullptr;  // 总开关默认关 = 零行为变化（红线），独立于 imgui 门
 
 	auto server = std::make_unique<DebugRpcServer>();
-	auto wiring = std::make_shared<RpcWiring>(registry, assets, renderer, llmActive);
+	auto wiring = std::make_shared<RpcWiring>(registry, assets, renderer, runtime, llmActive);
 	server->setApplier([wiring](const RpcRequest& request, RpcResponder responder) {
 		rpcDispatch(*wiring, request, std::move(responder));
 	});
@@ -772,6 +784,7 @@ std::unique_ptr<DebugRpcServer> wireDebugRpc(entt::registry& registry, AssetTabl
 	std::function<void()> tick = [wiring, raw] {
 		++wiring->frame;
 		rpcSettleShot(*wiring);
+		rpcSettleDecorate(wiring->renderer, wiring->decorate);  // 批 4：读上一帧安全点的事务结果定案
 		rpcTickPassToggle(*wiring);  // B2-5：逐帧翻转在**帧边界**推进（HTTP 驱动做不到逐帧）
 		raw->poll();
 	};

@@ -459,6 +459,89 @@
       "timeout_ms": 2000
     },
     {
+      "id": "decorate",
+      "method": "POST",
+      "path": "/decorate",
+      "request": {
+        "fields": [
+          {
+            "error": "'feature' must be one of highlight|picking|shadow|taa|velocity|ao_apply|ssr",
+            "kind": "string",
+            "name": "feature",
+            "oneOf": [
+              "highlight",
+              "picking",
+              "shadow",
+              "taa",
+              "velocity",
+              "ao_apply",
+              "ssr"
+            ],
+            "required": true
+          },
+          {
+            "error": "'op' must be \"add\" or \"del\"",
+            "kind": "string",
+            "name": "op",
+            "oneOf": [
+              "add",
+              "del"
+            ],
+            "required": true
+          }
+        ]
+      },
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true（拒绝不是错误，见上）"
+          },
+          {
+            "kind": "string",
+            "name": "feature",
+            "note": "回显请求"
+          },
+          {
+            "kind": "string",
+            "name": "op",
+            "note": "回显请求"
+          },
+          {
+            "kind": "boolean",
+            "name": "done",
+            "note": "这次尝试做成了没有（幂等格 = true：意图本已满足、不改图，diff 为空是诚实读数）"
+          },
+          {
+            "absentWhen": "done = true（成功的尝试没有失败环节可报）",
+            "kind": "string",
+            "name": "refusedAt",
+            "note": "固定词表：not-adopted | gate-off | trial-compile（每一档都有真实生产者，逐条出处 = debug_rpc_decorate.cppm 各常量注释；删档记录在同文件尾部）。决策顺序 = 分类函数 classifyDecorate：del 先查在册、add 先查在场再查门",
+            "optional": true
+          },
+          {
+            "kind": "string",
+            "name": "reason",
+            "note": "一句人话；trial-compile 档带引擎事务原文（归因靠原文，不靠解析）"
+          },
+          {
+            "kind": "object",
+            "name": "diff",
+            "note": "尝试前后的能力快照差异（来源 = 编译产物，与 capabilities 段同口径；被拒/幂等格四数组全空）",
+            "shape": "decorateDiff"
+          },
+          {
+            "kind": "uint32",
+            "name": "frame",
+            "note": "收单时刻的帧计数（生效在之后的安全点，diff 于下帧帧边界结算后读取）"
+          }
+        ]
+      },
+      "summary": "动态能力探针（能力观测批 4）：尝试 add/del 一个装饰，回包恒 200 = 一次尝试的结果事实",
+      "timeout_ms": 2000
+    },
+    {
       "id": "quit",
       "method": "POST",
       "path": "/quit",
@@ -734,6 +817,32 @@
       ],
       "name": "capabilityPass",
       "note": "能力段的一条 pass（来源 = CompiledRenderGraph::passes，不是 desc()——两来源的分歧只有脏窗口可观测，机器判据 = tests/test_rpc_capabilities.cppm 的脏窗口用例）"
+    },
+    {
+      "fields": [
+        {
+          "kind": "string[]",
+          "name": "appearedPasses",
+          "note": "尝试后新增的 pass 名（按执行序）"
+        },
+        {
+          "kind": "string[]",
+          "name": "disappearedPasses",
+          "note": "尝试后消失的 pass 名（按尝试前执行序）"
+        },
+        {
+          "kind": "string[]",
+          "name": "appearedAttachments",
+          "note": "尝试后新增的附件名（按 slot 序）"
+        },
+        {
+          "kind": "string[]",
+          "name": "disappearedAttachments",
+          "note": "尝试后消失的附件名（今天结构性恒空，见 note 头）"
+        }
+      ],
+      "name": "decorateDiff",
+      "note": "一次 /decorate 尝试前后的能力快照差异（能力观测批 4）。名单来源 = CompiledRenderGraph（与 stateCapabilities 同一口径 = 「这一帧实际在画什么」），不是 desc()。del 成功时 disappearedAttachments **恒空**是既有语义：附件不跟着 pass 撤（构造期缓存 slot 的模块在那儿），留孤儿 RT 不改任何 pass 的命令数——append-only 这个事实的观测面就在这一列"
     },
     {
       "fields": [

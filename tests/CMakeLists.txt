@@ -82,6 +82,7 @@ set(RGL_TEST_SOURCES
     test_rpc_contract.cppm       # RPC 路由单源生成物内部契约：唯一性 + 查表可逆 + 回包逐条同序（批 1）
     test_rpc_capabilities.cppm   # 能力观测批 1：/state.capabilities 拼装——内容只吃编译图（脏窗口判据 ①）
                                  # + rtBuilt 两半边（恒 true 判据 ②）+ 门关无 ssr_*（判据 ③）+ kind 矩阵 + 空图退化
+    test_debug_rpc_decorate.cppm # 能力观测批 4：/decorate 探针分类（决策顺序 + 词表覆盖双向 = 变异④的常驻判据）+ 快照差异四半边 + 回包条件性
     test_frame_capture_miss.cppm # 帧捕获未命中分类：永久/可重试两半边各钉 + 边界逐格 + 闭式对账 + 默认预算双向（修「拼错附件名打死 /shot」）
     test_aa_target.cppm          # 细线抗锯齿靶几何：数据自洽 / "确实细"载体判据（批 12.6 T4）
     test_gate_lint.cppm          # 门组合自检：申报表覆盖率对账 + variant 交叉校验 + committed 金标准校验

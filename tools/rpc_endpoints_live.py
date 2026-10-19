@@ -2,8 +2,8 @@
 """RPC 端点实机回包对拍（docs/rpc_单源_plan.md 批 3；判据文档 → docs/风格检查规则.md §10.9）。
 
 干什么：起引擎（headless + `diagnostics.rpc`，配置经临时目录注入，**不碰仓库 configs
-与 build 副本**，同 tools/smoke.py 的 RGL_CONFIG_DIR 口径），把九个端点（含 `/pass` 两个分支）
-逐个真实请求，对账三件事：
+与 build 副本**，同 tools/smoke.py 的 RGL_CONFIG_DIR 口径），把端点（含 `/pass` 两个分支）
+逐个真实请求，对账四件事：
 
 1. `GET /` 的 routes 数组**逐条含序** == `rgl/rpc_schema.lua` 的记录顺序（批 1 的既有行为）；
 2. 每端点成功回包的**顶层键集合** == schema `response.fields`（无条件字段必须都在；出现
@@ -12,6 +12,16 @@
    集合** == 根级 `shapes` 声明；外加反向用例（不带 `yaw_at_frame` 无 `yawPinnedFrame`；`on`
    形态不回 `toggleFrames`；出厂档 fsr 段 usable=false 时尺寸四键**不得出现**）钉
    "条件性"确实是条件性。
+4. `/decorate` 动态能力探针（能力观测批 4）——跑在**第二个引擎实例**上（启动期
+   `diagnostics.picking=true`：highlight 装饰在构造期被 adoptPass 登记成可撤，阳性对照才有得跑；
+   出厂档实例里 highlight 根本不在图，两档不能共用一个进程——上面 1-3 各段钉的正是出厂档的
+   反向半边，object_id 不得出现在能力段）。判据：键集 == schema；**`del highlight` → 200 且
+   done=true、撤后 `add highlight` 也 done=true**（这两格红 = 探针或引擎的运行期图往返坏了，
+   是真缺陷，不许把「其实全灭」当预期读数交上来）；diff 与 `/state.capabilities` 交叉对账
+   （编译图真的变了、又真的回来了）；`del taa` → 200 + done=false + refusedAt ∈ schema note
+   词表且 == not-adopted；出厂档 `add taa` → gate-off；幂等格（add picking 已在场）done=true
+   且 diff 全空；反向三条 400（feature 拼错 / 未知键 / 缺 op）。完整矩阵读数不在这里抄——
+   量具 = `just decorate-matrix`（输出落 qa/log/ 台账）。
 
 它钉的是**键集与序**，不钉值——值的行为锚另有其人（`tests/test_burst_protocol.cppm` 的文案、
 `just regress burst` 与两个截图锚）。为什么值得存在：`response` 段没有运行期消费者，
@@ -27,8 +37,8 @@ rules_rpc 面 5/6 只能对"声明自洽 + 文档产物一致"，"schema ↔ 处
 * **名单 + 尺寸**：启动日志逐 RT 行（`scene_hdr (…): WxH slot K` 等，render_graph_rtslot
   装配代码打印）⟹ 每个出现在日志里的 RT 名必须能在能力段找到，且 width/height 逐条相等、
   rtBuilt = true；出厂门关的（ssr/taa/velocity/ao_applied）两侧都必须**不**出现（反向半边）；
-* **引用解析**：`/shot attachment=<名>` 走的是 frame_capture 对**编译图**的按名解析 +
-  对 **RT 缓存**的 find()——能力段报的每个颜色图属 RT 必须拍得出图（200 = 图里有这个名字
+* **引用解析**：`/shot attachment=<名>` 走的是 frame_capture 对**编译图**的按名解析 + 对
+  **RT 缓存**的 find()——能力段报的每个颜色图属 RT 必须拍得出图（200 = 图里有这个名字
   且缓存里真建了，这就是「rtBuilt 与缓存实际状态一致」的可外推半边），拼错的名字必须 400。
 
 「名单逐条 == 编译图」的**完整**判据（含 swapchain/depth/buffer 档与顺序）在无设备层由
@@ -74,14 +84,75 @@ RT_LINE_SKIP_NAMES = {"taa", "ssr"}
 # 出厂默认档（ssr/aa 关、picking 关）不该存在的附件名（反向半边；smoke.py 靠同类判据抓门）。
 GATED_ABSENT = ("ssr_trace", "ssr_applied", "taa_out", "taa_hist", "velocity",
                 "ao_applied", "object_id")
+# /decorate 的 refusedAt 词表在 schema note 里的固定句式（与 rules_rpc 面 7 读同一句；
+# 解析不出 = 本脚本的「观察值 ∈ 词表」判据失明，必须报错而不是静默放行）。
+VOCAB_NOTE_RE = re.compile(r"固定词表：([a-z][a-z\-]*(?:\s*\|\s*[a-z][a-z\-]*)*)")
 
 
 def patch_lua(path: Path, key: str):
-    """把一个布尔键翻成 true（只服务 rpc / headless 两个已知写法 `key = false,`）。"""
+    """把一个布尔键翻成 true（只服务 rpc / headless / picking 这几个已知写法 `key = false,`）。"""
     text = path.read_text(encoding="utf-8")
     old, new = f"{key} = false,", f"{key} = true,"
     assert old in text, f"{path.name} 里没找到 {old!r}（配置形态变了？同步改本脚本）"
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def launch_engine(cfg: Path, log_path: Path):
+    """按给定配置目录起引擎（CWD = build/rgl，同 just run 的口径）。两个实例共用一把尺。"""
+    env = dict(os.environ, RGL_CONFIG_DIR=str(cfg))
+    log_file = log_path.open("w", encoding="utf-8")
+    proc = subprocess.Popen(["./rgl"], cwd=BUILD_RGL, env=env,
+                            stdout=log_file, stderr=subprocess.STDOUT)
+    return proc, log_file
+
+
+def wait_port(proc, timeout: float = 60.0) -> bool:
+    """等 8788 起来；引擎提前退出（设备缺失 / VVL 报错）= False 报错，不静默等满。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", PORT), timeout=0.5):
+                return True
+        except OSError:
+            if proc.poll() is not None:
+                return False
+            time.sleep(0.2)
+    return False
+
+
+def make_rpc(failures: list):
+    """造一对 RPC 助手（check 记进共享的 failures 清单，两个实例同一本账）。"""
+
+    def rpc(method, path, body=None):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{PORT}{path}", method=method,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=130) as resp:
+            return json.loads(resp.read())
+
+    def rpc_status(method, path, body=None):
+        """发一次请求只取 HTTP 状态码（400/404 类失败回包的形状不在本脚本的核对范围）。"""
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{PORT}{path}", method=method,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=130) as resp:
+                return resp.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    def check(name, got, want):
+        if got == want:
+            brief = (sorted(want) if isinstance(want, (set, list)) and not isinstance(want, str)
+                     else want)
+            print(f"  OK   {name}: {brief}")
+        else:
+            failures.append(name)
+            print(f"  FAIL {name}\n       实际 = {got}\n       期望 = {want}")
+
+    return rpc, rpc_status, check
 
 
 def main() -> int:
@@ -109,75 +180,35 @@ def main() -> int:
         print("FAIL: build/rgl/rgl 不存在（先 just build）")
         return 2
 
+    failures: list[str] = []
+    rpc, rpc_status, check = make_rpc(failures)
+
+    def check_keys(label, body, eid):
+        got = set(body.keys())
+        extra = got - declared(eid, False)
+        missing = declared(eid, True) - got
+        if extra or missing:
+            failures.append(label)
+            print(f"  FAIL {label}\n       实际 = {sorted(got)}"
+                  f"\n       声明全量 = {sorted(declared(eid, False))}"
+                  f"\n       多出 = {sorted(extra)} 缺(无条件) = {sorted(missing)}")
+        else:
+            print(f"  OK   {label}: {sorted(got)}（条件性字段缺席合法）")
+
     with tempfile.TemporaryDirectory(prefix="rgl_rpc_live_") as tmp:
         cfg = Path(tmp)
         shutil.copytree(ROOT / "configs", cfg, dirs_exist_ok=True)
         patch_lua(cfg / "diagnostics.lua", "rpc")
         patch_lua(cfg / "runtime.lua", "headless")
-        env = dict(os.environ, RGL_CONFIG_DIR=str(cfg))
         log_path = Path(tmp) / "engine.log"
-        log_file = log_path.open("w", encoding="utf-8")
-        proc = subprocess.Popen(["./rgl"], cwd=BUILD_RGL, env=env,
-                                stdout=log_file, stderr=subprocess.STDOUT)
-        failures: list[str] = []
+        proc, log_file = launch_engine(cfg, log_path)
         shots = [BUILD_RGL / "screenshots" / "rpcverify_shot.png",
                  BUILD_RGL / "screenshots" / "rpcverify"]
         try:
-            deadline = time.time() + 60
-            while time.time() < deadline:
-                try:
-                    with socket.create_connection(("127.0.0.1", PORT), timeout=0.5):
-                        break
-                except OSError:
-                    if proc.poll() is not None:
-                        print(f"FAIL: 引擎提前退出 rc={proc.returncode}（设备缺失？VVL 报错？）")
-                        return 1
-                    time.sleep(0.2)
-            else:
-                print("FAIL: 60s 内 8788 端口没起来")
+            if not wait_port(proc):
+                print(f"FAIL: 8788 没起来（引擎提前退出 rc={proc.returncode}？设备缺失 / VVL 报错）")
                 return 1
             time.sleep(1.5)  # 让帧边界跑几轮
-
-            def rpc(method, path, body=None):
-                req = urllib.request.Request(
-                    f"http://127.0.0.1:{PORT}{path}", method=method,
-                    data=None if body is None else json.dumps(body).encode(),
-                    headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=130) as resp:
-                    return json.loads(resp.read())
-
-            def rpc_status(method, path, body=None):
-                """发一次请求只取 HTTP 状态码（400/404 类失败回包的形状不在本脚本的核对范围）。"""
-                req = urllib.request.Request(
-                    f"http://127.0.0.1:{PORT}{path}", method=method,
-                    data=None if body is None else json.dumps(body).encode(),
-                    headers={"Content-Type": "application/json"})
-                try:
-                    with urllib.request.urlopen(req, timeout=130) as resp:
-                        return resp.status
-                except urllib.error.HTTPError as exc:
-                    return exc.code
-
-            def check(name, got, want):
-                if got == want:
-                    brief = (sorted(want) if isinstance(want, (set, list)) and not isinstance(want, str)
-                             else want)
-                    print(f"  OK   {name}: {brief}")
-                else:
-                    failures.append(name)
-                    print(f"  FAIL {name}\n       实际 = {got}\n       期望 = {want}")
-
-            def check_keys(label, body, eid):
-                got = set(body.keys())
-                extra = got - declared(eid, False)
-                missing = declared(eid, True) - got
-                if extra or missing:
-                    failures.append(label)
-                    print(f"  FAIL {label}\n       实际 = {sorted(got)}"
-                          f"\n       声明全量 = {sorted(declared(eid, False))}"
-                          f"\n       多出 = {sorted(extra)} 缺(无条件) = {sorted(missing)}")
-                else:
-                    print(f"  OK   {label}: {sorted(got)}（条件性字段缺席合法）")
 
             print("== 1. GET / 路由顺序（批 1 既有行为）==")
             r = rpc("GET", "/")
@@ -246,8 +277,8 @@ def main() -> int:
             print("== 2c. GET /state FSR 段（能力观测批 2）==")
             # 本脚本跑**出厂档**（aa 关）⟹ 这里钉的是反向半边：usable/gateOpen/时域/抖动
             # 全 false、conditional 的尺寸四键**不得出现**（出现 = 门关不拢 / schema 与
-            # 处理函数一起自洽地漂了）。正向半边（aa=fsr 档 usable=true 且尺寸四键必在）
-            # 的实机消费者 = `just smoke --aa fsr`（判据本体在 tools/smoke.py 的 fsr 段）。
+            # 处理函数一起自洽地漂了）。正向半边（aa=fsr 档 usable=true 且尺寸四键必在）的
+            # 实机消费者 = `just smoke --aa fsr`（判据本体在 tools/smoke.py 的 fsr 段）。
             fsrSec = st["fsr"]
             check("/state.fsr 键（出厂档 usable=false ⟹ 尺寸四键缺席合法）",
                   set(fsrSec.keys()), fsr_required)
@@ -305,7 +336,7 @@ def main() -> int:
             print("== 5b. POST /shot 逐附件回读（能力段名单 × RT 缓存交叉对账）==")
             # /shot 的 attachment 解析吃的是 frame_capture 持有的**编译图** + RT 缓存 find()
             # ⟹ 200 = 「图里有这个名字」且「缓存里真建了这张」，与能力段的 rtBuilt=true 是
-# 两条独立代码路径读同一份事实。反向：图里没有的名字必须被拒 ⟹ **404**（批 3：点名的东西
+            # 两条独立代码路径读同一份事实。反向：图里没有的名字必须被拒 ⟹ **404**（批 3：点名的东西
             # 不存在 = 引用解析失败，与未知路由同族；以前是 400，把能力事实混进了请求错误）。
             (BUILD_RGL / "screenshots" / "rpcverify").mkdir(parents=True, exist_ok=True)
             for a in atts:
@@ -408,11 +439,99 @@ def main() -> int:
               sorted(n for n in ("ssr", "ssr_trace", "taa", "velocity", "ao_applied")
                      if n in logged_names), [])
 
+    # ── 11. /decorate 探针（能力观测批 4，第二实例 picking=true）───────────────────────
+    # 阳性对照为什么必须真成：如果矩阵每一格都注定失败，这个探针就是恒等函数——永远正确、
+    # 永远测不出东西，且无法把「引擎做不到」与「探针自己坏了」区分开。del/add highlight 这
+    # 一对就是把它从恒等函数里拉出来的那格（依据：highlight 装饰在构造期走 adoptPass 登记成
+    # 可撤，运行期插回的路径也存在——A→B→A′ 往返判据靠它）。这两格红 = 停下查，别收账。
+    print("== 11. POST /decorate（第二实例：diagnostics.picking=true）==")
+    deco_ep = next(x for x in endpoints if x["id"] == "decorate")
+    refused_note = next(str(f.get("note") or "") for f in deco_ep["response"]["fields"]
+                        if f.get("name") == "refusedAt")
+    vm = VOCAB_NOTE_RE.search(refused_note)
+    vocab = {x.strip() for x in vm.group(1).split("|")} if vm else set()
+    # 只钉「解析非空」（词表内容 ↔ C++ 常量的三方对账 = rules_rpc 面 7，本脚本不抄第二份名单）
+    check("schema note 的 refusedAt 词表解析非空（空 = 本段对拍失明）", len(vocab) > 0, True)
+    with tempfile.TemporaryDirectory(prefix="rgl_rpc_live_decorate_") as tmp2:
+        cfg2 = Path(tmp2)
+        shutil.copytree(ROOT / "configs", cfg2, dirs_exist_ok=True)
+        patch_lua(cfg2 / "diagnostics.lua", "rpc")
+        patch_lua(cfg2 / "diagnostics.lua", "picking")
+        patch_lua(cfg2 / "runtime.lua", "headless")
+        log2_path = Path(tmp2) / "engine2.log"
+        proc2, log2_file = launch_engine(cfg2, log2_path)
+        try:
+            if not wait_port(proc2):
+                failures.append("decorate 实例启动")
+                print(f"  FAIL: 第二实例没起来（rc={proc2.returncode}）")
+            else:
+                time.sleep(1.5)
+                d_del = rpc("POST", "/decorate", {"feature": "highlight", "op": "del"})
+                check_keys("/decorate del highlight 顶层键", d_del, "decorate")
+                check("/decorate.diff 键集 == decorateDiff",
+                      set(d_del["diff"].keys()), shapes["decorateDiff"])
+                check("阳性对照：del highlight → done=true（探针的往返能力是读数的标尺）",
+                      d_del.get("done"), True)
+                check("del highlight 无 refusedAt（成功没有失败环节可报）",
+                      "refusedAt" in d_del, False)
+                check("del highlight diff.disappearedPasses == [highlight]",
+                      d_del["diff"]["disappearedPasses"], ["highlight"])
+                check("del highlight diff 无附件消失（附件不跟 pass 撤 = append-only 的观测面）",
+                      d_del["diff"]["disappearedAttachments"], [])
+                st_after_del = rpc("GET", "/state")
+                check("del 后 /state.capabilities 里 highlight 消失（编译图真的变了）",
+                      "highlight" in [p["name"] for p in st_after_del["capabilities"]["passes"]],
+                      False)
+                d_add = rpc("POST", "/decorate", {"feature": "highlight", "op": "add"})
+                check("阳性对照：撤后 add highlight → done=true（运行期插回的路径活着）",
+                      d_add.get("done"), True)
+                check("add highlight diff.appearedPasses == [highlight]",
+                      d_add["diff"]["appearedPasses"], ["highlight"])
+                st_after_add = rpc("GET", "/state")
+                check("add 后 /state.capabilities 里 highlight 回来了（往返复原）",
+                      "highlight" in [p["name"] for p in st_after_add["capabilities"]["passes"]],
+                      True)
+                d_taa = rpc("POST", "/decorate", {"feature": "taa", "op": "del"})
+                check("del taa → done=false（四个 *Decorated 全不在册）", d_taa.get("done"), False)
+                check("del taa 的 refusedAt 在词表内", d_taa.get("refusedAt") in vocab, True)
+                check("del taa 的 refusedAt == not-adopted（档位归因不许塌）",
+                      d_taa.get("refusedAt"), "not-adopted")
+                check_keys("/decorate del taa 顶层键（失败格 refusedAt 必在）", d_taa, "decorate")
+                a_taa = rpc("POST", "/decorate", {"feature": "taa", "op": "add"})
+                check("出厂档 add taa → gate-off（门是创建期量；读数点名门）",
+                      a_taa.get("refusedAt"), "gate-off")
+                check("gate-off 的 reason 带「没实现 ≠ 做不到」这句（读数不许被读成架构定论）",
+                      "没实现" in str(a_taa.get("reason", "")), True)
+                a_pick = rpc("POST", "/decorate", {"feature": "picking", "op": "add"})
+                check("幂等格：add picking（已在场）→ done=true", a_pick.get("done"), True)
+                check("幂等格 diff 全空（没改图就是没改图，不是缺数据）",
+                      {k: v for k, v in a_pick["diff"].items() if v}, {})
+                check("反向：feature 拼错 → 400（oneOf 是协议）",
+                      rpc_status("POST", "/decorate", {"feature": "zzz", "op": "add"}), 400)
+                check("反向：op 拼错 → 400",
+                      rpc_status("POST", "/decorate", {"feature": "highlight", "op": "zap"}), 400)
+                check("反向：缺 op → 400",
+                      rpc_status("POST", "/decorate", {"feature": "highlight"}), 400)
+                check("反向：未知键 → 400",
+                      rpc_status("POST", "/decorate",
+                                 {"feature": "highlight", "op": "del", "x": 1}), 400)
+                rpc("POST", "/quit", {})
+        finally:
+            try:
+                proc2.wait(timeout=20)
+                print(f"第二实例按 /quit 干净退出（rc={proc2.returncode}）")
+            except subprocess.TimeoutExpired:
+                proc2.kill()
+                print("⚠ 第二实例 /quit 后 20s 没退，已 kill")
+                failures.append("decorate 实例 quit 未干净退出")
+            log2_file.close()
+
     print("\n== 总结 ==")
     if failures:
         print(f"🔴 {len(failures)} 条不符：{failures}")
         return 1
-    print("全部对拍一致（顶层键集合 + 嵌套 shapes + 路由顺序 + 条件性字段反向 + 能力段三条交叉对账）")
+    print("全部对拍一致（顶层键集合 + 嵌套 shapes + 路由顺序 + 条件性字段反向 + 能力段三条"
+          "交叉对账 + /decorate 阳性对照与词表归因）")
     return 0
 
 

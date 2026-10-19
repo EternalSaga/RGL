@@ -151,6 +151,24 @@ pass 级动态开关（复合事务的安全点入口；toggle_frames = 逐帧�
   - `passes`（uint32，**条件性**）——什么时候没有：toggle_frames 形态（只有 on 形态回）。收单时刻的 pass 数（不是生效后的读数）
   - `recompiles`（uint32，**条件性**）——什么时候没有：toggle_frames 形态（只有 on 形态回）。收单时刻的累计重编译次数
 
+### `POST /decorate`
+
+动态能力探针（能力观测批 4）：尝试 add/del 一个装饰，回包恒 200 = 一次尝试的结果事实
+
+- 超时：2000 ms
+- 请求字段（未声明的键 → 400）：
+  - `feature`（string），必填，白名单 highlight | picking | shadow | taa | velocity | ao_apply | ssr —— 违反文案：`'feature' must be one of highlight|picking|shadow|taa|velocity|ao_apply|ssr`
+  - `op`（string），必填，白名单 add | del —— 违反文案：`'op' must be "add" or "del"`
+- 成功回包字段：
+  - `ok`（boolean）恒 true（拒绝不是错误，见上）
+  - `feature`（string）回显请求
+  - `op`（string）回显请求
+  - `done`（boolean）这次尝试做成了没有（幂等格 = true：意图本已满足、不改图，diff 为空是诚实读数）
+  - `refusedAt`（string，**条件性**）——什么时候没有：done = true（成功的尝试没有失败环节可报）。固定词表：not-adopted | gate-off | trial-compile（每一档都有真实生产者，逐条出处 = debug_rpc_decorate.cppm 各常量注释；删档记录在同文件尾部）。决策顺序 = 分类函数 classifyDecorate：del 先查在册、add 先查在场再查门
+  - `reason`（string）一句人话；trial-compile 档带引擎事务原文（归因靠原文，不靠解析）
+  - `diff`（object，见共享结构 `decorateDiff`）尝试前后的能力快照差异（来源 = 编译产物，与 capabilities 段同口径；被拒/幂等格四数组全空）
+  - `frame`（uint32）收单时刻的帧计数（生效在之后的安全点，diff 于下帧帧边界结算后读取）
+
 ### `POST /quit`
 
 置 AppExit = 下个帧边界干净退出（自动化测试收尾用）
@@ -245,6 +263,16 @@ FSR 生效快照（rpcFsrJson 拼装，能力观测_plan 批 2）。FSR = 图外
 - `kind`（string）——drawMesh | blit | drawLight（拼写 = kindName(RgPassKind) 枚举名；Lua 配置表里 drawMesh 档拼 draw，那是配置别名，不是本表）
 - `state`（string）——动态状态名（同时是 ShaderRegistry 固定条目名）；blit 档恒空串（blit 无动态状态）
 - `order`（uint32）——执行序 = 编译产物下标（骨架版编译器不重排、不消除死 pass）
+
+
+### `decorateDiff`
+
+一次 /decorate 尝试前后的能力快照差异（能力观测批 4）。名单来源 = CompiledRenderGraph（与 stateCapabilities 同一口径 = 「这一帧实际在画什么」），不是 desc()。del 成功时 disappearedAttachments **恒空**是既有语义：附件不跟着 pass 撤（构造期缓存 slot 的模块在那儿），留孤儿 RT 不改任何 pass 的命令数——append-only 这个事实的观测面就在这一列
+
+- `appearedPasses`（string[]）——尝试后新增的 pass 名（按执行序）
+- `disappearedPasses`（string[]）——尝试后消失的 pass 名（按尝试前执行序）
+- `appearedAttachments`（string[]）——尝试后新增的附件名（按 slot 序）
+- `disappearedAttachments`（string[]）——尝试后消失的附件名（今天结构性恒空，见 note 头）
 
 
 ### `statePage`

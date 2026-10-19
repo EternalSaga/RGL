@@ -879,7 +879,8 @@ int main() {
 		// 都降级 nullptr。声明序在 registry/assets/backEnd 之后 = 析构序其先 →
 		// try 块退出（帧循环已结束，configReloadTick 不会再跑）时 ~DebugRpcServer =
 		// stop() 收口：关监听线程、在途请求全 503，闭包里的裸服务指针绝不越权。
-		auto debugRpc = wireDebugRpc(registry, assetTable, backEnd.renderer, pre.llmEnabled);
+		auto debugRpc = wireDebugRpc(registry, assetTable, backEnd.renderer, configs.runtime,
+			pre.llmEnabled);
 
 		/**
 		 * DIAG（可见窗 fault 排查）每帧回调：隐藏窗启动、frame == showAfter 时

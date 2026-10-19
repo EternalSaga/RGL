@@ -164,6 +164,16 @@ rpc-live:
     @cmake --build {{ BUILD }} --target rgl
     @python3 tools/rpc_endpoints_live.py
 
+# 动态能力探针矩阵读数（能力观测批 4，docs/能力观测_plan.md §3.7）：add/del × 全部 feature
+# 跑两遍，逐格记 done / refusedAt / 快照差异；阳性对照（del/add highlight 必须真成）与
+# 可复现（两遍逐格相同）是量具自带判据，红 = 退出码 1 且读数不入账。输出进追加式台账
+# qa/log/decorate_matrix.jsonl（与 imgqa_calls.jsonl 同族）。
+# 🔴 不进 just gates：要真设备 + 起引擎，而 gates 的无设备性质是设计的一部分；入口在此，可发现。
+# ⚠ 读 add 列之前先读输出里那句 caveat：「没实现」与「做不到」在矩阵读数里塌成同一个值。
+decorate-matrix:
+    @cmake --build {{ BUILD }} --target rgl
+    @python3 tools/decorate_matrix.py
+
 # ssr_rig 闭式反射靶（Phase 15 批 15.0）：生成靶 + 用 qa/configs/ssr_rig 出一张图。
 # 判据本体 = 该场景 manifest 的 probe.reflectionHullPx / pillarHullPx（闭式倒影凸包，
 # 推导见 tools/qa_scenes.py 的「场景 8：ssr_rig」段头）。SSR 关时凸包内（剥掉柱身）

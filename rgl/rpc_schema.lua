@@ -278,6 +278,40 @@ return {
             } },
         },
         {
+            id = "decorate", method = "POST", path = "/decorate", timeout_ms = 2000,
+            summary = "动态能力探针（能力观测批 4）：尝试 add/del 一个装饰，回包恒 200 = 一次尝试的结果事实",
+            -- 🔴 拒绝不是错误（用户原则「渲染能力不得用错误回包表示」的正面执行）：请求合法、
+            -- 引擎**试了**、没成——成与不成都是运行期事实，走正常回包。与批 3 的 404 分工：
+            -- 点名一个不存在的东西 = 引用解析失败（协议层，404）；发起变更尝试 = 200 + 结果。
+            -- feature 取值 = 四个 `*Decorated` 特征 + highlight / picking / shadow 三个启动期装饰
+            -- （放宽理由写进 debug_rpc_decorate.cppm 特征表注释：只放四个的话矩阵全是同一堵墙）。
+            request = { fields = {
+                { name = "feature", kind = "string", required = true,
+                  oneOf = { "highlight", "picking", "shadow", "taa", "velocity", "ao_apply", "ssr" },
+                  error = "'feature' must be one of highlight|picking|shadow|taa|velocity|ao_apply|ssr" },
+                { name = "op", kind = "string", required = true, oneOf = { "add", "del" },
+                  error = "'op' must be \"add\" or \"del\"" },
+            } },
+            -- 回包本体 = debug_rpc_decorate.cppm 的 decorateResponseJson（恒 200 那条路；
+            -- 409 只在会话状态冲突时出现 = 已有一发在途 / 意图被单槽覆盖，属协议不属能力）。
+            response = { fields = {
+                { name = "ok", kind = "boolean", note = "恒 true（拒绝不是错误，见上）" },
+                { name = "feature", kind = "string", note = "回显请求" },
+                { name = "op", kind = "string", note = "回显请求" },
+                { name = "done", kind = "boolean",
+                  note = "这次尝试做成了没有（幂等格 = true：意图本已满足、不改图，diff 为空是诚实读数）" },
+                { name = "refusedAt", kind = "string", optional = true,
+                  absentWhen = "done = true（成功的尝试没有失败环节可报）",
+                  note = "固定词表：not-adopted | gate-off | trial-compile（每一档都有真实生产者，逐条出处 = debug_rpc_decorate.cppm 各常量注释；删档记录在同文件尾部）。决策顺序 = 分类函数 classifyDecorate：del 先查在册、add 先查在场再查门" },
+                { name = "reason", kind = "string",
+                  note = "一句人话；trial-compile 档带引擎事务原文（归因靠原文，不靠解析）" },
+                { name = "diff", kind = "object", shape = "decorateDiff",
+                  note = "尝试前后的能力快照差异（来源 = 编译产物，与 capabilities 段同口径；被拒/幂等格四数组全空）" },
+                { name = "frame", kind = "uint32",
+                  note = "收单时刻的帧计数（生效在之后的安全点，diff 于下帧帧边界结算后读取）" },
+            } },
+        },
+        {
             id = "quit", method = "POST", path = "/quit", timeout_ms = 2000,
             summary = "置 AppExit = 下个帧边界干净退出（自动化测试收尾用）",
             -- 无 request 段 = **一个字段都不收**：POST 带任何键都算未知字段 → 400。
@@ -385,6 +419,16 @@ return {
                 { name = "kind", kind = "string", note = "drawMesh | blit | drawLight（拼写 = kindName(RgPassKind) 枚举名；Lua 配置表里 drawMesh 档拼 draw，那是配置别名，不是本表）" },
                 { name = "state", kind = "string", note = "动态状态名（同时是 ShaderRegistry 固定条目名）；blit 档恒空串（blit 无动态状态）" },
                 { name = "order", kind = "uint32", note = "执行序 = 编译产物下标（骨架版编译器不重排、不消除死 pass）" },
+            },
+        },
+        {
+            name = "decorateDiff",
+            note = "一次 /decorate 尝试前后的能力快照差异（能力观测批 4）。名单来源 = CompiledRenderGraph（与 stateCapabilities 同一口径 = 「这一帧实际在画什么」），不是 desc()。del 成功时 disappearedAttachments **恒空**是既有语义：附件不跟着 pass 撤（构造期缓存 slot 的模块在那儿），留孤儿 RT 不改任何 pass 的命令数——append-only 这个事实的观测面就在这一列",
+            fields = {
+                { name = "appearedPasses", kind = "string[]", note = "尝试后新增的 pass 名（按执行序）" },
+                { name = "disappearedPasses", kind = "string[]", note = "尝试后消失的 pass 名（按尝试前执行序）" },
+                { name = "appearedAttachments", kind = "string[]", note = "尝试后新增的附件名（按 slot 序）" },
+                { name = "disappearedAttachments", kind = "string[]", note = "尝试后消失的附件名（今天结构性恒空，见 note 头）" },
             },
         },
         {

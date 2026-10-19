@@ -385,6 +385,7 @@ set(RGL_FRAME_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_exec.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_exec_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_capabilities.cppm"  # 能力观测批 1：/state.capabilities 纯函数（编译图 + rtBuilt → JSON，零设备可测）
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_decorate.cppm"  # 能力观测批 4：/decorate 探针纯逻辑（refusedAt 词表 + 分类 + 快照差异，零设备可测）
     "${CMAKE_CURRENT_SOURCE_DIR}/llm_debug.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/llm_debug_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shader_registry.cppm"

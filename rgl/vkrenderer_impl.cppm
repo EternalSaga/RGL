@@ -386,8 +386,13 @@ void Renderer::applyPassToggles() {
 	pendingPassToggle.reset();  // 先摘单：失败也不重放（重放 = 每帧刷同一条 error）
 	if (wantOn == graph.hasPass(passName))
 		return;  // 幂等：意图已满足（重复收单，或别的请求已经把它带到位）
+	// 幂等空转**不写**结果格（能力观测批 4）：探针要的是「事务执行了吗、成没成」，
+	// 空转没有事务可报——写了反而让探针把「别人的事务」或「上一帧的陈旧格」读成自己的。
 	auto transaction = wantOn ? restorePassTransaction(passName)
 	                          : withdrawPassTransaction(passName);
+	pendingPassToggleOutcome = PassToggleOutcome {
+		.passName = passName, .success = transaction.has_value(),
+		.error = transaction ? std::string {} : transaction.error().describe() };
 	if (!transaction) {
 		reportPassToggleFailure(passName, transaction.error());
 		return;

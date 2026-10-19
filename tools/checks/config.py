@@ -417,6 +417,19 @@ RPC_SCHEMA_IMPORT_MODULE = "rpc_schema_generated"
 RPC_SCHEMA_SCAN_DIRS = ("rgl",)
 RPC_SCHEMA_SCAN_EXCLUDE_DIRS = EXCLUDE_SUBDIRS
 RPC_SCHEMA_SCAN_SUFFIXES = (".cppm",)
+# ── 面 7（能力观测批 4）：`/decorate` 的 refusedAt 词表三方对账 + 特征表吃生成常量 ──
+# 词表的运行期唯一来源 = debug_rpc_decorate.cppm 的 kRefusedXxx 档常量；文档口径 = schema
+# refusedAt note 里的「固定词表：a | b | c」一句；kRefusedVocabulary 数组是运行期消费的那份。
+# 三方任一处加档而其余没跟上 = 本面红；「加一档没有生产者」由单测的词表覆盖用例红兜
+# （tests/test_debug_rpc_decorate.cppm），两侧合起来才封死「装饰性枚举值」这个形态。
+RPC_DECORATE_MODULE = "rgl/debug_rpc_decorate.cppm"
+RPC_DECORATE_ENDPOINT_ID = "decorate"
+RPC_REFUSED_CONST_RX = r'(kRefused[A-Za-z]+)\s*=\s*"([a-z][a-z-]*)"'
+RPC_REFUSED_VOCAB_ARRAY_RX = r"kRefusedVocabulary[^=]*=\s*\{([^}]*)\}"
+RPC_REFUSED_NOTE_RX = r"固定词表：([a-z][a-z\-]*(?:\s*\|\s*[a-z][a-z\-]*)*)"
+# 特征表必须逐条吃 rpc_value::decorate::feature::<取值> 生成常量（schema 加 feature
+# 不补表 = 红；改回字面量 = 红，与面 3 的字段常量口径同形）。
+RPC_DECORATE_FEATURE_CONST_PREFIX = "rpc_value::decorate::feature::"
 # 注册字面量：httplib 的注册方法 + 紧跟其后的字符串字面量。`server` 锚定是必要的——
 # 同文件里的端口探测写的是 `probe.Get("/")`（那是客户端探测，不是路由注册）。
 # 生成表驱动的注册循环写的是 `server.Get(std::string(route.path), …)`，不吃字面量。

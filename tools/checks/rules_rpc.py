@@ -59,6 +59,17 @@ response.fields；kind 在词表内（`config.RPC_RESPONSE_KINDS`）；object / 
 （同 `.cppm` 侧的口径）：模板改形态 → 解析式认不出 → 报"本次未做任何对账"，失效方向是误报
 不是假绿。
 
+## 面 7｜`/decorate` 词表三方对账 + 特征表吃生成常量（能力观测批 4）
+
+`refusedAt` 词表存在三份形态：C++ 档常量（`kRefusedXxx = "…"`，运行期唯一来源）、
+`kRefusedVocabulary` 数组（运行期消费的那份）、schema `refusedAt` note 里的
+「固定词表：a | b | c」（文档口径，`tools/rpc_endpoints_live.py` 与矩阵量具从这里读）。
+三方任一处加档而其余没跟上 = 本面红。特征表同理：schema `feature` 的每个 oneOf 取值必须在
+`RPC_DECORATE_MODULE` 里以 `rpc_value::decorate::feature::<取值>` 常量形态被消费（面 3 的
+字段常量口径搬到取值常量上）。**「加一档没有真实生产者」不由本面兜**——那是语义性质，
+文本对账看不见；兜它的是 `tests/test_debug_rpc_decorate.cppm` 的词表覆盖用例（产出集合
+== 词表，双向）+ 实机侧「观察到的 refusedAt ∈ note 词表」。两侧合起来才封死装饰性枚举值。
+
 ## 失效必须出声
 
 schema 读不到 / 解析出 0 条 / **解析报错**、任一生成物读不到或解析出 0 条、消费文件读不到
@@ -93,8 +104,14 @@ from pathlib import Path
 
 from config import (
     ROOT,
+    RPC_DECORATE_ENDPOINT_ID,
+    RPC_DECORATE_FEATURE_CONST_PREFIX,
+    RPC_DECORATE_MODULE,
     RPC_FIELD_LITERAL_RES,
     RPC_RESPONSE_KINDS,
+    RPC_REFUSED_CONST_RX,
+    RPC_REFUSED_NOTE_RX,
+    RPC_REFUSED_VOCAB_ARRAY_RX,
     RPC_SCHEMA_CONSUMER_FILES,
     RPC_SCHEMA_CPPM,
     RPC_SCHEMA_FILE,
@@ -123,6 +140,10 @@ RPC_SCHEMA_ROUTE_RX = re.compile(RPC_SCHEMA_ROUTE_RE)
 # 消费点的 import 判据（语句形态：行首 import，注释掉的写法不算——见 config 里的说明）
 RPC_SCHEMA_IMPORT_RX = re.compile(
     rf"(?m)^[ \t]*import[ \t]+{RPC_SCHEMA_IMPORT_MODULE}[ \t]*;")
+# 面 7 的三条（词表三方对账，能力观测批 4）——参数在 config，编译在这里（同上面口径）
+RPC_REFUSED_CONST_RX = re.compile(RPC_REFUSED_CONST_RX)
+RPC_REFUSED_VOCAB_ARRAY_RX = re.compile(RPC_REFUSED_VOCAB_ARRAY_RX)
+RPC_REFUSED_NOTE_RX = re.compile(RPC_REFUSED_NOTE_RX)
 
 # 覆盖面读数（main.py 每次构建印一行）：三方各自的条数 + 面 2 的扫描文件数
 SCAN_RPC_SCHEMA: dict[str, str] = {}
@@ -734,6 +755,61 @@ def _field_consumers() -> tuple[str, str | None]:
     return "\n".join(chunks), None
 
 
+# ─── 面 7 的 /decorate 词表三方对账（能力观测批 4）─────────────────────────────────────
+
+def _decorate_vocabulary_violations(schema_rows: list[dict]) -> list[str]:
+    """C++ 档常量 == kRefusedVocabulary 数组 == schema note 词表；特征表逐条吃生成常量。
+
+    判据与单测的分工 → 模块 docstring 面 7。失效方向同其它面：文件读不到 / 正则解析出
+    0 条 = 当场声明失明，不静默放行（「零警告」会被读成「词表还单源」）。
+    """
+    out: list[str] = []
+    src = read_text(Path(ROOT) / RPC_DECORATE_MODULE)
+    if src is None:
+        return [f"{RPC_DECORATE_MODULE} 读不到（改名 / 搬走？这条面已经瞎了没人改它就静默）"]
+    consts = dict(RPC_REFUSED_CONST_RX.findall(src))
+    if not consts:
+        return [f"{RPC_DECORATE_MODULE} 里解析出 0 条档常量（常量形态改了？本面已看不见词表）"]
+    m = RPC_REFUSED_VOCAB_ARRAY_RX.search(src)
+    if not m:
+        out.append("找不到 kRefusedVocabulary 数组（改名了？运行期吃的是这份数组）")
+    else:
+        listed = {x for x in re.findall(r"kRefused[A-Za-z]+", m.group(1))
+                  if x != "kRefusedVocabulary"}
+        if listed != set(consts):
+            out.append(f"kRefusedVocabulary 数组 {sorted(listed)} ≠ 档常量 {sorted(consts)}"
+                       "（加档没进数组，或数组引用了不存在的常量）")
+    deco = next((e for e in schema_rows if e.get("id") == RPC_DECORATE_ENDPOINT_ID), None)
+    if deco is None:
+        out.append(f"schema 里没有 {RPC_DECORATE_ENDPOINT_ID} 端点——端点若删了，"
+                   f"{RPC_DECORATE_MODULE} 的词表与特征表要一起删（留着 = 装饰）")
+        return out
+    note = next((str(f.get("note") or "") for f in (deco.get("response") or {}).get("fields") or []
+                 if isinstance(f, dict) and f.get("name") == "refusedAt"), None)
+    if note is None:
+        out.append("/decorate 的 response 没有 refusedAt 字段（词表失去了文档侧承载）")
+    else:
+        nm = RPC_REFUSED_NOTE_RX.search(note)
+        if not nm:
+            out.append("refusedAt 的 note 不含「固定词表：a | b | c」那句（形态变了 = "
+                       "实机对拍读不到词表，本面与实机侧一起失明）")
+        else:
+            noted = {x.strip() for x in nm.group(1).split("|")}
+            if noted != set(consts.values()):
+                out.append(f"schema note 词表 {sorted(noted)} ≠ C++ 档常量值 "
+                           f"{sorted(consts.values())}（一侧加档没回来改另一侧——实机侧读 note，"
+                           "运行期读常量，漂了就是实机判据看不见的新档）")
+    one_of = next((f.get("oneOf") or [] for f in (deco.get("request") or {}).get("fields") or []
+                   if isinstance(f, dict) and f.get("name") == "feature"), [])
+    if not one_of:
+        out.append("/decorate 的 feature 没有 oneOf（白名单是协议的一部分，删了这条面对账伙伴没了）")
+    for v in one_of:
+        if RPC_DECORATE_FEATURE_CONST_PREFIX + str(v) not in src:
+            out.append(f"特征表没吃生成常量 {RPC_DECORATE_FEATURE_CONST_PREFIX}{v}"
+                       "（schema 加了 feature 没补表，或改回字面量了——表是运行期的特征名单来源）")
+    return out
+
+
 def rpc_schema_checks() -> list[Warning]:
     """RPC 能力单源的六个对账面（见模块 docstring）。"""
     warnings: list[Warning] = []
@@ -856,6 +932,11 @@ def rpc_schema_checks() -> list[Warning]:
                     f"RPC 单源：字段 {ref} 在 rgl/ 里**没有任何引用点** —— 生成物里的常量没人读"
                     f"= 这条字段声明在装饰（处理函数改回吃字面量了？还是它已没人用？"
                     f"要么去用常量，要么把 {name} 从 {RPC_SCHEMA_FILE} 删掉）", "error"))
+
+    # ── 面 7：/decorate 词表三方对账 + 特征表吃生成常量（能力观测批 4）──
+    for bad in _decorate_vocabulary_violations(schema_rows):
+        warnings.append(Warning(RPC_DECORATE_MODULE, 0,
+            f"能力观测批 4（/decorate 词表/特征表）：{bad}", "error"))
 
     # ── 面 2：手写注册/分发/字段名字面量 + 消费文件确实 import 生成模块 ──
     rels, scan_bad = _scan_files()

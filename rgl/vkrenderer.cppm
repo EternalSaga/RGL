@@ -324,6 +324,38 @@ export class Renderer {
 	}
 
 	/**
+	 * 一笔 pass 开关**复合事务的执行结果**（能力观测批 4：`/decorate` 探针要拿真实成败定案，
+	 * 而事务在安全点跑、收单在帧边界，两者跨一帧——结果必须有个地方放）。
+	 *
+	 * 纯观测面：`applyPassToggles` 每次**真正执行**事务（幂等空转不算）就覆盖写这一格，
+	 * 不改变事务的任何行为；读侧 = `takePassToggleOutcome`（消费式，RPC 帧边界取走）。
+	 * 单格 = 与 `pendingPassToggle` 同口径（一帧一个意图），探针在收单前先取走陈旧格，
+	 * 结算时读到的只可能是本帧这一笔（passName 再核对一次，防并发 `/pass` 的张冠李戴）。
+	 */
+	struct PassToggleOutcome {
+		std::string passName;  ///< 事务目标 pass 名（归因用）
+		bool success = false;  ///< 事务是否成功
+		std::string error;     ///< 失败时 = Error::describe() 原文（探针整段进 reason，不解析归类）
+	};
+
+	/**
+	 * 取走最近一次事务结果（消费式：读完清空；渲染线程帧边界调，与写入方同线程零锁）。
+	 * @return 空 = 自上次取走后没有事务执行过
+	 */
+	std::optional<PassToggleOutcome> takePassToggleOutcome() {
+		auto out = std::move(pendingPassToggleOutcome);
+		pendingPassToggleOutcome.reset();
+		return out;
+	}
+
+	/**
+	 * @return 是否已有一格开关意图在途（未过安全点）。`/decorate` 探针收单前查它：
+	 *         单意图槽被占 = 会话状态冲突（409），不是能力事实——两个意图挤一格，
+	 *         后写的赢，先收的那个会被静默丢掉，探针不假装那是一次尝试。
+	 */
+	[[nodiscard]] bool hasPendingPassToggle() const { return pendingPassToggle.has_value(); }
+
+	/**
 	 * pass 开关的观测面（RPC `/state` 的 graph 段；判据「开关真的发生了」读这里，
 	 * 而不是数截图——highlight 无选中时零 draw，画面本来就不该变）。
 	 */
@@ -689,6 +721,8 @@ export class Renderer {
 		bool on = true;        ///< 期望状态
 	};
 	std::optional<PassToggleRequest> pendingPassToggle;
+	/** 最近一次事务结果（能力观测批 4，纯观测；口径见 PassToggleOutcome 注释）。 */
+	std::optional<PassToggleOutcome> pendingPassToggleOutcome;
 	/**
 	 * 图外同步发射账（批次 B1b → `docs/compute_调研.md` §7.2）：图外模块经它**申报即发射**
 	 * （barrier 参数由 usage 词表物化，模块不写 mask 字面量），帧末 `offGraphEndFrame` 对账
