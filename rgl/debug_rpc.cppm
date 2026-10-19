@@ -1,13 +1,14 @@
 export module debug_rpc;
 
 import rlstd;
+import rpc_schema_generated;  // RpcRouteId（注册期绑进 handler 闭包，等待侧据此取该端点超时）
 
 namespace RGL {
 
 /** RPC 请求（HTTP 线程构造 → 入队 → 帧边界渲染线程消费；body = 原始 UTF-8 JSON）。 */
 export struct RpcRequest {
 	std::string method;  // HTTP 方法（GET / POST）
-	std::string path;    // 路径（/state、/camera、/param、/shot…）
+	std::string path;    // 路径（端点名单 = rgl/rpc_schema.lua，本文件不抄）
 	std::string body;    // 请求体（无 body = 空串）
 };
 
@@ -120,11 +121,12 @@ export class DebugRpcServer {
 
 	/**
 	 * HTTP 线程侧等待（`start()` 注册的 handler 唯一实体）：入队 → 等 applier 兑现。
-	 * 超时按路由（`/shot` 10s 跨帧捕获，其余 2s）→ 504 并尽力撤单；停机/无执行器 → 503。
+	 * 超时 = 该端点在能力清单里登记的那一档（到点撤单 + 504）；停机/无执行器 → 503。
 	 * @param request 原始请求（方法 / 路径 / 体）
+	 * @param route 命中的路由身份（注册期从生成表绑进闭包）
 	 * @return 应答载荷（状态码 + JSON 体；HTTP 线程据此写响应）
 	 */
-	RpcReply awaitReply(const RpcRequest& request);
+	RpcReply awaitReply(const RpcRequest& request, RpcRouteId route);
 };
 
 }  // namespace RGL

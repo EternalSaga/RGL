@@ -284,11 +284,57 @@ export std::optional<std::string> generateCppm(const nlohmann::json& reflection,
 	return result;
 }
 
+/**
+ * `cpp_escape` 模板回调：把一份**原始**文本转成可放进 C++ 双引号字面量的内容。
+ *
+ * 为什么要有它：模板此前只会把 schema 里的字符串**原样**写进 `"…"`，于是清单文件必须自带
+ * 一条「不许含 `"` 与 `\`」的口径（`rgl/rpc_schema.lua` 头部就写着）——写进去生成物编不过
+ * （构建期红，不是静默错，这条没错），但它把「文案里能不能有引号」变成了**人记得住的规矩**。
+ * RPC 的错误文案是行为契约的一部分（`tests/test_burst_protocol.cppm` 逐条钉），而现成的文案里
+ * 就有 `mode must be "trackball" or "fps"` 这种带引号的串 ⟹ 与其给契约文案开一条"必须改写"的
+ * 例外，不如让转义这一步机器化。
+ *
+ * 只转 `\`、`"`、换行/回车/制表符（生成物里唯一可能出现的控制字符）；其余字节原样出，
+ * 中文文案因此保持可读。
+ * @param raw 原始文本（JSON 字符串）
+ * @return 转义后的内容（**不含**外层引号）
+ */
+inline std::string cppEscape(std::string_view raw) {
+	std::string out;
+	out.reserve(raw.size() + 8);
+	for (const char ch : raw) {
+		switch (ch) {
+		case '\\': out += "\\\\"; break;
+		case '"': out += "\\\""; break;
+		case '\n': out += "\\n"; break;
+		case '\r': out += "\\r"; break;
+		case '\t': out += "\\t"; break;
+		default: out.push_back(ch); break;
+		}
+	}
+	return out;
+}
+
+/**
+ * 渲染一份 inja 模板（数据 → 文本）。所有 `render` 子命令的产物都出自这里。
+ * 注册的回调：`cpp_escape(s)`（见 `cppEscape`）。
+ * @param data 模板数据（schema 的 JSON 形态）
+ * @param templatePath 模板文件路径
+ * @return 渲染结果
+ */
 export std::string renderTemplate(const nlohmann::json& data,
 	const std::string& templatePath) {
 	auto* logger = RLLogger::getInstance();
 	logger->debug("Rendering template '{}'", templatePath);
 	inja::Environment env;
+	// 🔴 关掉 inja 的**行语句**（默认 `##` 开头 = 模板指令）。本仓模板里唯一会撞上它的是
+	// markdown 产物（rpc_schema_md.inja 的 `## 标题`——行首 `##` 会被当语句解析，报
+	// "expected statement"）。没有任何模板用行语句写指令（要用早该红过），关掉只会解禁
+	// 行首 `##`，不会改变既有模板的渲染结果。
+	env.set_line_statement("");
+	env.add_callback("cpp_escape", 1, [](inja::Arguments& args) -> nlohmann::json {
+		return cppEscape(args.at(0)->get<std::string>());
+	});
 	return env.render_file(templatePath, data);
 }
 

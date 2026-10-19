@@ -227,7 +227,7 @@ static void printUsage() {
 	logger->info("Usage:");
 	logger->info("  reflection_tool validate  --json <path> --schema <path>");
 	logger->info("  reflection_tool generate  --json <path> --schema <path> --output <path> --module-name <name> --template <path>");
-	logger->info("  reflection_tool render     --json <path> --output <path> --template <path>");
+	logger->info("  reflection_tool render     --json <path> | --lua <path>  --output <path> --template <path> [--output-json <path>]");
 	logger->info("  reflection_tool slang      --shader <path> [--shader <path>...] --schema <path> --output <path> --module-name <name> --template <path> [--flags <a b c ...>]");
 	logger->info("  reflection_tool compute-access --shader <path> [--shader <path>...] --output <path> [--output-cppm <path> --module-name <name>] [--flags <a b c ...>] [--include <path>]");
 	logger->info("  reflection_tool compute-push --shader <path> [--shader <path>...] --output <path> --module-name <name> --template <path> [--flags <a b c ...>] [--include <path>]");
@@ -242,10 +242,29 @@ int main(int argc, char* argv[]) {
 		std::string command;
 		std::string jsonPath, schemaPath, outputPath, moduleName, templatePath, slangFlagsStr;
 		std::string outputCppmPath;  // compute-access 的第二份产物（binding 名 → 号 的接口表）
+		std::string luaPath;         // render 的 Lua 输入（与 --json 二选一，见 render 分支）
+		std::string outputJsonPath;  // render 的第二份产物（给非 C++ 客户端读的 JSON）
 		std::vector<std::string> shaderPaths, includePaths;
 
 		po::options_description desc("Options");
-		desc.add_options()("help,h", "produce help message")("json,j", po::value<std::string>(&jsonPath), "path to slangc reflection JSON")("schema,s", po::value<std::string>(&schemaPath), "path to Lua schema file")("output,o", po::value<std::string>(&outputPath), "output .cppm file path")("module-name,m", po::value<std::string>(&moduleName), "C++ module name for generated .cppm")("template,t", po::value<std::string>(&templatePath), "path to inja template file")("shader", po::value<std::vector<std::string>>(&shaderPaths), "slang source file(s) for 'slang' command (repeatable)")("flags", po::value<std::string>(&slangFlagsStr), "space-separated slang compiler flags for 'slang' (SLANG_FLAGS; boost 不吞 dash 参数故用单串 split)")("include,I", po::value<std::vector<std::string>>(&includePaths), "slang search path(s) for 'slang' (repeatable; -I)")("output-cppm", po::value<std::string>(&outputCppmPath), "second output of 'compute-access': the binding-name -> binding-number interface table (.cppm); requires --module-name");
+		desc.add_options()
+			("help,h", "produce help message")
+			("json,j", po::value<std::string>(&jsonPath), "path to slangc reflection JSON")
+			("schema,s", po::value<std::string>(&schemaPath), "path to Lua schema file")
+			("output,o", po::value<std::string>(&outputPath), "output .cppm file path")
+			("module-name,m", po::value<std::string>(&moduleName), "C++ module name for generated .cppm")
+			("template,t", po::value<std::string>(&templatePath), "path to inja template file")
+			("shader", po::value<std::vector<std::string>>(&shaderPaths), "slang source file(s) for 'slang' command (repeatable)")
+			("flags", po::value<std::string>(&slangFlagsStr), "space-separated slang compiler flags for 'slang' (SLANG_FLAGS; boost 不吞 dash 参数故用单串 split)")
+			("include,I", po::value<std::vector<std::string>>(&includePaths), "slang search path(s) for 'slang' (repeatable; -I)")
+			("output-cppm", po::value<std::string>(&outputCppmPath), "second output of 'compute-access': the binding-name -> binding-number interface table (.cppm); requires --module-name")
+			// render 的 Lua 输入面（docs/rpc_单源_plan.md §3.2 扩展 1）：项目的 schema 一律是 Lua，
+			// 而 render 原来只吃 JSON。--lua 与 --json 二选一，转换在 schema_loader 里做。
+			("lua", po::value<std::string>(&luaPath), "Lua source for 'render' (mutually exclusive with --json; the Lua table is converted to JSON first)")
+			// render 的第二份产物（§3.2 扩展 2）：Python 客户端没有标准库 Lua 解析器 ⟹ 同一次生成
+			// 顺手产一份 JSON。它是**生成物**，不是第二真相源。
+			("output-json", po::value<std::string>(&outputJsonPath), "second output of 'render': the input data serialized as JSON (for non-C++ consumers)")
+			;
 
 		if (argc < 2) {
 			printUsage();
@@ -665,15 +684,41 @@ int main(int argc, char* argv[]) {
 #endif
 		}
 
-		// validate / generate / render 走 JSON 路径
-		if (jsonPath.empty() || !fs::exists(jsonPath)) {
-			logger->error("Reflection JSON not found: {}", jsonPath);
+		// validate / generate 走 JSON 路径；render 两种输入都收（--json 或 --lua）。
+		// 🔴 --lua 与 --json 互斥而不是"后者覆盖前者"：同一份数据有两个来源时，改哪个都"看起来生效"，
+		// 那正是本管线要杀掉的形态。
+		if (!luaPath.empty() && !jsonPath.empty()) {
+			logger->error("'render' 的 --lua 与 --json 互斥（一次生成只准有一个输入）");
 			return 1;
 		}
-
-		std::ifstream jsonFile(jsonPath);
-		json reflection = json::parse(jsonFile);
-		logger->debug("Loaded reflection JSON: {} parameters", reflection["parameters"].size());
+		if (!luaPath.empty() && command != "render") {
+			logger->error("--lua 目前只服务 'render' 子命令（{} 走的是 slang 反射 / JSON 输入面）", command);
+			return 1;
+		}
+		if (command == "render" && luaPath.empty() && jsonPath.empty()) {
+			logger->error("'render' 需要 --json 或 --lua 之一作为输入");
+			return 1;
+		}
+		json reflection = json::object();
+		if (command == "render" && !luaPath.empty()) {
+			if (!fs::exists(luaPath)) {
+				logger->error("Lua source not found: {}", luaPath);
+				return 1;
+			}
+			reflection = RGL::loadLuaToJson(luaPath);
+			logger->debug("Loaded Lua source: {}", luaPath);
+		} else {
+			if (jsonPath.empty() || !fs::exists(jsonPath)) {
+				logger->error("Reflection JSON not found: {}", jsonPath);
+				return 1;
+			}
+			std::ifstream jsonFile(jsonPath);
+			reflection = json::parse(jsonFile);
+			// 用 contains 兜住：`reflection["parameters"]` 对非 const json 是**插入**语义，
+			// 一条 debug 日志会把 "parameters": null 写进 render --lua 的 JSON 产物里。
+			if (reflection.contains("parameters"))
+				logger->debug("Loaded reflection JSON: {} parameters", reflection["parameters"].size());
+		}
 
 		if (command == "validate") {
 			if (vm["schema"].empty()) {
@@ -749,6 +794,19 @@ int main(int argc, char* argv[]) {
 			}
 			out << cppm;
 			logger->info("[OK] Rendered {}", outputPath);
+			// 第二份产物：同一份输入数据序列化成 JSON（docs/rpc_单源_plan.md §3.2 扩展 2）。
+			// 与 .cppm **同一次生成** ⟹ 结构上不可能互不一致（不一致只可能是有人手改其中一份，
+			// 那由 rules_rpc 面 1 逐条对账兜）。dump(2) 的键序 = 字典序（nlohmann 的 map 后端），
+			// 每次生成逐字节相同 ⟹ 进 SHA1 护栏不会自己制造噪声。
+			if (!outputJsonPath.empty()) {
+				std::ofstream jsonOut(outputJsonPath);
+				if (!jsonOut.is_open()) {
+					logger->error("Cannot open output JSON file: {}", outputJsonPath);
+					return 1;
+				}
+				jsonOut << reflection.dump(2) << "\n";
+				logger->info("[OK] Rendered {}", outputJsonPath);
+			}
 			return 0;
 
 		} else {

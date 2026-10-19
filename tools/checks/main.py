@@ -72,6 +72,7 @@ from rules_ecs import (ecs_component_home_checks, ecs_component_purity_checks,
 from rules_metrics import evaluate_metrics
 from rules_layers import lib_layering_checks
 from rules_reflection import reflection_contract_checks, scan_readout
+from rules_rpc import rpc_schema_checks, rpc_schema_readout
 from rules_text import (agents_doc_index_checks, agents_index_status_checks,
                         decoration_order_predicate_checks, decoration_order_readout,
                         doc_pointer_checks,
@@ -84,7 +85,6 @@ from rules_text import (agents_doc_index_checks, agents_index_status_checks,
                         judgments_pointer_checks,
                         docs_status_checks, forbidden_vulkan_checks,
                         rg_enum_vocab_checks, rg_enum_vocab_readout,
-                        rpc_route_checks, rpc_route_readout,
                         slang_load_bitcast_checks, meshlet_spec_checks,
                         modern_cpp_checks, text_checks, load_doc_pointer_baseline,
                         load_jargon_baseline, write_jargon_baseline,
@@ -373,8 +373,8 @@ def main() -> None:
         # 分层测试覆盖（债-15）：**只出数不裁决**，本行只可能因「扫描面为空 / 清单解析不到」
         # 报 error。全表在 `just coverage`，不在这里印（每次构建印一张没人裁决的表 = 噪声）。
         warnings.extend(coverage_checks())
-        # RPC 路由 ↔ dispatch 双向对账（债-125）：两份名单漏一条 = 真程序 404 而单元全绿。
-        warnings.extend(rpc_route_checks())
+        # RPC 能力单源对账（债-125 换血）：schema ↔ .cppm ↔ .json 三方逐条 + 手写路由字面量。
+        warnings.extend(rpc_schema_checks())
         # 渲染图 Lua 词表对账（债-122 另一半）：枚举加了档、词表没挂号 = 配置面写不出来。
         warnings.extend(rg_enum_vocab_checks())
         # 图事实谓词「无问者即红」（债-129 S1a）：查询面建了没人用 = isSchedulable 第二。
@@ -498,10 +498,10 @@ def main() -> None:
         print("[style-check] ECS 规范护栏: "
               + (f"{ecs_rules} / " if ecs_rules else "")
               + (ecs_global if ecs_global else "**本次未执行**（规则没跑到）"))
-        # RPC 路由对账的读数（债-125）：两侧条数每次构建都印——「相等」这个判据只有在
-        # 「确实数到了 N 条」时才成立，没数与数出 0 条必须区分（同反射对账的读数纪律）。
-        rpc_readout = rpc_route_readout()
-        print("[style-check] RPC 路由对账: "
+        # RPC 能力单源对账的读数（债-125 换血）：三方条数 + 扫描面每次构建都印——「一致」这个
+        # 判据只有在「确实数到了 N 条」时才成立，没数与数出 0 条必须区分（同反射对账的读数纪律）。
+        rpc_readout = rpc_schema_readout()
+        print("[style-check] RPC 能力单源对账: "
               + (rpc_readout if rpc_readout else "**本次未执行**（规则没跑到）"))
         # 渲染图词表对账的读数（债-122）：五张表逐张「覆盖/总数」，没数与数出全过必须区分。
         vocab_readout = rg_enum_vocab_readout()

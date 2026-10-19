@@ -154,6 +154,16 @@ analytic:
     @python tools/qa_scenes.py --out {{ BUILD }}/rgl/models --only cornell_box
     {{ BUILD }}/tools/imgqa/imgqa probe
 
+# RPC 回包与 schema 的实机对拍（docs/rpc_单源_plan.md 批 3）：自己起引擎，逐端点真实请求一次，
+# 把回包顶层键集合与 `rgl/rpc_schema.lua` 声明的响应字段逐条比对（含条件性字段的反向用例）。
+# 🔴 它守的是「schema **少声明**了引擎真会回的字段」这一侧：`just checks` 的面 6 只比 md↔schema，
+# 两边一起漏就看不出来——实测注入该缺陷（删掉 /resize 的 `frame` 声明 + `just reflect`）后
+# `checks --strict` 全绿，只有本脚本红且点名「实际 = [frame,height,ok,width] / 声明全量 = [height,ok,width]」。
+# 要真设备 + 起引擎（~20s）⟹ **不进 just gates**（gates 的无设备性质是刻意的），改处理函数回包后手敲。
+rpc-live:
+    @cmake --build {{ BUILD }} --target rgl
+    @python3 tools/rpc_endpoints_live.py
+
 # ssr_rig 闭式反射靶（Phase 15 批 15.0）：生成靶 + 用 qa/configs/ssr_rig 出一张图。
 # 判据本体 = 该场景 manifest 的 probe.reflectionHullPx / pillarHullPx（闭式倒影凸包，
 # 推导见 tools/qa_scenes.py 的「场景 8：ssr_rig」段头）。SSR 关时凸包内（剥掉柱身）

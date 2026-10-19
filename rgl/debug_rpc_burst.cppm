@@ -3,21 +3,27 @@ module;
 export module debug_rpc_burst;
 
 import rlstd;
+import rpc_schema_generated;  // 字段名常量 + 请求形状表（真相源 = rgl/rpc_schema.lua）
+import debug_rpc_shape;       // rpcValidateRequest（形状判据本体）
 
 namespace RGL {
 
 /**
- * `/shotburst` 协议里**与设备无关**的两段判据（形状解析 + 锚点裁决）。
+ * `/shotburst` 协议里**与设备无关**的两段判据（形状校验 + 锚点裁决）。
  *
  * 为什么单独成模块（rlbase 层，零 ECS / 零渲染器）：这两段是连拍语义的**判据本体**，
  * 而宿主 `debug_rpc_exec` 是 app 层大文件（协议 + 装配 + 帧边界钩子），判据住在那里既
  * 顶破文件行数红线、又让「锚点裁决」这种纯逻辑只能靠起引擎才能验。拆出来后它可以在
  * `just test`（无 GPU 无窗口）里逐条钉死（tests/test_burst_protocol.cppm）。
  *
- * 分层依据：只 import rlstd + nlohmann 头 ⟹ 不认设备，归 `RGL_BASE_MODULE_SOURCES`。
+ * 分层依据：只 import rlstd + 生成表 + nlohmann 头 ⟹ 不认设备，归 `RGL_BASE_MODULE_SOURCES`。
+ *
+ * 批 2 换血：形状（哪些字段、什么类型、什么区间、谁与谁互斥、白名单收哪几档）搬进
+ * `rgl/rpc_schema.lua`，本文件不再写任何一条形状文案；留在这里的是**取值**（把已验过的
+ * JSON 搬进 `BurstRequest`）与**锚点裁决**（依赖运行期帧号，不是请求形状，进不了 schema）。
  */
 
-/** `/shotburst` 请求体的解析结果（形状层；状态套用与回读登记留在调用侧）。 */
+/** `/shotburst` 请求体的解析结果（形状已由生成表验过；本结构只装值）。 */
 export struct BurstRequest {
 	uint32_t n = 0;                        ///< 张数（[1, 1024]）
 	std::string dir;                       ///< 输出目录（相对引擎 CWD）
@@ -28,74 +34,38 @@ export struct BurstRequest {
 };
 
 /**
- * `attachment` 字段（temporal-motion 的 taa_out alpha 掩膜连拍）。
+ * 解析 `/shotburst` 请求体的**形状**并取值。
  *
- * 与 `gbuf` 互斥，同 /shot 的约定——两者都是「回读哪个源」，同时给必是客户端 bug，
- * 静默取一个会拍出没要的那张图。白名单只两条：`swapchain`（= 不传，旧行为逐位不变）
- * 与 `taa_out`（具名附件回读）。
- * @return 错误消息（空 = 通过；未传字段也算通过，out 置空）
- */
-[[nodiscard]] std::string parseBurstAttachment(const nlohmann::json& body, std::string& out) {
-	out.clear();
-	if (!body.contains("attachment"))
-		return {};
-	if (body.contains("gbuf"))
-		return "'attachment' and 'gbuf' are mutually exclusive";
-	if (!body["attachment"].is_string())
-		return "'attachment' must be a string";
-	out = body["attachment"].get<std::string>();
-	if (out.empty())
-		return "'attachment' must be a non-empty name";
-	if (out != "swapchain" && out != "taa_out")
-		return "'attachment' only supports swapchain | taa_out";
-	return {};
-}
-
-/**
- * `start_frame` 字段（债-89：连拍锚 = **绝对帧号**）。
+ * 形状判据 = `rgl/rpc_schema.lua` 的 shotburst 段（字段名 / 类型 / 必填 / 区间 / 互斥 /
+ * 白名单 + 六条归因文案），经生成表由 `rpcValidateRequest` 执行。错误消息与拆分前逐字相同
+ * （客户端按文案归因，文案也是契约的一部分）。
  *
- * 为什么必须有它：不带该字段的 burst，起始帧 = 请求恰好落在第几帧（= 墙钟），而抖动相位 =
- * Halton(绝对帧号)、frame_yaw 机位 = 帧号纯函数 ⟹ 相位与机位每次启动都是彩票（亲验：同
- * 配置三跑边缘列飘 ±2px、一次整组判「ROI 里没有高对比边缘」）。本函数只管形状（400 类）；
- * 「锚已过」是状态冲突（409 类），归 `resolveBurstAnchor`。
- * @return 错误消息（空 = 通过；未传 = 0 = 现行为逐位不变）
- */
-[[nodiscard]] std::string parseBurstStartFrame(const nlohmann::json& body, uint32_t& out) {
-	out = 0;
-	if (!body.contains("start_frame"))
-		return {};
-	const auto& v = body["start_frame"];
-	if (!v.is_number_integer() || v.get<int64_t>() < 1 || v.get<int64_t>() > 0xFFFFFFFFLL)
-		return "'start_frame' must be an integer in [1, 2^32)";
-	out = static_cast<uint32_t>(v.get<int64_t>());
-	return {};
-}
-
-/**
- * 解析 `/shotburst` 请求体的**形状**（400 类失效的唯一来源）。
+ * 🔴 本函数**必须**自己调一次校验，不能只信分发层：`tests/test_burst_protocol.cppm` 不经
+ * HTTP 直接喂 body 给它，形状判据少一次调用 = 六条文案当场全红（这条锚就是用来发现
+ * "schema 变装饰"的）。分发层那次兜的是另一头：新端点忘在 handler 里调校验。
  *
- * 错误消息与拆分前逐字相同（客户端按文案归因，文案也是契约的一部分）。
- * @param body 请求体（须为对象，由调用侧先判）
+ * @param body 请求体（须为对象，由生成表那条 is_object 闸门管）
  * @param out 通过时写入解析结果
  * @return 错误消息（空 = 通过）
  */
 export [[nodiscard]] std::string parseBurstRequest(const nlohmann::json& body, BurstRequest& out) {
-	if (!body.contains("n") || !body.at("n").is_number_integer() || body.at("n").get<int>() < 1
-		|| body.at("n").get<int>() > 1024)
-		return "'n' must be an integer in [1, 1024]";
-	if (!body.contains("dir") || !body.at("dir").is_string()
-		|| body.at("dir").get<std::string>().empty())
-		return "'dir' must be a non-empty path";
-	out.n = static_cast<uint32_t>(body.at("n").get<int>());
-	out.dir = body.at("dir").get<std::string>();
-	out.prefix = body.contains("prefix")
-		? std::optional<std::string>{ body.at("prefix").get<std::string>() }
+	if (auto err = rpcValidateRequest(RpcRouteId::shotburst, body); !err.empty())
+		return err;
+	out.n = static_cast<uint32_t>(body.at(rpc_field::shotburst::n).get<int>());
+	out.dir = body.at(rpc_field::shotburst::dir).get<std::string>();
+	out.prefix = body.contains(rpc_field::shotburst::prefix)
+		? std::optional<std::string>{ body.at(rpc_field::shotburst::prefix).get<std::string>() }
 		: std::nullopt;
-	if (auto err = parseBurstAttachment(body, out.attachment); !err.empty())
-		return err;
-	out.gbuf = body.contains("gbuf") ? body.at("gbuf").get<int>() : -1;
-	if (auto err = parseBurstStartFrame(body, out.startFrame); !err.empty())
-		return err;
+	// attachment 与 gbuf 的互斥、attachment 的白名单都在表里；走到这里两者可以共存地读
+	out.attachment = body.contains(rpc_field::shotburst::attachment)
+		? body.at(rpc_field::shotburst::attachment).get<std::string>()
+		: std::string{};
+	out.gbuf = body.contains(rpc_field::shotburst::gbuf)
+		? body.at(rpc_field::shotburst::gbuf).get<int>()
+		: -1;
+	out.startFrame = body.contains(rpc_field::shotburst::start_frame)
+		? static_cast<uint32_t>(body.at(rpc_field::shotburst::start_frame).get<int64_t>())
+		: 0u;
 	return {};
 }
 

@@ -1,0 +1,593 @@
+{
+  "endpoints": [
+    {
+      "id": "routes",
+      "method": "GET",
+      "path": "/",
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true；失败走统一错误体"
+          },
+          {
+            "kind": "uint32",
+            "name": "frame",
+            "note": "装配态帧计数（纯观测，客户端可拿它核对读数时刻）"
+          },
+          {
+            "kind": "string[]",
+            "name": "routes",
+            "note": "元素 = 方法 + 空格 + 路径（如 GET /state），顺序 = 注册顺序 = 本文件记录顺序"
+          }
+        ]
+      },
+      "summary": "路由与能力发现（frame = 装配态帧计数，纯观测）",
+      "timeout_ms": 2000
+    },
+    {
+      "id": "state",
+      "method": "GET",
+      "path": "/state",
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true"
+          },
+          {
+            "kind": "uint32",
+            "name": "frame",
+            "note": "装配态帧计数"
+          },
+          {
+            "kind": "object",
+            "name": "camera",
+            "note": "当前相机姿态",
+            "shape": "camera"
+          },
+          {
+            "kind": "object[]",
+            "name": "pages",
+            "note": "每个参数页一条（label 发现面，/param 按 label 寻址）",
+            "shape": "statePage"
+          },
+          {
+            "kind": "object",
+            "name": "render",
+            "note": "窗口/渲染尺寸与生效倍率（像素类判据的口径记录）",
+            "shape": "stateRender"
+          },
+          {
+            "kind": "object",
+            "name": "graph",
+            "note": "渲染图快照（开关是否真的生效的唯一观测面：无选中时 highlight 零 draw，画面本来就不该变）",
+            "shape": "stateGraph"
+          }
+        ]
+      },
+      "summary": "相机姿态 + 全部参数页 + 渲染/图段快照（label 发现面）",
+      "timeout_ms": 2000
+    },
+    {
+      "id": "camera",
+      "method": "POST",
+      "path": "/camera",
+      "request": {
+        "fields": [
+          {
+            "error": "mode must be \"trackball\" or \"fps\"",
+            "kind": "string",
+            "name": "mode",
+            "oneOf": [
+              "trackball",
+              "fps"
+            ]
+          },
+          {
+            "error": "position must be [x, y, z]",
+            "kind": "vec3",
+            "name": "position"
+          },
+          {
+            "error": "target must be [x, y, z]",
+            "kind": "vec3",
+            "name": "target"
+          },
+          {
+            "error": "up must be [x, y, z]",
+            "kind": "vec3",
+            "name": "up"
+          },
+          {
+            "error": "yawDegrees must be a number",
+            "kind": "number",
+            "name": "yawDegrees"
+          },
+          {
+            "error": "pitchDegrees must be a number",
+            "kind": "number",
+            "name": "pitchDegrees"
+          },
+          {
+            "error": "fovDegrees must be a number",
+            "kind": "number",
+            "name": "fovDegrees"
+          },
+          {
+            "error": "'yaw_at_frame' must be an integer in [1, 2^32)",
+            "kind": "integer",
+            "max": 4294967295,
+            "min": 1,
+            "name": "yaw_at_frame"
+          }
+        ]
+      },
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true"
+          },
+          {
+            "kind": "object",
+            "name": "camera",
+            "note": "本请求套用后的姿态回显（不是应答到达时的姿态，引擎还在跑帧）",
+            "shape": "camera"
+          },
+          {
+            "absentWhen": "请求未带 yaw_at_frame（带了但校验失败是 400/409，没有成功回包）",
+            "kind": "uint32",
+            "name": "yawPinnedFrame",
+            "note": "回显自证：客户端核对锚点帧号（没回显 = 没钉）",
+            "optional": true
+          }
+        ]
+      },
+      "summary": "写相机姿态（任意子集，缺字段不改；角度一律度）",
+      "timeout_ms": 2000
+    },
+    {
+      "id": "param",
+      "method": "POST",
+      "path": "/param",
+      "request": {
+        "fields": [
+          {
+            "error": "'label' must be a string",
+            "kind": "string",
+            "name": "label",
+            "required": true
+          },
+          {
+            "error": "'material' must be an integer",
+            "kind": "integer",
+            "name": "material"
+          },
+          {
+            "error": "'value' is required",
+            "name": "value",
+            "required": true
+          },
+          {
+            "error": "'page' must be a string",
+            "kind": "string",
+            "name": "page"
+          }
+        ]
+      },
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true"
+          },
+          {
+            "kind": "string",
+            "name": "label",
+            "note": "回显请求"
+          },
+          {
+            "kind": "json",
+            "name": "value",
+            "note": "回显请求的 value；类型随目标条目 kind（slider/int = 数值，color/drag3 = 三元数组）"
+          }
+        ]
+      },
+      "summary": "按 label 写一个面板参数（page/material 可选寻址）",
+      "timeout_ms": 2000
+    },
+    {
+      "id": "shot",
+      "method": "POST",
+      "path": "/shot",
+      "request": {
+        "fields": [
+          {
+            "error": "'file' must be a string",
+            "kind": "string",
+            "name": "file"
+          },
+          {
+            "error": "'gbuf' must be an integer",
+            "kind": "integer",
+            "name": "gbuf"
+          },
+          {
+            "emptyError": "'attachment' must be a non-empty name",
+            "error": "'attachment' must be a string",
+            "exclusive": "gbuf",
+            "exclusiveError": "'attachment' and 'gbuf' are mutually exclusive",
+            "kind": "string",
+            "name": "attachment",
+            "nonEmpty": true
+          }
+        ]
+      },
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true"
+          },
+          {
+            "kind": "string",
+            "name": "file",
+            "note": "已写盘 PNG 的绝对路径（writeCapturePng 的返回值；gbuf 通道的名字由写盘方定为 screenshots/gbuffer_<通道>.png，不采用请求里的 file）"
+          }
+        ]
+      },
+      "summary": "帧捕获写盘（帧首收单、本帧回读、下帧结算，故给 10s）",
+      "timeout_ms": 10000
+    },
+    {
+      "id": "shotburst",
+      "method": "POST",
+      "path": "/shotburst",
+      "request": {
+        "fields": [
+          {
+            "error": "'n' must be an integer in [1, 1024]",
+            "kind": "integer",
+            "max": 1024,
+            "min": 1,
+            "name": "n",
+            "required": true
+          },
+          {
+            "error": "'dir' must be a non-empty path",
+            "kind": "string",
+            "name": "dir",
+            "nonEmpty": true,
+            "required": true
+          },
+          {
+            "error": "'prefix' must be a string",
+            "kind": "string",
+            "name": "prefix"
+          },
+          {
+            "emptyError": "'attachment' must be a non-empty name",
+            "error": "'attachment' must be a string",
+            "exclusive": "gbuf",
+            "exclusiveError": "'attachment' and 'gbuf' are mutually exclusive",
+            "kind": "string",
+            "name": "attachment",
+            "nonEmpty": true,
+            "oneOf": [
+              "swapchain",
+              "taa_out"
+            ],
+            "oneOfError": "'attachment' only supports swapchain | taa_out"
+          },
+          {
+            "error": "'gbuf' must be an integer",
+            "kind": "integer",
+            "name": "gbuf"
+          },
+          {
+            "error": "'start_frame' must be an integer in [1, 2^32)",
+            "kind": "integer",
+            "max": 4294967295,
+            "min": 1,
+            "name": "start_frame"
+          }
+        ]
+      },
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true（整批交齐才有一条应答）"
+          },
+          {
+            "kind": "uint32",
+            "name": "count",
+            "note": "采集帧数 = 请求的 n"
+          },
+          {
+            "kind": "uint32",
+            "name": "startFrame",
+            "note": "首张实际落帧（回显自证：带 start_frame 的调用侧核对它等于锚点；锚帧被 acquire 跳帧时这里才是真相）"
+          },
+          {
+            "kind": "string[]",
+            "name": "files",
+            "note": "绝对路径，逐帧一条（顺序 = 帧序）"
+          }
+        ]
+      },
+      "summary": "连续 N 帧采集（整批交齐才应答，N 上限 1024 帧 + 逐张写盘，故给 120s）",
+      "timeout_ms": 120000
+    },
+    {
+      "id": "resize",
+      "method": "POST",
+      "path": "/resize",
+      "request": {
+        "fields": [
+          {
+            "error": "resize: width/height must be > 0",
+            "kind": "integer",
+            "min": 1,
+            "name": "width",
+            "required": true
+          },
+          {
+            "error": "resize: width/height must be > 0",
+            "kind": "integer",
+            "min": 1,
+            "name": "height",
+            "required": true
+          }
+        ]
+      },
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true"
+          },
+          {
+            "kind": "uint32",
+            "name": "width",
+            "note": "回显请求（真正的重建由下一帧 resizeSystem 完成）"
+          },
+          {
+            "kind": "uint32",
+            "name": "height",
+            "note": "回显请求"
+          },
+          {
+            "kind": "uint32",
+            "name": "frame",
+            "note": "收单时刻的帧计数"
+          }
+        ]
+      },
+      "summary": "headless 改交换链尺寸（冒烟用；窗口模式出声拒）",
+      "timeout_ms": 2000
+    },
+    {
+      "id": "pass",
+      "manualReason": "on 是条件性必填（只在未给 toggle_frames 时才要），条件性必填不在约束语言里",
+      "manualShape": true,
+      "method": "POST",
+      "path": "/pass",
+      "request": {
+        "fields": [
+          {
+            "name": "name"
+          },
+          {
+            "name": "toggle_frames"
+          },
+          {
+            "name": "on"
+          }
+        ]
+      },
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true"
+          },
+          {
+            "kind": "string",
+            "name": "name",
+            "note": "回显 pass 名"
+          },
+          {
+            "kind": "uint32",
+            "name": "frame",
+            "note": "收单时刻的帧计数（生效在之后的安全点，要读生效后的值再发一次 /state）"
+          },
+          {
+            "absentWhen": "toggle_frames 形态（那条分支不回 on）",
+            "kind": "boolean",
+            "name": "on",
+            "note": "回显请求的目标状态（on 形态）",
+            "optional": true
+          },
+          {
+            "absentWhen": "on 形态（只有 toggle_frames 形态回）",
+            "kind": "uint32",
+            "name": "toggleFrames",
+            "note": "回显请求的翻转帧数",
+            "optional": true
+          },
+          {
+            "absentWhen": "on 形态（只有 toggle_frames 形态回）",
+            "kind": "uint32",
+            "name": "startFrame",
+            "note": "第一个翻转帧 = 收单帧 + 1",
+            "optional": true
+          },
+          {
+            "absentWhen": "toggle_frames 形态（只有 on 形态回）",
+            "kind": "uint32",
+            "name": "passes",
+            "note": "收单时刻的 pass 数（不是生效后的读数）",
+            "optional": true
+          },
+          {
+            "absentWhen": "toggle_frames 形态（只有 on 形态回）",
+            "kind": "uint32",
+            "name": "recompiles",
+            "note": "收单时刻的累计重编译次数",
+            "optional": true
+          }
+        ]
+      },
+      "summary": "pass 级动态开关（复合事务的安全点入口；toggle_frames = 逐帧翻转）",
+      "timeout_ms": 2000
+    },
+    {
+      "id": "quit",
+      "method": "POST",
+      "path": "/quit",
+      "response": {
+        "fields": [
+          {
+            "kind": "boolean",
+            "name": "ok",
+            "note": "恒 true（应答先兑现再置位，本帧 HTTP 线程仍拿得到 200）"
+          },
+          {
+            "kind": "uint32",
+            "name": "frame",
+            "note": "收单时刻的帧计数（进程在**下个**帧边界退出）"
+          }
+        ]
+      },
+      "summary": "置 AppExit = 下个帧边界干净退出（自动化测试收尾用）",
+      "timeout_ms": 2000
+    }
+  ],
+  "module_name": "rpc_schema_generated",
+  "shapes": [
+    {
+      "fields": [
+        {
+          "kind": "string",
+          "name": "mode",
+          "note": "trackball | fps"
+        },
+        {
+          "kind": "vec3",
+          "name": "position"
+        },
+        {
+          "kind": "vec3",
+          "name": "target"
+        },
+        {
+          "kind": "vec3",
+          "name": "up"
+        },
+        {
+          "kind": "number",
+          "name": "yawDegrees"
+        },
+        {
+          "kind": "number",
+          "name": "pitchDegrees"
+        },
+        {
+          "kind": "number",
+          "name": "fovDegrees"
+        }
+      ],
+      "name": "camera",
+      "note": "相机姿态快照（rpcCameraJson）。角度一律度（同 camera.lua 的 fovDegrees 语义）。生效字段随 mode 而异：trackball 看 position/target/up，fps 看 position/yaw/pitch，另一组照样回显（fps 下 target 经 cameraAimAt 与 yaw/pitch 保持一致）"
+    },
+    {
+      "fields": [
+        {
+          "kind": "uint32",
+          "name": "windowWidth",
+          "note": "窗口物理像素"
+        },
+        {
+          "kind": "uint32",
+          "name": "windowHeight",
+          "note": "窗口物理像素"
+        },
+        {
+          "kind": "uint32",
+          "name": "renderWidth",
+          "note": "渲染网格像素（= swapchain 尺寸 × scale）"
+        },
+        {
+          "kind": "uint32",
+          "name": "renderHeight",
+          "note": "渲染网格像素"
+        },
+        {
+          "kind": "number",
+          "name": "scale",
+          "note": "生效的 render_scale"
+        }
+      ],
+      "name": "stateRender",
+      "note": "像素口径（批 14.3：像素类判据读的是后缓冲截图，renderScale ≠ 1 时画面是内部网格放大来的；三个值都给，工具不必猜换算）"
+    },
+    {
+      "fields": [
+        {
+          "kind": "uint32",
+          "name": "passes",
+          "note": "当前 desc 里的 pass 数（插拔的直接读数）"
+        },
+        {
+          "kind": "string[]",
+          "name": "presentPasses",
+          "note": "当前在场的 pass 名（顺序 = 执行序）"
+        },
+        {
+          "kind": "string[]",
+          "name": "dynamicPasses",
+          "note": "在册可开关的 pass 名（含已撤回的；/pass 的 name 从这里取）"
+        },
+        {
+          "kind": "uint32",
+          "name": "recompiles",
+          "note": "累计重编译次数（出厂档判据 = 0）"
+        },
+        {
+          "kind": "number",
+          "name": "lastRecompileUs",
+          "note": "最近一次重编译耗时（微秒；0 = 还没重编译过）"
+        }
+      ],
+      "name": "stateGraph",
+      "note": "渲染图快照（Renderer::graphStatus，现取）"
+    },
+    {
+      "fields": [
+        {
+          "kind": "string",
+          "name": "name",
+          "note": "页名（/param 的 page 字段的寻址值）"
+        },
+        {
+          "kind": "json",
+          "name": "entries",
+          "note": "条目数组，元素形状随 kind ∈ slider | int | color | drag3 | text 而异（text 无 label；min/max/speed 随 kind 出现与否）；value 经条目 get 回调现读源头 = 当前真实值（判据本体 = rpcEntriesJson）"
+        }
+      ],
+      "name": "statePage",
+      "note": "一个参数页。粗粒度登记（docs/rpc_单源_plan.md §3.1 边界②）：entries 的细目归 param_semantics 生成管线与面板控件，本表不抄 label 词表"
+    }
+  ],
+  "version": 1
+}

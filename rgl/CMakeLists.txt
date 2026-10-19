@@ -265,6 +265,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_burst.cppm"  # /shotburst 协议判据（形状解析 + 绝对帧号锚点裁决，零设备）
+    "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_shape.cppm"  # RPC 请求形状校验（消费 rpc_schema.lua 生成表；零设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/debug_rpc_payload.cppm"  # RPC 应答形状闸 + 参数页↔JSON 编解码（零设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/types_generated.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/material_types_generated.cppm"
@@ -276,6 +277,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/compute_push_types_generated.cppm"  # compute push 契约（无 schema；替换 evssm/izb 手写镜像 struct）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/compute_bindings_generated.cppm"    # compute binding 名 → 号 接口表（makeMappedCompute 的查表对象；纯查表无设备 ⟹ rlbase）
     "${CMAKE_CURRENT_SOURCE_DIR}/generated/param_semantics_generated.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/generated/rpc_schema_generated.cppm"  # RPC 路由表（rpc_schema.lua 的生成物；纯查表零设备 ⟹ rlbase）
 )
 
 set(RGL_GFX_MODULE_SOURCES

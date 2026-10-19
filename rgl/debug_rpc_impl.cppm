@@ -7,16 +7,11 @@ module debug_rpc:impl;
 import debug_rpc;  // clang 不给 partition impl unit 隐式 import 主接口——必须显式
 import rlstd;
 import rllogger;
+import rpc_schema_generated;  // 路由表（注册与超时的唯一来源；真相源 = rgl/rpc_schema.lua）
 
 namespace RGL {
 
 namespace {
-
-/** 超时表（docs/archive/phase10b_plan.md D12）：`/shot` 帧首请求 → 下帧结算，给 10s；其余 2s。
- * `/shotburst` 的应答要等**整批**交齐才兑现（n 上限 1024 帧 + 逐张写盘），故单独一档。 */
-constexpr std::chrono::milliseconds kTimeoutShot{10000};
-constexpr std::chrono::milliseconds kTimeoutBurst{120000};
-constexpr std::chrono::milliseconds kTimeoutDefault{2000};
 
 /**
  * 运输层错误体（统一形状 `{"ok":false,"error":...}`；命令级错误由 applier 自行构造）。
@@ -88,24 +83,31 @@ bool DebugRpcServer::start(std::string host, int port) {
 		return running();
 	Impl* p = impl.get();
 
-	// 路由：五个已知入口共用一个 handler（方法/路径进 RpcRequest，applier 认领）；
+	// 路由：**遍历生成表逐条注册**（手写的路径字面量在这里不存在 = rules_rpc 面 2 扫到即红）。
+	// 表 = `rgl/rpc_schema.lua` 的生成物；一条记录同时给出方法、路径与该端点的超时——注册期把
+	// 身份绑进闭包，等待侧不必再按路径反查（少一次查表，也少一个"路径不在表里"的悬空状态）。
 	// 未知路由/方法由 error handler 兜 JSON 404/405。pattern 走 std::regex_match 全串匹配。
-	auto serve = [this](const httplib::Request& req, httplib::Response& res) {
+	auto serve = [this](RpcRouteId id, const httplib::Request& req, httplib::Response& res) {
 		try {
-			respondReply(res, awaitReply(RpcRequest{req.method, req.path, req.body}));
+			respondReply(res, awaitReply(RpcRequest{req.method, req.path, req.body}, id));
 		} catch (const std::exception& e) {
 			respondStatus(res, 500, errorBody(e.what()));
 		}
 	};
-	p->server.Get("/", serve);
-	p->server.Get("/state", serve);
-	p->server.Post("/camera", serve);
-	p->server.Post("/param", serve);
-	p->server.Post("/shot", serve);
-	p->server.Post("/shotburst", serve);
-	p->server.Post("/resize", serve);  // B2-4③′：headless 改尺寸（冒烟用）
-	p->server.Post("/pass", serve);    // B2-5：pass 级动态开关（复合事务的安全点入口）
-	p->server.Post("/quit", serve);
+	for (const auto& route : kRpcRoutes) {
+		auto handler = [serve, id = route.id](const httplib::Request& req, httplib::Response& res) {
+			serve(id, req, res);
+		};
+		// 不写 default：方法只有生成表里那两档，第三档（schema 写错）在生成物里就编不过
+		switch (route.method) {
+		case RpcRouteMethod::get:
+			p->server.Get(std::string(route.path), handler);
+			break;
+		case RpcRouteMethod::post:
+			p->server.Post(std::string(route.path), handler);
+			break;
+		}
+	}
 	// httplib 对**所有** status≥400 都回调 error handler（返回值只控制 range 应用），
 	// 故必须只补空体：我们 handler 自产的 400/404/409/503/504 载荷不能被覆盖。
 	// 非空体 = 已有语义（自家 dispatch 或 httplib 自置），空体 = httplib 兜的 404/405/431 等。
@@ -145,8 +147,8 @@ bool DebugRpcServer::start(std::string host, int port) {
 	p->listener = std::thread([p] { p->server.listen_after_bind(); });
 	p->started = true;
 	if (auto* logger = RLLogger::getInstance())
-		logger->info("debug_rpc: HTTP POST RPC 监听 {}:{}（仅 loopback；GET /state 发现参数）",
-			host, port);
+		logger->info("debug_rpc: HTTP RPC 监听 {}:{}（仅 loopback；{} 条路由，根路由回包给出发现面）",
+			host, port, kRpcRouteCount);
 	return true;
 }
 
@@ -200,7 +202,7 @@ void DebugRpcServer::poll() {
 	}
 }
 
-RpcReply DebugRpcServer::awaitReply(const RpcRequest& request) {
+RpcReply DebugRpcServer::awaitReply(const RpcRequest& request, RpcRouteId route) {
 	if (!impl || !impl->started)
 		return RpcReply{503, errorBody("server not started")};
 	Impl* p = impl.get();
@@ -214,9 +216,9 @@ RpcReply DebugRpcServer::awaitReply(const RpcRequest& request) {
 		p->queue.push_back(Impl::Pending{request, reply});
 	}
 
-	const auto timeout = request.path == "/shot"
-	    ? kTimeoutShot
-	    : (request.path == "/shotburst" ? kTimeoutBurst : kTimeoutDefault);
+	// 超时 = 该端点在能力清单里登记的那一档（注册期把身份绑进闭包，故这里不必按路径反查）。
+	// 帧边界没跑到就撤单 + 504；跨帧捕获与整批连拍各要多久由 schema 说话，本文件不再抄一份。
+	const auto timeout = std::chrono::milliseconds(rpcRouteById(route).timeoutMs);
 	if (future.wait_for(timeout) != std::future_status::ready) {
 		// 尽力撤单：还躺在队列里就丢弃（已交 applier 的撤不掉——晚一步套用，无害）
 		std::lock_guard<std::mutex> lock(p->mutex);

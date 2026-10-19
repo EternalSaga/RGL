@@ -217,6 +217,40 @@ add_custom_command(TARGET reflect PRE_BUILD
 list(APPEND RGL_GENERATED_CPPM ${PARAM_SEMANTICS_CPPM})
 list(APPEND REFLECTION_PAIRS "${PARAM_SEMANTICS_CPPM}|${PARAM_SEMANTICS_CONFIG},${PARAM_SEMANTICS_TEMPLATE}")
 
+# rpc_schema 管线（docs/rpc_单源_plan.md 批 1：路由与超时单源）——**同一份输入三份产物**：
+#   · rpc_schema_generated.cppm = C++ 路由表（注册 / 分发 / 超时 / 路由回包的唯一消费面）；
+#   · rpc_schema.json           = 同一份数据的 JSON 形态（批 4 的客户端是 Python，而 Python
+#     没有标准库 Lua 解析器；让客户端去 shell 调 lua = 给工具加运行期外部依赖）；
+#   · rpc_schema.md             = 人工可读协议参考（批 3；字段级文档的唯一载体）。
+# 输入是 **Lua**（用户拍板：项目的 schema 一律 Lua，全局风格统一）⟹ 走 render 的 --lua 入口
+# （tools/schema_loader.cppm::loadLuaToJson，与 loadSchema 同一套沙箱纪律）。
+# 🔴 两份产物**同一组输入、同一次生成**（同 compute-access 的承重形状）：结构上不可能互不一致，
+# 剩下的唯一失效形态是"有人只重生成/只手改了一份"——那由 rules_rpc 面 1 三方对账兜
+# （SHA1 守卫只哈希输入，产物被手改它看不见）。
+# 批 3 起追加**第二条 render**（同一输入、同一次 reflect 的第三份产物）：人工可读协议参考
+# rpc_schema.md（模板 rpc_schema_md.inja）。不另起管线 = 复用同一条 --lua 入口与同一组守卫；
+# md 与 schema 的一致性由 rules_rpc 面 5/6 对账（SHA1 守卫依旧只哈希输入）。
+set(RPC_SCHEMA_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/rpc_schema_cppm.inja")
+set(RPC_SCHEMA_MD_TEMPLATE "${CMAKE_SOURCE_DIR}/tools/templates/rpc_schema_md.inja")
+set(RPC_SCHEMA_LUA "${CMAKE_CURRENT_SOURCE_DIR}/rpc_schema.lua")
+set(RPC_SCHEMA_CPPM "${GEN_SRC_DIR}/rpc_schema_generated.cppm")
+set(RPC_SCHEMA_JSON "${GEN_SRC_DIR}/rpc_schema.json")
+set(RPC_SCHEMA_MD "${GEN_SRC_DIR}/rpc_schema.md")
+add_custom_command(TARGET reflect PRE_BUILD
+    COMMAND reflection_tool render --lua ${RPC_SCHEMA_LUA}
+            --output ${RPC_SCHEMA_CPPM} --template ${RPC_SCHEMA_TEMPLATE}
+            --output-json ${RPC_SCHEMA_JSON}
+    VERBATIM)
+add_custom_command(TARGET reflect PRE_BUILD
+    COMMAND reflection_tool render --lua ${RPC_SCHEMA_LUA}
+            --output ${RPC_SCHEMA_MD} --template ${RPC_SCHEMA_MD_TEMPLATE}
+    VERBATIM)
+list(APPEND RGL_GENERATED_CPPM ${RPC_SCHEMA_CPPM})
+list(APPEND REFLECTION_PAIRS
+    "${RPC_SCHEMA_CPPM}|${RPC_SCHEMA_LUA},${RPC_SCHEMA_TEMPLATE}"
+    "${RPC_SCHEMA_JSON}|${RPC_SCHEMA_LUA},${RPC_SCHEMA_TEMPLATE}"
+    "${RPC_SCHEMA_MD}|${RPC_SCHEMA_LUA},${RPC_SCHEMA_MD_TEMPLATE}")
+
 # 收尾：写输入哈希清单（check 守卫的比对基准；与产物一起提交）
 add_custom_command(TARGET reflect PRE_BUILD
     COMMAND ${CMAKE_COMMAND} -DMODE=write

@@ -1,5 +1,7 @@
 module;
 
+#include <algorithm>      // std::ranges::all_of / sort（Lua 表键形态判定）
+#include <cmath>          // std::floor / std::fabs（整值归一）
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include <sol/sol.hpp>
@@ -161,6 +163,140 @@ export inline bool has(const nlohmann::json& obj, std::string_view key) {
 export inline const char* getString(const nlohmann::json& obj, std::string_view key) {
 	if (!has(obj, key)) return nullptr;
 	return obj[key].get_ref<const std::string&>().c_str();
+}
+
+// ─── Lua → nlohmann::json 通用转换（reflection_tool render 的 --lua 入口）──────────
+//
+// 为什么要有它：`render` 子命令只吃 JSON，而项目的 schema 一律是 Lua（*_schema.lua /
+// configs/*.lua，用户拍板「全局风格统一」）。本函数是那两处扩展里的第一处——**扩既有件**，
+// 不是新造机制：沙箱、读取路径、报错出口全部照抄下面的 loadSchema。
+//
+// 🔴 沙箱不是防攻击（schema 是仓库内文件），是让「在 schema 里写函数 / 读环境」这种形态
+// **当场报错而不是静默生效**：dofile/loadfile/require/package 置 nil 挡住"读别的文件"，
+// 而函数/userdata 值本身转不出 JSON ⟹ 下面必须**抛**，绝不许转成 null 或空串（静默降级
+// 会让"schema 里写了个函数"变成"该字段读起来是空的"，那是最难归因的一类错）。
+//
+// 数字：Lua 5.4 区分整数与浮点，但 sol2 的 `get_type()` 两者都报 `number`。这里按
+// 「值本身是整值」归一为整数（timeout_ms = 2000 必须渲染成 `2000` 而不是 `2000.0`，
+// 否则模板产出的 C++ 字面量带小数点、`uint32_t` 字段当场编不过）。
+//
+// 表：键全为 1..n 连续整数 → JSON 数组；全为字符串 → JSON 对象；混合/非连续/其它键类型
+// → 抛（JSON 表达不了，静默挑一种 = 给下游一份看起来正常的错形状）。
+
+/** 递归深度上限（自引用表的最便宜防线；schema 实际深度 ≤4，留足余量）。 */
+inline constexpr int kLuaJsonMaxDepth = 32;
+
+export nlohmann::json luaValueToJson(const sol::object& value, std::string_view where, int depth);
+
+/** 一个 Lua 表的键值对（显式类型而不是 `auto` 形参：泛型 lambda 里 `.as<T>()` 要写 `template as`）。 */
+using LuaEntry = std::pair<sol::object, sol::object>;
+
+/** 一个 Lua 表 → 数组或对象（判据见 luaValueToJson 的注释）。 */
+inline nlohmann::json luaTableToJson(sol::table table, std::string_view where, int depth) {
+	if (depth > kLuaJsonMaxDepth)
+		throw std::runtime_error(fmt::format(
+			"{}: 嵌套深度超过 {}——自引用表或写错了层级", where, kLuaJsonMaxDepth));
+
+	std::vector<LuaEntry> items;
+	items.reserve(static_cast<size_t>(table.size()));
+	table.for_each([&items](const sol::object& key, const sol::object& val) {
+		items.emplace_back(key, val);
+	});
+	if (items.empty())
+		return nlohmann::json::object();  // 空表按对象出（nlohmann 的默认形态）
+
+	const bool allInteger = std::ranges::all_of(items, [](const LuaEntry& kv) {
+		return kv.first.get_type() == sol::type::number
+		    && kv.first.as<double>() == std::floor(kv.first.as<double>());
+	});
+	const bool allString = std::ranges::all_of(items, [](const LuaEntry& kv) {
+		return kv.first.get_type() == sol::type::string;
+	});
+	if (!allInteger && !allString)
+		throw std::runtime_error(fmt::format(
+			"{}: 表里混了不同形态的键（整数键与字符串键不能同表——JSON 表达不了）", where));
+
+	if (allString) {
+		nlohmann::json out = nlohmann::json::object();
+		for (const auto& [key, val] : items)
+			out[key.as<std::string>()] =
+				luaValueToJson(val, fmt::format("{}[{}]", where, key.as<std::string>()), depth + 1);
+		return out;
+	}
+
+	std::vector<double> keys;
+	keys.reserve(items.size());
+	for (const auto& [key, _val] : items)
+		keys.push_back(key.as<double>());
+	std::ranges::sort(keys);
+	for (size_t i = 0; i < keys.size(); ++i) {
+		if (keys[i] != static_cast<double>(i + 1))
+			throw std::runtime_error(fmt::format(
+				"{}: 整数键必须是 1..n 连续（第 {} 个键是 {:g}）——"
+				"稀疏数组/0 基下标在 JSON 里没有对应形态",
+				where, i + 1, keys[i]));
+	}
+	nlohmann::json out = nlohmann::json::array();
+	for (const auto& [key, val] : items)
+		out[static_cast<size_t>(key.as<double>()) - 1] = luaValueToJson(
+			val, fmt::format("{}[{:g}]", where, key.as<double>()), depth + 1);
+	return out;
+}
+
+export nlohmann::json luaValueToJson(const sol::object& value, std::string_view where, int depth) {
+	switch (value.get_type()) {
+	case sol::type::lua_nil: return nullptr;
+	case sol::type::boolean: return value.as<bool>();
+	case sol::type::number: {
+		const double num = value.as<double>();
+		if (num == std::floor(num) && std::abs(num) < 9.0e15)
+			return static_cast<int64_t>(num);  // 整值归一（见函数头注释）
+		return num;
+	}
+	case sol::type::string: return value.as<std::string>();
+	case sol::type::table: return luaTableToJson(value.as<sol::table>(), where, depth);
+	// 🔴 这四类一律抛：转成 null/空串 = 「schema 里写了函数」静默变成「该字段是空的」
+	case sol::type::function:
+		throw std::runtime_error(fmt::format(
+			"{}: schema 里写了函数值——能力清单是数据，不是代码（沙箱纪律：函数不落地）", where));
+	case sol::type::userdata:
+	case sol::type::lightuserdata:
+		throw std::runtime_error(fmt::format("{}: schema 里写了 userdata 值", where));
+	case sol::type::thread:
+		throw std::runtime_error(fmt::format("{}: schema 里写了协程值", where));
+	default:
+		throw std::runtime_error(fmt::format("{}: 无法转成 JSON 的 Lua 值", where));
+	}
+}
+
+/**
+ * 读一份 Lua 文件并把它的返回值转成 `nlohmann::json`（`render --lua` 的输入面）。
+ * @param luaPath 相对仓库根的 Lua 文件路径
+ * @return 根表的 JSON 形态
+ * @throw std::runtime_error 读不到 / 根不是表 / 含函数等不可转换值 / 键形态非法
+ */
+export nlohmann::json loadLuaToJson(const std::filesystem::path& luaPath) {
+	sol::state lua;
+	lua.open_libraries(sol::lib::base, sol::lib::table, sol::lib::string, sol::lib::math);
+	lua["dofile"] = sol::nil;
+	lua["loadfile"] = sol::nil;
+	lua["package"] = sol::nil;
+	lua["require"] = sol::nil;
+
+	const std::string path = luaPath.string();
+	auto result = lua.do_file(path.c_str());
+	if (!result.valid()) {
+		const sol::error err = result;
+		throw std::runtime_error(fmt::format("Failed to load Lua: {}: {}", path, err.what()));
+	}
+	if (result.return_count() < 1)
+		throw std::runtime_error(fmt::format("{}: 没有返回值（schema 文件必须 `return {{ … }}`）", path));
+	const sol::object root = result.get<sol::object>(0);  // 0 = 第一个返回值（sol2 的偏移口径）
+	if (root.get_type() != sol::type::table)
+		throw std::runtime_error(fmt::format(
+			"{}: 根不是表（实际是 {}）——schema 文件必须 `return {{ … }}`", path,
+			static_cast<int>(root.get_type())));
+	return luaTableToJson(root.as<sol::table>(), path, 0);
 }
 
 export Schema loadSchema(const std::filesystem::path& luaPath) {

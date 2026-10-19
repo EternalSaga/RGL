@@ -387,17 +387,60 @@ ECS_GLOBAL_BASELINE_COMMENT = (
     "在拿全局变量携带状态，处置是搬进 registry context/函数参数/类成员，不是来这里登记额度。"
     f"确实清掉一批后用 `{ECS_GLOBAL_UPDATE_CMD}` 收账。判据与盲区 → docs/风格检查规则.md §9。")
 
-# ─── RPC 路由 ↔ dispatch 双向对账（债-125；规则 = rules_text.rpc_route_checks，§10）──
-# 两份名单住在同一模块的两个文件里，**各自只在自己的文件里扫**：注册侧文件里另有
-# `request.path == "/shot"` 形态的**超时选择**字面量（debug_rpc_impl.cppm:217-219）与
-# 客户端探端口 `probe.Get("/")`（:126）——跨文件扫或正则放宽（去掉 `server\.` 锚定）
-# 都会把它们当路由 = 规则说谎比漏报更贵。
-# dispatch 侧的 `!=` 形态（GET 分支 `request.path != "/state"`）**也算「dispatch 认识这个
-# path」**——不算则 /state 一上来就误报（实测：`==` 与 `!=` 两种比较合起来两侧集合相等）。
-RPC_ROUTE_REGISTER_FILE = "rgl/debug_rpc_impl.cppm"
-RPC_ROUTE_DISPATCH_FILE = "rgl/debug_rpc_exec_impl.cppm"
-RPC_ROUTE_REGISTER_RE = r'server\.(?:Get|Post)\("([^"]+)"'
-RPC_ROUTE_DISPATCH_RE = r'request\.path\s*(?:==|!=)\s*"([^"]+)"'
+# ─── RPC 能力单源对账（债-125 的账在此收；规则 = rules_rpc.rpc_schema_checks，§10）──
+# 唯一真相源 = rgl/rpc_schema.lua，两份生成物同一次 just reflect 产出（.cppm 给 C++、
+# .json 给非 C++ 客户端）。构建期的 SHA1 守卫只哈希**输入**，产物被手改 / 只重生成一份它
+# 看不见 ⟹ 面 1 三方逐条对账；面 2 拦"绕过 schema 在代码里写路由/字段事实"；面 3 拦
+# "生成物里的字段常量没人读"（= schema 静默变装饰）。判据与盲区 → rules_rpc.py 模块
+# docstring 与 docs/风格检查规则.md §10（本文件不抄判据）。
+RPC_SCHEMA_FILE = "rgl/rpc_schema.lua"
+RPC_SCHEMA_CPPM = "rgl/generated/rpc_schema_generated.cppm"
+RPC_SCHEMA_JSON = "rgl/generated/rpc_schema.json"
+# 批 3：人工可读协议参考（第三条 render、同一份输入；模板 tools/templates/rpc_schema_md.inja）。
+RPC_SCHEMA_MD = "rgl/generated/rpc_schema.md"
+# 响应字段 kind 词表（批 3）。这是**文档口径**的词表，不是运行期校验的档位（请求侧的
+# RpcFieldKind 才是那份）——两边刻意不共用：响应没有运行期判据本体，词表只保证 md 参考
+# 里的类型写法统一。加一档必须同时给 rpc_schema_md.inja 的渲染口径，别只扩这里。
+RPC_RESPONSE_KINDS = ("boolean", "uint32", "number", "string", "vec3",
+                      "string[]", "object", "object[]", "json")
+# 消费文件必须真的 import 生成模块：找不到这一行 = 分发/注册不再查表 = 这条面已经瞎了，
+# 而"零警告"会被读成"单源还在"（失效必须出声）。改名/搬文件同理。
+# 批 2 起含 debug_rpc_shape（形状校验 = 生成表的新消费点）。
+RPC_SCHEMA_CONSUMER_FILES = ("rgl/debug_rpc_impl.cppm", "rgl/debug_rpc_exec_impl.cppm",
+                             "rgl/debug_rpc_payload.cppm", "rgl/debug_rpc_shape.cppm",
+                             "rgl/debug_rpc_burst.cppm")
+# 判据 = **语句形态**（行首 import），不是"文件里出现过这串字"：实测把 import 注释掉
+# （`// import rpc_schema_generated;`）时子串仍在 ⟹ 规则全绿，而消费点已经没了（注入 5e 抓到）。
+RPC_SCHEMA_IMPORT_MODULE = "rpc_schema_generated"
+# 面 2/3 的扫描面 = 引擎模块树，生成物目录除外（生成物里当然写着路径字面量）。
+# 🔴 复用样式规则的"生成物不参与源码规则"那一条口径，不再抄一份"什么算生成物"。
+RPC_SCHEMA_SCAN_DIRS = ("rgl",)
+RPC_SCHEMA_SCAN_EXCLUDE_DIRS = EXCLUDE_SUBDIRS
+RPC_SCHEMA_SCAN_SUFFIXES = (".cppm",)
+# 注册字面量：httplib 的注册方法 + 紧跟其后的字符串字面量。`server` 锚定是必要的——
+# 同文件里的端口探测写的是 `probe.Get("/")`（那是客户端探测，不是路由注册）。
+# 生成表驱动的注册循环写的是 `server.Get(std::string(route.path), …)`，不吃字面量。
+RPC_ROUTE_LITERAL_RE = r'\bserver\.(?:Get|Post|Put|Delete|Head|Options|Trace|Connect)\s*\(\s*"'
+# 分发字面量：按路径比较挑处理者（== 与 != 两种写法都算，同原 §10 的口径）。
+RPC_ROUTE_PATH_COMPARE_RE = r'\brequest\.path\s*(?:==|!=)\s*"'
+# 路由字符串字面量（`"GET /x"` 形态）：路由回包曾经是这种副本，现在从生成表拼装。
+# 只认双引号紧跟方法名的形态——注释里的 `GET /state` 用反引号，不算。
+RPC_ROUTE_METHOD_TEXT_RE = r'"(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|TRACE) /'
+# 请求字段名字面量（批 2）：读请求体的模块里再出现 body.at("x") / body.contains("x")，
+# 就意味着有人绕过生成表的字段名常量写了一份副本——改 schema 里的字段名时它不会红。
+# 两条（at / contains）分开存，是为了报错时能点名"是哪种写法"。只扫读请求体的文件（口径
+# 与限定理由 → rules_rpc._is_rpc_request_file）。
+RPC_FIELD_LITERAL_RES = (
+    r'\bbody\s*\.\s*(?:at|contains)\s*\(\s*"',
+    r'\bbody\s*\[\s*"',
+)
+# 生成物侧的路由行（与 tools/templates/rpc_schema_cppm.inja 的产出式同源）。
+# method 在生成物里是 RpcRouteMethod::get（小写枚举），对账前统一成大写再比。
+# 批 2 起行尾多两枚：manualShape 档 + 该端点的字段表变量名（字段级对账的挂载点）。
+RPC_SCHEMA_ROUTE_RE = (
+    r'RpcRouteDef\{\s*RpcRouteId::(?P<id>\w+)\s*,\s*RpcRouteMethod::(?P<method>\w+)\s*,\s*'
+    r'"(?P<methodText>[^"]*)"\s*,\s*"(?P<path>[^"]*)"\s*,\s*"(?P<summary>(?:\\.|[^"\\])*)"'
+    r'\s*,\s*(?P<timeout>\d+)u\s*,\s*(?P<manual>true|false)\s*,\s*kRequestFields_(?P<fid>\w+)\s*\}')
 
 # ─── 渲染图 Lua 词表对账（债-122 另一半；规则 = rules_text.rg_enum_vocab_checks，§11）──
 # 枚举本体是真相源，本清单只钉「哪几张表要对账」——**枚举改名/搬走必须红**（清单里的名字

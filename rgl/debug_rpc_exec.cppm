@@ -32,8 +32,11 @@ namespace RGL {
  * @param renderer 渲染器（/shot 帧捕获）
  * @param llmActive llm 截图模式在跑（true = `/shot` 拒 409——防抢帧卡死 llm 退出）
  *
- * 端点：`GET /`（路由发现）`GET /state`（相机 + 参数页）`POST /camera` `POST /param`
- * `POST /shot`（帧捕获写盘）`POST /quit`（置 AppExit 干净退出，自动化测试收尾用）。
+ * 端点与各自的超时**不在本文件抄**（抄一次漂一次）——名单 = `rgl/rpc_schema.lua`，
+ * 运行期发现面 = 根路由的回包。本模块的分发按生成表 `rpcRouteByPath` 查表后走穷尽 switch，
+ * 新增端点忘写处理分支 = 编译不过。请求字段同理：读字段名吃 `rpc_field::<端点>::<字段>`
+ * 常量，形状（含未声明的键 = 400）由 `rpcClaimRoute` 里的 `rpcValidateRequest` 按生成表判，
+ * 本模块不写任何一条字段名或形状文案。
  * @return 服务实例（nullptr = 门关 / bind 失败）；所有权归调用方（main 栈，
  *   声明序须在 registry / assets / backEnd 之后 = 析构序其先，帧循环后可显式 stop）
  */

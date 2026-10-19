@@ -15,7 +15,9 @@ import param_pages;  // buildDebugParamPages（/state、/param 复用面板参�
 import param_registry;   // ParamPage / DebugPanelState（页结构 + 材质选择器）
 import camera;       // Camera ctx（/camera 写、/state 读）
 import debug_rpc_burst;  // /shotburst 协议判据（形状解析 + 锚点裁决，rlbase 层纯逻辑）
+import debug_rpc_shape;   // 批 2：请求形状校验（消费 rpc_schema.lua 生成表）
 import debug_rpc_payload;  // B2-5：应答形状闸 + 参数页↔JSON 编解码（拆出去顶的是文件行数红线）
+import rpc_schema_generated;  // 路由表（分发的唯一来源；真相源 = rgl/rpc_schema.lua）
 import asset_table;  // AssetTable（参数页构建）
 import vk_renderer;  // Renderer（/shot 帧捕获 + writeCapturePng 宿主）
 import vk_swapchain;  // B2-4③′：/resize 经 Renderer::getSwapchainRef 调 requestHeadlessExtent
@@ -25,13 +27,6 @@ import runtime_config;  // LlmDebugConfig（writeCapturePng 入参，只需 file
 namespace RGL {
 
 namespace {
-
-/** GET / 路由表（agent 据此发现端点；frame = 装配态帧计数，纯观测）。 */
-nlohmann::json rpcRoutesJson(uint32_t frame) {
-	return nlohmann::json{{"ok", true}, {"frame", frame},
-		{"routes", {"GET /", "GET /state", "POST /camera", "POST /param", "POST /shot",
-			"POST /shotburst", "POST /resize", "POST /pass", "POST /quit"}}};
-}
 
 /**
  * 相机姿态快照（/state 内嵌 + /camera 回显；角度字段一律**度**，与 camera.lua
@@ -55,10 +50,10 @@ nlohmann::json rpcCameraJson(const Camera& cam) {
  * 读 `[x,y,z]` 字段（形状不符抛 json 异常 → `rpcDispatch` 统一转 400）。
  * 调用方先 `contains` 判存在——缺字段 = 不改，存在但畸形 = 400，二者不可混同。
  * @param body 请求体对象
- * @param key 字段名
+ * @param key 字段名（来自生成表的 `rpc_field::camera::*` 常量）
  * @return 三维值
  */
-glm::vec3 rpcVec3(const nlohmann::json& body, const char* key) {
+glm::vec3 rpcVec3(const nlohmann::json& body, std::string_view key) {
 	const auto& value = body.at(key);
 	return glm::vec3{value.at(0).get<float>(), value.at(1).get<float>(),
 		value.at(2).get<float>()};
@@ -155,23 +150,20 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 }
 
 /**
- * `mode` 字段套用（仅 rpcHandleCamera 内部使用）：trackball/fps 两档，缺字段不改，
- * 未知值 → nullopt 交调用方转 400。
- * @param body 请求体对象
+ * `mode` 字段套用（仅 rpcHandleCamera 内部使用）：缺字段不改。
+ *
+ * 取值白名单与它的文案都在能力表里（`kind = "string"` + `oneOf`），所以走到这里 `mode`
+ * 必是 trackball | fps 之一。分支吃**生成表的取值常量**而不是再抄一遍字面量——改 schema
+ * 里的取值，这里当场编译不过（抄字面量就是第二份副本）。
+ * @param body 请求体对象（已过形状校验）
  * @param cam 写入目标（仅命中已知值时改）
- * @return 已知 mode = true；未知 mode = false
  */
-bool rpcApplyCameraMode(const nlohmann::json& body, Camera& cam) {
-	if (!body.contains("mode"))
-		return true;
-	const std::string mode = body.at("mode").get<std::string>();
-	if (mode == "trackball")
-		cam.mode = CameraMode::Trackball;
-	else if (mode == "fps")
-		cam.mode = CameraMode::Fps;
-	else
-		return false;
-	return true;
+void rpcApplyCameraMode(const nlohmann::json& body, Camera& cam) {
+	if (!body.contains(rpc_field::camera::mode))
+		return;
+	const auto& mode = body.at(rpc_field::camera::mode).get_ref<const std::string&>();
+	cam.mode = mode == rpc_value::camera::mode::trackball ? CameraMode::Trackball
+	                                                      : CameraMode::Fps;
 }
 
 /**
@@ -180,21 +172,23 @@ bool rpcApplyCameraMode(const nlohmann::json& body, Camera& cam) {
  * 为什么必须在引擎侧（客户端预补偿必然失败）：`frame_yaw` 下写入落帧由 HTTP 时序决定，
  * 本机 headless ~6000fps 下落帧抖动 ±36 帧量级 = 0.125px/帧 × 36 ≈ 4.5px，与要消的噪声
  * 同源——只有把机位基准解成**绝对帧号的函数**（`frameDrivenYawPin`）才与落帧无关。
- * @param body 请求体
+ *
+ * 批 2 换血：本字段的**形状**（整数、[1, 2^32)）与那条 400 文案已进能力表；留在这里的
+ * 两条是**运行期状态**判据（门红线 / 锚已过），它们要读 `Camera` 与帧计数，不是请求形状，
+ * 因此本来也进不了 schema。
+ * @param body 请求体（已过形状校验）
  * @param frameNow 引擎当前帧计数（`RpcWiring::frame`）
  * @param cam 已套用完本请求其他字段的相机（锚的是**套用后**的朝向）
  * @param pinned 通过时写入锚点帧号（0 = 本请求没带该字段）
- * @return 失败应答（形状错 = 400、锚已过 = 409）；空 = 通过
+ * @return 失败应答（锚点不可用 = 400、锚已过 = 409）；空 = 通过
  */
 std::optional<RpcOutcome> rpcApplyYawAnchor(const nlohmann::json& body, uint32_t frameNow,
 	Camera& cam, uint32_t& pinned) {
 	pinned = 0;
-	if (!body.contains("yaw_at_frame"))
+	if (!body.contains(rpc_field::camera::yaw_at_frame))
 		return {};
-	const auto& v = body.at("yaw_at_frame");
-	if (!v.is_number_integer() || v.get<int64_t>() < 1 || v.get<int64_t>() > 0xFFFFFFFFLL)
-		return rpcFail(400, "'yaw_at_frame' must be an integer in [1, 2^32)");
-	const uint32_t n = static_cast<uint32_t>(v.get<int64_t>());
+	const uint32_t n =
+		static_cast<uint32_t>(body.at(rpc_field::camera::yaw_at_frame).get<int64_t>());
 	// 门红线：`frame_yaw = 0` 时 yaw 不是帧号函数 ⟹ 无从钉，响亮拒绝，不静默忽略。
 	if (cam.frameYaw == 0.0f)
 		return rpcFail(400, "yaw_at_frame needs camera.lua frame_yaw != 0 —— yaw 不是帧号纯函数时无从钉");
@@ -212,32 +206,34 @@ std::optional<RpcOutcome> rpcApplyYawAnchor(const nlohmann::json& body, uint32_t
  * POST /camera：任意子集套用（缺字段不改；形状错 → 400）。
  * 直接写 `Camera` ctx —— cameraSystem 只在有输入时改姿态，帧首套用本帧即生效。
  * @param w 装配态
- * @param body 请求体对象
+ * @param body 请求体对象（已过 `rpcValidateRequest` 的形状校验）
  * @return 套用后姿态回显
  */
 RpcOutcome rpcHandleCamera(RpcWiring& w, const nlohmann::json& body) {
-	if (!body.is_object())
-		return rpcFail(400, "body must be a JSON object");
 	auto& cam = w.registry.ctx().get<Camera>();
-	if (!rpcApplyCameraMode(body, cam))
-		return rpcFail(400, "mode must be \"trackball\" or \"fps\"");
+	rpcApplyCameraMode(body, cam);
 	// position 必须先于 target：fps 下的朝向反推要用到新 position
-	if (body.contains("position")) cam.position = rpcVec3(body, "position");
-	if (body.contains("target")) {
+	if (body.contains(rpc_field::camera::position))
+		cam.position = rpcVec3(body, rpc_field::camera::position);
+	if (body.contains(rpc_field::camera::target)) {
 		// fps 模式的 view 只看 yaw/pitch（cameraView），照直写 target 是死写入——回显会
 		// 显示"已生效"而画面不动。故 fps 下（未显式给 yaw/pitch 时）走 cameraAimAt 反推，
 		// 与 camera_config 初始机位同一约定。显式给了 yawDegrees/pitchDegrees 则尊重显式值。
-		const bool explicitAngles = body.contains("yawDegrees") || body.contains("pitchDegrees");
+		const bool explicitAngles = body.contains(rpc_field::camera::yawDegrees)
+		    || body.contains(rpc_field::camera::pitchDegrees);
 		if (cam.mode == CameraMode::Fps && !explicitAngles)
-			cameraAimAt(cam, rpcVec3(body, "target"));
+			cameraAimAt(cam, rpcVec3(body, rpc_field::camera::target));
 		else
-			cam.target = rpcVec3(body, "target");
+			cam.target = rpcVec3(body, rpc_field::camera::target);
 	}
-	if (body.contains("up")) cam.up = rpcVec3(body, "up");
-	if (body.contains("yawDegrees")) cam.yaw = glm::radians(body.at("yawDegrees").get<float>());
-	if (body.contains("pitchDegrees"))
-		cam.pitch = glm::radians(body.at("pitchDegrees").get<float>());
-	if (body.contains("fovDegrees")) cam.fov = glm::radians(body.at("fovDegrees").get<float>());
+	if (body.contains(rpc_field::camera::up))
+		cam.up = rpcVec3(body, rpc_field::camera::up);
+	if (body.contains(rpc_field::camera::yawDegrees))
+		cam.yaw = glm::radians(body.at(rpc_field::camera::yawDegrees).get<float>());
+	if (body.contains(rpc_field::camera::pitchDegrees))
+		cam.pitch = glm::radians(body.at(rpc_field::camera::pitchDegrees).get<float>());
+	if (body.contains(rpc_field::camera::fovDegrees))
+		cam.fov = glm::radians(body.at(rpc_field::camera::fovDegrees).get<float>());
 	// 债-89：机位锚点（`yaw_at_frame = N` = 第 N 帧渲染出来的朝向 = 本请求套用后的朝向）。
 	uint32_t yawPinned = 0;
 	if (auto fail = rpcApplyYawAnchor(body, w.frame, cam, yawPinned); fail)
@@ -252,22 +248,23 @@ RpcOutcome rpcHandleCamera(RpcWiring& w, const nlohmann::json& body) {
  * POST /param：`{label, value, page?, material?}`。
  * `material` = 先写 `DebugPanelState.materialSel` 再重建页 → 该次写入作用于目标材质
  * （材质页/选中页共用 `appendMaterialControls`，与面板手选等价）。
+ *
+ * 批 2 换血：四个字段的名字/必填/类型在能力表里（`value` 的**类型**不在——它随目标条目的
+ * kind 而异，判据本体在 `rpcWriteParamPage`，那里才知道 label 是滑杆还是颜色）。
  * @param w 装配态
- * @param body 请求体对象
+ * @param body 请求体对象（已过形状校验）
  * @return 写入回显；label 未知 → 404
  */
 RpcOutcome rpcHandleParam(RpcWiring& w, const nlohmann::json& body) {
-	if (!body.is_object())
-		return rpcFail(400, "body must be a JSON object");
-	const std::string label = body.at("label").get<std::string>();  // 缺/错类型 → 400
-	if (body.contains("material"))
+	const std::string label = body.at(rpc_field::param::label).get<std::string>();
+	if (body.contains(rpc_field::param::material))
 		w.registry.ctx().get<DebugPanelState>().materialSel =
-			static_cast<uint32_t>(std::max(0, body.at("material").get<int>()));
-	const auto& value = body.at("value");
+			static_cast<uint32_t>(std::max(0, body.at(rpc_field::param::material).get<int>()));
+	const auto& value = body.at(rpc_field::param::value);
 	auto pages = buildDebugParamPages(w.registry, w.assets);
 
-	if (body.contains("page")) {
-		const std::string name = body.at("page").get<std::string>();
+	if (body.contains(rpc_field::param::page)) {
+		const std::string name = body.at(rpc_field::param::page).get<std::string>();
 		auto page = std::ranges::find_if(pages,
 			[&name](const ParamPage& p) { return p.name == name; });
 		if (page == pages.end())
@@ -287,16 +284,16 @@ RpcOutcome rpcHandleParam(RpcWiring& w, const nlohmann::json& body) {
  * POST /shot：登记跨帧捕获（应答不在此兑现）。
  * 解析全在 `requestFrameCapture` 与 responder 移交**之前**完成 → 后续抛异常
  * 仍由 rpcDispatch 转 400，不会留下半提交状态。
+ *
+ * 批 2 换血：`file` / `gbuf` / `attachment` 三个字段的名字、类型，以及「attachment 与 gbuf
+ * 互斥」「attachment 非空」两条都在能力表里，由分发层的 `rpcValidateRequest` 执行；本函数
+ * 只剩「状态冲突（llm 在跑 / 已有一张在途）→ 409」与登记。
  * @param w 装配态
- * @param body 请求体对象（`file?` 相对路径、`gbuf?` G-buffer 通道、`attachment?` 附件名
- *   ——后两者互斥，同时给 = 400）
+ * @param body 请求体对象（已过形状校验：`file?` 相对路径、`gbuf?` G-buffer 通道、
+ *   `attachment?` 附件名——后两者互斥，同时给 = 400）
  * @param responder 跨帧响应句柄（移交给 w.pendingShot）
  */
 void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder responder) {
-	if (!body.is_object()) {
-		rpcReject(responder, 400, "body must be a JSON object");
-		return;
-	}
 	if (w.llmActive) {
 		rpcReject(responder, 409, "/shot unavailable: llm_debug capture mode is running");
 		return;
@@ -306,23 +303,15 @@ void rpcHandleShot(RpcWiring& w, const nlohmann::json& body, RpcResponder respon
 		return;
 	}
 	std::string file;
-	if (body.contains("file"))
-		file = body.at("file").get<std::string>();
+	if (body.contains(rpc_field::shot::file))
+		file = body.at(rpc_field::shot::file).get<std::string>();
 	int gbuf = -1;
-	if (body.contains("gbuf"))
-		gbuf = body.at("gbuf").get<int>();
-	// attachment（批 12.2）：按名捕获，QA 层取 object_id 全分辨率。与 gbuf 互斥——
-	// 两者都是"回读哪个源"，同时给必是客户端 bug，静默取一个会拍出用户没要的那张图。
-	if (body.contains("attachment")) {
-		if (body.contains("gbuf")) {
-			rpcReject(responder, 400, "'attachment' and 'gbuf' are mutually exclusive");
-			return;
-		}
-		const auto name = body.at("attachment").get<std::string>();
-		if (name.empty()) {
-			rpcReject(responder, 400, "'attachment' must be a non-empty name");
-			return;
-		}
+	if (body.contains(rpc_field::shot::gbuf))
+		gbuf = body.at(rpc_field::shot::gbuf).get<int>();
+	// attachment（批 12.2）：按名捕获，QA 层取 object_id 全分辨率。与 gbuf 互斥的判据在
+	// 能力表里（两者都是"回读哪个源"，同时给必是客户端 bug，静默取一个会拍出用户没要的那张图）。
+	if (body.contains(rpc_field::shot::attachment)) {
+		const auto name = body.at(rpc_field::shot::attachment).get<std::string>();
 		if (file.empty())
 			file = fmt::format("screenshots/attach_{}.png", name);
 		w.renderer.requestFrameCapture(name);
@@ -362,17 +351,13 @@ void rpcRequestBurstCapture(RpcWiring& w) {
  * 应答回显 `startFrame` 供调用侧自证；锚已过 = 409（**不静默退回相对**）。
  *
  * @param w 装配态
- * @param body 请求体对象（`n` 必填 ≥1、`dir` 必填输出目录、`prefix?` 文件名前缀、
- *   `gbuf?` 回读通道、`attachment?` 具名附件回读（与 gbuf 互斥；temporal-motion 取
- *   taa_out alpha 的拒收掩膜连拍）、`start_frame?` **绝对帧号锚点**（债-89：首张保证落在
- *   第 N 帧；已过 = 409 响亮失败，绝不静默退回相对）；`n` 越界或类型错 = 400）
+ * @param body 请求体对象（形状由分发层按能力表校验：`n` 必填 [1,1024]、`dir` 必填非空、
+ *   `prefix?` 文件名前缀、`gbuf?` 回读通道、`attachment?` 具名附件回读（与 gbuf 互斥、
+ *   白名单 swapchain | taa_out；temporal-motion 取 taa_out alpha 的拒收掩膜连拍）、
+ *   `start_frame?` **绝对帧号锚点**（债-89：首张保证落在第 N 帧））
  * @param responder 跨帧响应句柄（移交给 w.pendingBurst）
  */
 void rpcHandleShotBurst(RpcWiring& w, const nlohmann::json& body, RpcResponder responder) {
-	if (!body.is_object()) {
-		rpcReject(responder, 400, "body must be a JSON object");
-		return;
-	}
 	if (w.llmActive) {
 		rpcReject(responder, 409, "/shotburst unavailable: llm_debug capture mode is running");
 		return;
@@ -431,6 +416,18 @@ void rpcSettleBurst(RpcWiring& w) {
 		rpcRequestBurstCapture(w);
 		return;  // 首张产物 = 本帧 drawFrame，下个帧边界结算
 	}
+	if (w.renderer.hasFrameCaptureFailure()) {
+		// 回读源注定拿不到（附件不在图里 / RT 不建 / 通道越界）⟹ **必须在这里兑现错误**。
+		// 旧写法只有「没产物就下帧重试」，而这个循环对「源永不存在」不收敛：
+		// pendingBurst 永不复位 ⟹ 之后每个 /shot、/shotburst 都吃 409，
+		// 一次拼错的附件名就把截图端点打死到进程重启（2026-10-19 修）。
+		const auto why = w.renderer.takeFrameCaptureFailure();
+		auto responder = std::move(*w.pendingBurst);
+		w.pendingBurst.reset();
+		w.burstRemaining = 0;
+		rpcReject(responder, 400, why.value_or("frame capture source unavailable"));
+		return;
+	}
 	if (!w.renderer.hasFrameCapture())
 		return;  // 本帧无产物（acquire 跳帧）：请求保持 pending，下个帧边界重试
 	LlmDebugConfig shot;
@@ -466,6 +463,9 @@ void rpcSettleBurst(RpcWiring& w) {
 /**
  * /shot 跨帧结算（帧首、drain 之前调用）：捕获产物就绪 → 写 PNG → 兑现响应。
  * 未就绪 = 保持 pending（acquire 超时跳帧时请求保持 pending 重试，同 llm_debug）。
+ * ⚠ 但「未就绪」有两种，只有暂时的那种该重试：回读源注定不存在时 `hasFrameCapture()`
+ *   恒 false，只按它重试 ⟹ 响应句柄永不兑现（客户端等到超时）且 `pendingShot` 卡死，
+ *   之后每个 /shot 都吃 409。⟹ 先查 `hasFrameCaptureFailure()` 并立即回 400。
  * 突发分支先走（与单张互斥，不会两边都活），本体见 `rpcSettleBurst`。
  * @param w 装配态
  */
@@ -476,6 +476,13 @@ void rpcSettleShot(RpcWiring& w) {
 	}
 	if (!w.pendingShot)
 		return;
+	if (w.renderer.hasFrameCaptureFailure()) {
+		const auto why = w.renderer.takeFrameCaptureFailure();
+		auto responder = std::move(*w.pendingShot);
+		w.pendingShot.reset();
+		rpcReject(responder, 400, why.value_or("frame capture source unavailable"));
+		return;
+	}
 	if (!w.renderer.hasFrameCapture())
 		return;  // 本帧无产物：等下个帧边界
 	auto responder = std::move(*w.pendingShot);
@@ -515,13 +522,12 @@ RpcOutcome rpcHandleQuit(RpcWiring& w) {
  * "发数字"），退役窗口 / 布局结转 / IZB 重建全部走既有判据。窗口模式 =
  * requestHeadlessExtent 出声拒（false）→ 400（那条路的 extent 真相源是 SDL）。
  * @param w 装配态
- * @param body {"width": N, "height": M}
+ * @param body `{"width": N, "height": M}`——两字段的必填与 `> 0` 都在能力表里（越界那条
+ *   文案由 schema 给），本函数不再判 0。
  */
 RpcOutcome rpcHandleResize(RpcWiring& w, const nlohmann::json& body) {
-	const auto width = body.at("width").get<uint32_t>();
-	const auto height = body.at("height").get<uint32_t>();
-	if (width == 0 || height == 0)
-		return rpcFail(400, "resize: width/height must be > 0");
+	const auto width = body.at(rpc_field::resize::width).get<uint32_t>();
+	const auto height = body.at(rpc_field::resize::height).get<uint32_t>();
 	if (!w.renderer.getSwapchainRef().requestHeadlessExtent(width, height))
 		return rpcFail(400, "resize: headless 模式专用（窗口路径 extent 由 SDL 重查）");
 	auto& extent = w.registry.ctx().get<WindowExtent>();
@@ -544,16 +550,23 @@ RpcOutcome rpcHandleResize(RpcWiring& w, const nlohmann::json& body) {
  *
  * ⚠ 应答里的 `passes` / `recompiles` 是**收单时刻**的读数（生效在之后的安全点），
  * 判据要读生效后的值就再发一次 `/state`——这里不回"未来"，否则读数与帧号对不上。
+ *
+ * 🔴 本端点是能力表里唯一标了 `manualShape` 的：`on` 是**条件性必填**（只在未给
+ * `toggle_frames` 时才要），而约束语言只表达无条件必填/类型/范围/白名单/互斥——为一条端点
+ * 加"requiredUnless"就是把字段约束语言往 OpenAPI 方向做（`docs/rpc_单源_plan.md` 风险 2）。
+ * ⟹ 下面三条形状检查留在本函数，字段名仍吃生成常量、未知字段闸门照跑（分发层那次
+ * `rpcValidateRequest`）。**残余面**：schema 与这三条手写检查之间无机器对账——改这里的
+ * 判据不会有人回来改 schema 的字段清单，反之亦然。
  * @param w 装配态
  * @param body 见上
  */
 RpcOutcome rpcHandlePass(RpcWiring& w, const nlohmann::json& body) {
-	if (!body.contains("name"))
+	if (!body.contains(rpc_field::pass::name))
 		return rpcFail(400,
 			"pass: 需要 \"name\"（装配期登记过、可动态开关的 pass 名；见 /state 的 graph.dynamicPasses）");
-	const std::string name = body.at("name").get<std::string>();
-	if (body.contains("toggle_frames")) {
-		const auto frames = body.at("toggle_frames").get<uint32_t>();
+	const std::string name = body.at(rpc_field::pass::name).get<std::string>();
+	if (body.contains(rpc_field::pass::toggle_frames)) {
+		const auto frames = body.at(rpc_field::pass::toggle_frames).get<uint32_t>();
 		if (frames == 0)
 			return rpcFail(400, "pass: toggle_frames 必须 > 0");
 		if (w.passToggleRemaining > 0)
@@ -564,9 +577,9 @@ RpcOutcome rpcHandlePass(RpcWiring& w, const nlohmann::json& body) {
 		return rpcOk({{"ok", true}, {"name", name}, {"toggleFrames", frames},
 			{"startFrame", w.frame + 1}, {"frame", w.frame}});
 	}
-	if (!body.contains("on"))
+	if (!body.contains(rpc_field::pass::on))
 		return rpcFail(400, "pass: 需要 \"on\"(bool) 或 \"toggle_frames\"(uint)");
-	const bool on = body.at("on").get<bool>();
+	const bool on = body.at(rpc_field::pass::on).get<bool>();
 	w.renderer.requestPassToggle(name, on);
 	const auto graph = w.renderer.graphStatus();
 	return rpcOk({{"ok", true}, {"name", name}, {"on", on},
@@ -586,63 +599,53 @@ void rpcTickPassToggle(RpcWiring& w) {
 }
 
 /**
- * POST 路由（`/camera`、`/param`、`/shot`、`/quit`；body 解析在此，畸形 = 400）。
- * 异常由 rpcDispatch 的 try 统一转 400/500 —— 本函数在它的 try 内被调用。
- * @param w 装配态
- * @param request 原始请求
- * @param responder 响应句柄
+ * 认领这条请求：查生成表 → 方法核对 → **形状闸门**（批 2）。从 `rpcDispatch` 拆出 =
+ * 认知复杂度红线，也为了让"每个 POST 端点都过形状闸"这件事**只有一个落点**。
+ *
+ * 方法对着表里登记的那一档核一遍（原 §10 自述的「方法不判」盲区由此关闭）：httplib 已在
+ * 传输层按注册方法过滤过，这条兜的是「不经 HTTP 直接喂 applier」的调用形态。
+ *
+ * 🔴 形状校验**只有 POST 查**：GET 端点在调用方那里根本没解析 body（留 null）。判据本体 =
+ * 能力表生成的字段清单（`rgl/rpc_schema.lua`），而本处是服务端**唯一**调用点 ⟹ 新增端点
+ * 「忘了接这道闸」这件事不可能发生（对比：把校验散进各处理函数，忘接是静默的）。
+ * 未知字段在这里被响亮拒绝（批 2 拍板 5 的行为变更：以前静默忽略）。
+ *
+ * @param request 原始请求（取路径）
+ * @param isPost 上线方法是不是 POST（同时决定要不要过形状闸）
+ * @param body 已解析的请求体（仅 isPost 时有意义）
+ * @param route 认领成功时写入命中的路由身份
+ * @return 失败应答（404 / 400）；空 = 认领成功
  */
-void rpcDispatchPost(RpcWiring& w, const RpcRequest& request, RpcResponder responder) {
-	auto reply = [&](const RpcOutcome& outcome) {
-		responder.resolve(outcome.status, outcome.body.dump());
-	};
-	const nlohmann::json body = request.body.empty()
-		? nlohmann::json::object()
-		: nlohmann::json::parse(request.body, /*callback=*/nullptr, /*allow_exceptions=*/false);
-	if (body.is_discarded()) {
-		reply(rpcFail(400, "body is not valid JSON"));
-		return;
+std::optional<RpcOutcome> rpcClaimRoute(const RpcRequest& request, bool isPost,
+	const nlohmann::json& body, RpcRouteId& route) {
+	const auto id = rpcRouteByPath(request.path);
+	if (!id)
+		return rpcFail(404, fmt::format("unknown route: {}", request.path));
+	if (rpcRouteById(*id).method != (isPost ? RpcRouteMethod::post : RpcRouteMethod::get))
+		return rpcFail(404, fmt::format("unknown route: {}", request.path));
+	if (isPost) {
+		if (auto err = rpcValidateRequest(*id, body); !err.empty())
+			return rpcFail(400, err);
 	}
-	if (request.path == "/camera") {
-		reply(rpcHandleCamera(w, body));
-		return;
-	}
-	if (request.path == "/param") {
-		reply(rpcHandleParam(w, body));
-		return;
-	}
-	if (request.path == "/shot") {
-		rpcHandleShot(w, body, std::move(responder));
-		return;
-	}
-	if (request.path == "/shotburst") {
-		rpcHandleShotBurst(w, body, std::move(responder));
-		return;
-	}
-	if (request.path == "/quit") {
-		// body 恒可解析（上面已兜 400），本端点无参
-		reply(rpcHandleQuit(w));
-		return;
-	}
-	if (request.path == "/resize") {
-		reply(rpcHandleResize(w, body));
-		return;
-	}
-	if (request.path == "/pass") {
-		reply(rpcHandlePass(w, body));
-		return;
-	}
-	reply(rpcFail(404, fmt::format("unknown route: {}", request.path)));
+	route = *id;
+	return {};
 }
 
 /**
- * applier 实体（传输层每个请求调一次，帧边界渲染线程）：方法/路径分发 → 兑现。
+ * 分发（GET 与 POST 同一条路）：方法门 → body 解析 → **`rpcClaimRoute`（查表 + 形状闸）
+ * → 穷尽 switch**。
+ *
+ * 🔴 为什么 switch 里**不写 default**：404 是「路径不在表里」，不是「表里某个 id 没处理」。
+ * 把 404 塞进 default 会同时 ① 被本仓第一方启用的 `-Wcovered-switch-default` 拦下，
+ * ② 更要命的是新增端点忘写分支时 default 把它吞成 404 —— 那条路由静默变成「存在但永远 404」。
+ * 穷尽 switch 让编译器当场点名缺的是哪个 case。
+ *
+ * 句柄**按值**交给跨帧兑现的处理函数（`/shot`、`/shotburst`），不要改成 `std::move`：
+ * 下面的 catch 还要用同一个句柄，move 过去就是空句柄（`resolve` = no-op）→ 异常请求永远
+ * 不兑现，只能等传输层超时吐 504（症状 = "只有抛异常的请求 504"）。RpcResponder 是
+ * shared_ptr 包装，拷贝廉价，且 `resolve` 幂等。
+ *
  * json 异常（形状/类型不符）→ 400，其余 std::exception → 500——调试面不崩进程。
- *
- * `rpcDispatchPost` 必须**拷贝**传句柄：它是按值收参的另一层 catch 不在场的分发点，
- * 若此处 move，下面 catch 拿到的就是空句柄（`resolve` = no-op）→ 异常请求永远不兑现，
- * 只能等传输层超时吐 504（症状 = "只有抛异常的请求 504"）。shared_ptr 拷贝廉价，勿改回 move。
- *
  * @param w 装配态
  * @param request 原始请求（方法 / 路径 / 体）
  * @param responder 响应句柄（/shot 转异步，由 rpcSettleShot 兑现）
@@ -652,23 +655,57 @@ void rpcDispatch(RpcWiring& w, const RpcRequest& request, RpcResponder responder
 		responder.resolve(outcome.status, outcome.body.dump());
 	};
 	try {
-		if (request.method == "POST") {
-			rpcDispatchPost(w, request, responder);  // 拷贝：本函数 catch 还要用（见上）
-			return;
-		}
-		if (request.method != "GET") {
+		// 方法先判：非 GET 非 POST 一律 405，连路径都不看（与重构前同序）
+		const bool isPost = request.method == "POST";
+		if (!isPost && request.method != "GET") {
 			reply(rpcFail(405, fmt::format("method not allowed: {}", request.method)));
 			return;
 		}
-		if (request.path == "/") {
+		// POST 的 body 解析在分发之前（畸形 = 400；GET 端点无 body，留 null）
+		nlohmann::json body;
+		if (isPost) {
+			body = request.body.empty()
+			    ? nlohmann::json::object()
+			    : nlohmann::json::parse(request.body, /*callback=*/nullptr, /*allow_exceptions=*/false);
+			if (body.is_discarded()) {
+				reply(rpcFail(400, "body is not valid JSON"));
+				return;
+			}
+		}
+		RpcRouteId route = RpcRouteId::routes;
+		if (auto fail = rpcClaimRoute(request, isPost, body, route); fail) {
+			reply(*fail);
+			return;
+		}
+		switch (route) {
+		case RpcRouteId::routes:
 			responder.resolve(200, rpcRoutesJson(w.frame).dump());
 			return;
-		}
-		if (request.path != "/state") {
-			reply(rpcFail(404, fmt::format("unknown route: {}", request.path)));
+		case RpcRouteId::state:
+			reply(rpcHandleState(w));
+			return;
+		case RpcRouteId::camera:
+			reply(rpcHandleCamera(w, body));
+			return;
+		case RpcRouteId::param:
+			reply(rpcHandleParam(w, body));
+			return;
+		case RpcRouteId::shot:  // 应答跨帧兑现（句柄按值交出，见函数头）
+			rpcHandleShot(w, body, responder);
+			return;
+		case RpcRouteId::shotburst:  // 同上，整批交齐才兑现
+			rpcHandleShotBurst(w, body, responder);
+			return;
+		case RpcRouteId::resize:
+			reply(rpcHandleResize(w, body));
+			return;
+		case RpcRouteId::pass:
+			reply(rpcHandlePass(w, body));
+			return;
+		case RpcRouteId::quit:  // body 恒可解析（上面已兜 400），本端点无参
+			reply(rpcHandleQuit(w));
 			return;
 		}
-		reply(rpcHandleState(w));
 	} catch (const nlohmann::json::exception& e) {
 		responder.resolve(400, rpcErrorJson(e.what()).dump());
 	} catch (const std::exception& e) {

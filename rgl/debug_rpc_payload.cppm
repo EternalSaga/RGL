@@ -8,6 +8,7 @@ export module debug_rpc_payload;
 import rlstd;
 import debug_rpc;       // RpcResponder（rpcReject 的兑现出口）
 import param_registry;  // ParamPage（参数页结构）
+import rpc_schema_generated;  // kRpcRoutes（路由回包的唯一来源）
 
 namespace RGL {
 
@@ -68,6 +69,23 @@ export RpcOutcome rpcOk(nlohmann::json body) {
 /** 失败应答。 */
 export RpcOutcome rpcFail(int status, std::string message) {
 	return RpcOutcome{status, rpcErrorJson(std::move(message))};
+}
+
+/**
+ * 根路由的回包（agent / 客户端据此发现端点；frame = 装配态帧计数，纯观测）。
+ *
+ * 🔴 `routes` 数组**逐条从生成表拼装**，本文件不写路径字面量——这里曾经是手写名单的第三份
+ * 副本（注册、分发之外），在它里面加/删一条，构建与全部检查都不会红。现在加端点只改
+ * `rgl/rpc_schema.lua`，回包自己跟着长。
+ * 元素形态 = `"<METHOD> <path>"`（与重构前逐字节相同，老客户端的字符串匹配继续成立）。
+ * @param frame 装配态帧计数
+ * @return 回包对象（`{"ok":true,"frame":N,"routes":[…]}`）
+ */
+export nlohmann::json rpcRoutesJson(uint32_t frame) {
+	nlohmann::json routes = nlohmann::json::array();
+	for (const auto& route : kRpcRoutes)
+		routes.push_back(fmt::format("{} {}", route.methodText, route.path));
+	return nlohmann::json{{"ok", true}, {"frame", frame}, {"routes", std::move(routes)}};
 }
 
 /** 直接兑现失败（不经 RpcOutcome 的早退路径：/shot 的 409 拒绝等）。 */
