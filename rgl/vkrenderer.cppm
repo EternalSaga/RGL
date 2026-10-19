@@ -273,6 +273,21 @@ export class Renderer {
 	 */
 	[[nodiscard]] const RGL::CompiledRenderGraph& getRenderGraphRef() const { return renderGraph; }
 
+	/**
+	 * 图声明面只读访问（能力观测批 1：`/state` 能力段取脏位；同 getRenderGraphRef 惯例）。
+	 * ⚠ 名单类内容**不从这条访问取**——能力段吃的是 getRenderGraphRef() 的编译产物，
+	 * 这里只问「声明侧有没有变更还没落图」（`docs/能力观测_plan.md` §3.1）。
+	 * @return DynamicRenderGraph const 引用
+	 */
+	[[nodiscard]] const RGL::DynamicRenderGraph& dynamicGraphRef() const { return graph; }
+
+	/**
+	 * RT 缓存只读访问（能力观测批 1：能力段按图逐个问 `isBuilt`；同惯例）。
+	 * 方向约束：调用方**遍历编译图的附件来问缓存**，缓存不反向提供名单（§3.3）。
+	 * @return RenderTargetCache const 引用
+	 */
+	[[nodiscard]] const RGL::RenderTargetCache& getRtCacheRef() const { return *rtCache; }
+
 	// ── 批次 B2-5：pass 级动态开关（D5 收官一刀；定案 → docs/compute_调研.md §6 D5）─────
 	/**
 	 * 收单「把这个 pass 插上 / 拔掉」（B2-5；RPC 帧边界调，**不改图**）。

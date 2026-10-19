@@ -239,7 +239,7 @@ export struct RpcRouteDef {
 /** 全部端点（注册顺序与 `GET /` 回包顺序 = 本表顺序 = schema 记录顺序）。 */
 export inline constexpr std::array<RpcRouteDef, 9> kRpcRoutes{
     RpcRouteDef{RpcRouteId::routes, RpcRouteMethod::get, "GET", "/", "路由与能力发现（frame = 装配态帧计数，纯观测）", 2000u, false, kRequestFields_routes},
-    RpcRouteDef{RpcRouteId::state, RpcRouteMethod::get, "GET", "/state", "相机姿态 + 全部参数页 + 渲染/图段快照（label 发现面）", 2000u, false, kRequestFields_state},
+    RpcRouteDef{RpcRouteId::state, RpcRouteMethod::get, "GET", "/state", "相机姿态 + 全部参数页 + 渲染/图/能力段快照（label 发现面）", 2000u, false, kRequestFields_state},
     RpcRouteDef{RpcRouteId::camera, RpcRouteMethod::post, "POST", "/camera", "写相机姿态（任意子集，缺字段不改；角度一律度）", 2000u, false, kRequestFields_camera},
     RpcRouteDef{RpcRouteId::param, RpcRouteMethod::post, "POST", "/param", "按 label 写一个面板参数（page/material 可选寻址）", 2000u, false, kRequestFields_param},
     RpcRouteDef{RpcRouteId::shot, RpcRouteMethod::post, "POST", "/shot", "帧捕获写盘（帧首收单、本帧回读、下帧结算，故给 10s）", 10000u, false, kRequestFields_shot},

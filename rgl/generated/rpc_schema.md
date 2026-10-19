@@ -33,7 +33,7 @@
 
 ### `GET /state`
 
-相机姿态 + 全部参数页 + 渲染/图段快照（label 发现面）
+相机姿态 + 全部参数页 + 渲染/图/能力段快照（label 发现面）
 
 - 超时：2000 ms
 - 请求：无 body（GET）
@@ -44,6 +44,7 @@
   - `pages`（object[]，见共享结构 `statePage`）每个参数页一条（label 发现面，/param 按 label 寻址）
   - `render`（object，见共享结构 `stateRender`）窗口/渲染尺寸与生效倍率（像素类判据的口径记录）
   - `graph`（object，见共享结构 `stateGraph`）渲染图快照（开关是否真的生效的唯一观测面：无选中时 highlight 零 draw，画面本来就不该变）
+  - `capabilities`（object，见共享结构 `stateCapabilities`）渲染能力快照（docs/能力观测_plan.md 批 1）：内容一律从编译产物现算 = 「这一帧实际在画什么」；与 graph 段是两个口径（那边读声明，来源问题见 stateGraph.note 与计划 §1.1）
 
 ### `POST /camera`
 
@@ -190,6 +191,38 @@ pass 级动态开关（复合事务的安全点入口；toggle_frames = 逐帧�
 - `dynamicPasses`（string[]）——在册可开关的 pass 名（含已撤回的；/pass 的 name 从这里取）
 - `recompiles`（uint32）——累计重编译次数（出厂档判据 = 0）
 - `lastRecompileUs`（number）——最近一次重编译耗时（微秒；0 = 还没重编译过）
+
+
+### `stateCapabilities`
+
+渲染能力快照（rpcCapabilitiesJson 拼装，能力观测_plan 批 1）。内容一律从编译产物现算 = 「这一帧实际在画什么」；与 stateGraph 是两个口径（那边读声明 desc()，本段读编译产物，两者只在脏窗口分歧）
+
+- `frame`（uint32）——本快照属于哪一帧（运行期图可被 /pass 热插拔，没有帧号无法复现；= 回包顶层 frame，同一次快照）
+- `dirty`（boolean）——true = 声明侧有变更尚未落图（申报后、重编译前，或重编译失败正逐帧重试）——此时 attachments/passes 是执行器当前编译图的读数，声明侧已是另一份
+- `attachments`（object[]，见共享结构 `capabilityAttachment`）——编译图附件逐条（顺序 = slot 下标）
+- `passes`（object[]，见共享结构 `capabilityPass`）——编译图 pass 逐条（顺序 = 执行序）
+
+
+### `capabilityAttachment`
+
+能力段的一条附件（来源 = CompiledRenderGraph::attachments；名单唯一来自图，rtBuilt 只是逐个问缓存，缓存不反向提供名单）
+
+- `name`（string）——附件名（= RT 缓存的键；/shot 的 attachment 按它寻址）
+- `kind`（string）——swapchain | depth | offscreen | depthOffscreen | buffer（拼写 = RGL::kindName(RgAttachmentKind) 枚举名，不是 Lua 配置词表）
+- `format`（string）——声明拼写原样：『inherit』（随 swapchain/depth 现有格式）或具名格式词（rgba16_sfloat 等）；解析后的 vk::Format 是另一件事，本段不报
+- `width`（uint32）——宽（像素）：图属 RT = resolvedRtExtent（独立 extent 优先，跟随档 = 渲染网格 × extentScale，与执行器同一函数）；swapchain/depth = 渲染网格；buffer 档无图像尺寸恒 0
+- `height`（uint32）——高（像素），口径同 width
+- `rtBuilt`（boolean）——这张 RT 今天实际建了没有 = RenderTargetCache 活动表在不在（稳态图内图属 RT 每帧 ensure，应 true；false = 首帧前或退役窗口）
+
+
+### `capabilityPass`
+
+能力段的一条 pass（来源 = CompiledRenderGraph::passes，不是 desc()——两来源的分歧只有脏窗口可观测，机器判据 = tests/test_rpc_capabilities.cppm 的脏窗口用例）
+
+- `name`（string）——pass 名
+- `kind`（string）——drawMesh | blit | drawLight（拼写 = kindName(RgPassKind) 枚举名；Lua 配置表里 drawMesh 档拼 draw，那是配置别名，不是本表）
+- `state`（string）——动态状态名（同时是 ShaderRegistry 固定条目名）；blit 档恒空串（blit 无动态状态）
+- `order`（uint32）——执行序 = 编译产物下标（骨架版编译器不重排、不消除死 pass）
 
 
 ### `statePage`

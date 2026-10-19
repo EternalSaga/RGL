@@ -196,6 +196,22 @@ export class RenderTargetCache {
 	}
 
 	/**
+	 * @return 这个名字的 RT 当前**在不在活动表**（= 「这张附件的 RT 建没建」的一次查询）。
+	 *
+	 * 用途 = 能力观测（`docs/能力观测_plan.md` §3.3）：调用方**遍历编译图的附件、逐个问
+	 * 本缓存**，能力名单的唯一来源仍是图。刻意只提供按名问，不提供 `names()` / `size()`
+	 * 之类的枚举口——把缓存自己的表端出去，等于把「缓存里有什么」当成能力真相（§3.3 的
+	 * 方向约束；缓存里可能有孤儿条目，图里可能有还没 ensure 的附件，两个方向都会错）。
+	 *
+	 * 口径 = 活动表（`retire` 后、到期销毁前进的是 `retired` 区，本查询答 false——
+	 * 在役 RT 才是「建了」；退役窗口内下帧 ensure 会按新规格重建）。
+	 * @param name attachment 名（编译图里的附件名，非空）
+	 */
+	[[nodiscard]] bool isBuilt(std::string_view name) const {
+		return rtAttachments.contains(std::string { name });
+	}
+
+	/**
 	 * **退役**一个 RT（B2-4③′ 债-124；extent 漂移的正规路径）：立刻从活动表摘除
 	 *（下帧 ensure 按新尺寸重建），GPU 资源进退役区，**到期帧的安全点**才销毁 +
 	 * 归还自有堆槽。in-flight 帧继续安全地引用退役区的旧图直到 due。

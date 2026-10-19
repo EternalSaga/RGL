@@ -201,6 +201,27 @@ export inline constexpr vk::Extent2D scaleRtExtent(vk::Extent2D base, float scal
 }
 
 /**
+ * 图属 RT（offscreen / depthOffscreen）的**解析后 extent**（这条算法只在这里定义一次）：
+ * 独立 extent 非 0 优先，否则跟随 = `scaleRtExtent(base, extentScale)`。
+ *
+ * 为什么收成函数：「独立 extent 优先」这条规则此前只在执行器逐帧装配
+ * （`Renderer::ensureOffscreenAttachments`）写了一份；能力观测批 1 出现第二个消费者
+ * （`/state` 能力段的 width/height）后，抄公式 = 第二份真相源——`scaleRtExtent` 头注释
+ * 记的教训（两处各写一份 floor = 每帧重建）同型。执行器与观测面吃同一个函数，
+ * 「报的尺寸」与「真的建的尺寸」结构上不可能漂。
+ * @param declaredExtent 编译产物透传的独立尺寸（{0,0} = 跟随）
+ * @param extentScale    跟随档的缩放（≤0 = 原样跟随）
+ * @param base           跟随基准（执行器与观测面都传**渲染网格**）
+ * @return 实际 RT extent
+ */
+export inline constexpr vk::Extent2D resolvedRtExtent(std::array<uint32_t, 2> declaredExtent,
+	float extentScale, vk::Extent2D base) {
+	const auto follow = scaleRtExtent(base, extentScale);
+	return {declaredExtent[0] != 0u ? declaredExtent[0] : follow.width,
+		declaredExtent[1] != 0u ? declaredExtent[1] : follow.height};
+}
+
+/**
  * offscreen attachment 格式词表成员判定 = compile 校验入口（"inherit" 与全部具名为 true）。
  * 词表（字符串 → vk::Format，小写下划线命名，表驱动、扩展 = impl 加一行）：
  * "inherit" = 随 swapchain 格式（执行器解析 fallback）；具名覆盖 Phase 7 G-buffer 类
@@ -332,6 +353,28 @@ export enum class RgPassKind : uint8_t {
 	// 固定全屏单 group draw（Phase 8 ①起 state 名泛化，不再限 "light"）
 	drawLight,
 };
+
+/**
+ * pass kind 的可读名（与 `kindName(RgAttachmentKind)` 同族：拼写 = **枚举名**）。
+ *
+ * ⚠ 与 Lua 配置词表**不是一件事**：`render_graph_config` 里 drawMesh 档写的是 `"draw"`
+ * （历史别名），本函数回答「这一档叫什么」而不是「配置里怎么拼」——两张表各自演化，
+ * 合并会让配置别名渗进观测面（理由逐条同附件 kindName 的头注释）。
+ * 消费方 = `/state` 能力段的 pass kind 字段（`debug_rpc_capabilities`）。
+ *
+ * 🔴 穷尽 switch、**不许写 `default:`**（同附件档：加了第六个 kind 这里必须编译不过，
+ * 逼着改的人逐处回答每个按 kind 分派的位置）。
+ * @param kind pass 种类
+ * @return 与枚举值一一对应的可读名
+ */
+export inline constexpr std::string_view kindName(RgPassKind kind) {
+	switch (kind) {
+		case RgPassKind::drawMesh: return "drawMesh";
+		case RgPassKind::blit: return "blit";
+		case RgPassKind::drawLight: return "drawLight";
+	}
+	return "?";  // 不可达（穷尽），消 -Wreturn-type
+}
 
 // pass.state / pass.draws 两个字符串字段的**全部合法值**已迁入叶子模块
 // pass_vocabulary（2026-10-02）：state 名 = `kAllPassStates` 按 `RgStateScope` 分档

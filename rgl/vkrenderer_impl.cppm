@@ -400,6 +400,11 @@ void Renderer::applyPassToggles() {
 
 Renderer::GraphStatus Renderer::graphStatus() const {
 	GraphStatus status;
+	// ⚠ 本段的 pass 名单读的是 **desc()（声明）**，不是编译产物——既有契约（graph 段五字段
+	// 语义不变）。能力观测批 1（docs/能力观测_plan.md §1.1）实测两者今天逐条相等
+	// （compileRenderGraph 对 pass 1:1 保序；出厂 / ssr / taa / fsr 四档实机全等），但
+	// 「恰好相等」不代表来源正确：脏窗口内（申报后、重编译前，或重编译失败重试期间）两者
+	// 会分歧。要问「这一帧实际在画什么」读 /state 的 **capabilities** 段（来源 = 编译产物）。
 	status.passCount = static_cast<uint32_t>(graph.desc().passes.size());
 	status.dynamicPasses = graph.dynamicPassNames();
 	status.recompiles = graph.recompileCount();

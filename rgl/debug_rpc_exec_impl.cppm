@@ -17,9 +17,11 @@ import camera;       // Camera ctx（/camera 写、/state 读）
 import debug_rpc_burst;  // /shotburst 协议判据（形状解析 + 锚点裁决，rlbase 层纯逻辑）
 import debug_rpc_shape;   // 批 2：请求形状校验（消费 rpc_schema.lua 生成表）
 import debug_rpc_payload;  // B2-5：应答形状闸 + 参数页↔JSON 编解码（拆出去顶的是文件行数红线）
+import debug_rpc_capabilities;  // 能力观测批 1：capabilities 段拼装（纯函数，判据在 tests/）
 import rpc_schema_generated;  // 路由表（分发的唯一来源；真相源 = rgl/rpc_schema.lua）
 import asset_table;  // AssetTable（参数页构建）
 import vk_renderer;  // Renderer（/shot 帧捕获 + writeCapturePng 宿主）
+import rlvk;         // 能力观测批 1：capabilities 段入参 vk::Extent2D（渲染网格基准，与执行器同口径）
 import vk_swapchain;  // B2-4③′：/resize 经 Renderer::getSwapchainRef 调 requestHeadlessExtent
 import llm_debug;    // writeCapturePng（/shot 落盘，同 main 的 llm 截图出口）
 import runtime_config;  // LlmDebugConfig（writeCapturePng 入参，只需 file 字段）
@@ -146,7 +148,15 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 			{"dynamicPasses", graph.dynamicPasses},
 			{"recompiles", graph.recompiles},
 			{"lastRecompileUs", static_cast<double>(graph.lastRecompileNs) / 1000.0},
-		}}});
+		}},
+		// 能力段（能力观测批 1，docs/能力观测_plan.md §3.2）：内容**一律从编译产物现算**，
+		// 与上面的 graph 段是两个口径（graph = 声明侧既有读数；capabilities = 这一帧实际
+		// 在画什么 + 每张图属 RT 建没建）。拼装是纯函数（判据 = tests/test_rpc_capabilities），
+		// 这里只做取数：编译图 + 脏位来源 + 逐附件问缓存（名单来自图，缓存只被问，§3.3）。
+		{"capabilities", rpcCapabilitiesJson(
+			w.renderer.dynamicGraphRef(), w.renderer.getRenderGraphRef(),
+			[&w](std::string_view name) { return w.renderer.getRtCacheRef().isBuilt(name); },
+			vk::Extent2D { re.width, re.height }, w.frame)}});
 }
 
 /**
