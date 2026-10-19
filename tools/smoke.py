@@ -8,13 +8,24 @@ llm_debug / aa 档），跑完再手 `cp` 复原——配置于是有两个真�
 **全程不碰任何配置副本**，也就没有需要"复原"的状态。
 
 同时把三机轮换下每次开工都要先问的事打在输出开头（省掉"我这台是哪台 / 跑的是新二进制吗"）：
-主机与 GPU、DGC 选路、二进制与 SPV 新鲜度、git 现场，以及 **build 副本是否已被手工
-改脏**（脏 = 点名并说明本次跑的是哪一份基准，绝不静默替用户选）。
+主机与 GPU、DGC 选路、二进制与 SPV 新鲜度（**旧于源 = 直接拦下**，见下"陈旧产物"段）、git 现场，
+以及 **build 副本是否已被手工改脏**（脏 = 点名并说明本次跑的是哪一份基准，绝不静默替用户选）。
 
 判定口径：**冒烟 = 真出一帧**。两条子命令共用同一条路径（`llm_debug` 截图），区别只在
 PNG 留不留——于是"进程还活着"与"渲染链跑通了"不是两回事，也不靠超时猜"该渲染完了吧"。
 errors 计数抓 `[error]` 级日志行：引擎自身 error 与 VVL 的 VUID 都落这一级（severity
 映射见 `rgl/utils.cppm` vulkanDebugCallback）。
+
+陈旧产物（2026-10-19 起**默认拦下**，此前只 print 一行"注意"就照常出图报 PASS）：
+SPV 旧于源、或二进制旧于 .cppm 源 ⟹ 跑引擎之前就 FAIL，**磁盘上不留那张误导人的图**。
+改默认的直接原因是当天的一次假阴性：注入 shadow.slang 的临时哨兵让 shader 编译失败（构建
+输出又被丢进 /dev/null），引擎加载的是旧 SPV，哨兵截图与正常渲染逐像素几乎相同——
+"诊断没生效"伪装成"诊断跑过了、结论是没变化"。默认必须选"报错"而不是"提示"，因为拿
+`just smoke` 当验收的人只会看最后一行与退出码；想"故意跑旧产物复现问题"用 `--allow-stale`
+显式豁免（降级回提示，日志写明豁免了几条）。`--from-build` **不**隐含豁免：它换的是配置
+基准，与产物新鲜度是两条互不相干的轴。二进制旧于 .slang / configs/*.lua 只提示不拦
+（.slang 的产物是 SPV、已按 SPV 依赖清单单独核过；配置是启动时现读的，不重编也生效）。
+判定本体在 `guard_freshness`（纯函数，selftest 用合成清单逐条驱动，同 verdicts 的拆法）。
 
 能力判据的数据源（能力观测批 2，`docs/能力观测_plan.md` §3.5/§5）：velocity / ssr /
 ssr_trace / taa 的 RT、render scale、后缓冲尺寸、FSR 的 context/时域/抖动，全部读引擎
@@ -44,9 +55,10 @@ ssr_trace / taa 的 RT、render scale、后缓冲尺寸、FSR 的 context/时域
 
 用法:
     python tools/smoke.py smoke [--from-build] [--frames N] [--timeout S] [--sync]
+                                [--allow-stale]  # 陈旧产物默认拦下，见上"陈旧产物"段
     python tools/smoke.py shot  [--name NAME] [--size WxH]
                                [--from-build] [--frames N]
-                               [--timeout S] [--sync]
+                               [--timeout S] [--sync] [--allow-stale]
     python tools/smoke.py shot  --config-base qa/configs/ssr_rig --name ssr_rig
                                # 用仓库里的靶配置出图（qa/configs/* 的既有目录同此用法）
     python tools/smoke.py shot  --name wetoff --set strength=0
@@ -65,8 +77,9 @@ ssr_trace / taa 的 RT、render scale、后缓冲尺寸、FSR 的 context/时域
                                # 'camera:mode=\"trackball\"'`；带空格的值同理（`--set
                                # 'camera:position="{ 1, 2, 3 }"'`）。上面的 python 直调无此问题。
 
-退出码: 0 = PASS · 1 = FAIL（前置不满足 / 引擎非零退出 / 有 error 级日志 / 没出图 /
-        没拿到 /state 能力快照——能力判据不回落日志，见上"能力判据的数据源"段）。
+退出码: 0 = PASS · 1 = FAIL（前置不满足 / 陈旧产物且未 --allow-stale / 引擎非零退出 /
+        有 error 级日志 / 没出图 / 没拿到 /state 能力快照——能力判据不回落日志，
+        见上"能力判据的数据源"段）。
 自检: python3 tools/smoke.py --selftest   # 量具自检（无引擎、毫秒级；同 just regress selftest）
 """
 
@@ -181,7 +194,12 @@ def stale_shaders() -> list[str]:
 
 
 def stale_binary() -> list[str]:
-    """引擎二进制是否落后于源（只警告——有时就是要跑旧二进制复现问题）。"""
+    """引擎二进制是否落后于源（返回清单，**处置在 `guard_freshness`**：.cppm 拦、其余只提示）。
+
+    截前 5 条给人看，但排序**把 .cppm 放最前**：guard_freshness 的"拦"就吃这份清单，
+    按字母序 configs/*.lua 恒排在 rgl/ 前——改配置不重编是常态，五个槽位可能被无害条目
+    占满，把真正要拦的 .cppm 挤出清单 = 拦截静默失效（写拦截时推出来的洞，就地堵掉）。
+    """
     exe_t = (BUILD_RGL / EXE_NAME).stat().st_mtime
     newer = [
         src.relative_to(ROOT).as_posix()
@@ -189,7 +207,50 @@ def stale_binary() -> list[str]:
         for src in ROOT.glob(pat)
         if "generated" not in src.parts and src.is_file() and src.stat().st_mtime > exe_t
     ]
-    return sorted(newer)[:5]
+    return sorted(newer, key=lambda p: (not p.endswith(".cppm"), p))[:5]
+
+
+def guard_freshness(stale_spv: list[str], stale_src: list[str], *,
+                    allow_stale: bool, say=print) -> None:
+    """陈旧产物检查：SPV 旧于源 / 二进制旧于 .cppm 源时**默认拦下**，跑引擎之前就不出图。
+
+    为什么从"只 print 一行注意"改成 FAIL（2026-10-19 事故）：往 shadow.slang 注入的临时哨兵
+    用了 Slang 没有的写法，shader 编译失败而构建输出被丢进了 /dev/null——SPV 停在旧版，
+    哨兵截图与正常渲染逐像素几乎相同，"诊断没生效"伪装成"诊断跑过了、结论是没变化"。
+    旧行为里这条信息只值一行没人看的"注意"，末尾照样打 `结果: PASS`、rc=0。
+    拦在跑引擎**之前**（而不是跑完再报）还有第二层意义：磁盘上不会留下那张误导人的图。
+
+    哪些条目算"会让本次运行失效"，哪些只提示：
+      · 陈旧 SPV 全部算——引擎按名字加载 build 里的 spv，源比它新 = 跑的不是这份源编出来的
+        着色器；"清单读不到"也算（stale_shaders 把它做成一条返回，跳过会被读成"着色器是新的"）。
+      · 二进制早于 .cppm 源算——二进制里就是没有那次改动，同一个病。
+      · 二进制早于 .slang / configs/*.lua **不算**：.slang 的产物是 SPV（上面已按 SPV 自己的
+        依赖清单核过，编译成功则 SPV 新、失败则已红在这里）；配置是引擎启动时从 staging
+        现读的，改配置不需要重编——拿它拦人 = 逼人跑无意义的 just build。
+
+    `--from-build` 不隐含豁免：它换的是**配置基准**（跑 build 副本的调试现场），与产物新不
+    新鲜是两条互不相干的轴；诊断现场恰恰更怕旧 SPV。豁免必须是显式的 `--allow-stale`，
+    让"我在跑旧产物"在命令行与日志里都看得见。
+
+    输入是两份**清单**（main 读好磁盘传进来）——本函数自己不碰磁盘/时钟，selftest 才能用
+    合成清单逐条驱动（同 verdicts / guard_flags 的拆法）。
+    """
+    for note in stale_spv:
+        say(f"[smoke] 注意（陈旧 SPV）: {note}")
+    if stale_src:
+        say(f"[smoke] 注意（二进制早于源，先 just build？）: {', '.join(stale_src)}")
+    fatal = [f"陈旧 SPV：{n}" for n in stale_spv] + \
+            [f"二进制早于源：{p}" for p in stale_src if p.endswith(".cppm")]
+    if not fatal:
+        return
+    if allow_stale:
+        say(f"[smoke] --allow-stale 豁免（{len(fatal)} 条）：只提示不拦——本次跑的产物比源旧，"
+            "出的图不能当作「改动生效」的证据")
+        return
+    shown = "；".join(fatal[:3]) + ("…" if len(fatal) > 3 else "")
+    fail(f"陈旧产物（{len(fatal)} 条：{shown}）——本次会加载旧的 SPV/二进制，出的图分不清"
+         "「什么都没变」和「改动没生效」，故不出图直接拦下。先 just build；确实要跑现有产物"
+         "（例如复现旧问题）加 --allow-stale", say=say)
 
 
 def git_state() -> str:
@@ -1123,7 +1184,14 @@ def parse_args() -> argparse.Namespace:
                          "只会让输入图整体亚像素平移而没有任何东西去抵消。⚠ 它与 taa.jitter_scale "
                          "是**两个独立旋钮**，不是同一个的别名")
     ap.add_argument("--from-build", action="store_true",
-                    help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）")
+                    help="以 build/rgl/configs 副本为基准（跑调试现场；默认用仓库 configs/）。"
+                         "⚠ 它**不**豁免陈旧产物检查——换的是配置基准，不是产物新鲜度；"
+                         "要跑旧 SPV/旧二进制请显式 --allow-stale")
+    ap.add_argument("--allow-stale", action="store_true",
+                    help="把「陈旧产物」（SPV 旧于源 / 二进制旧于 .cppm 源）从**拦下不出图**"
+                         "降级回一行提示。默认是拦：2026-10-19 实测，只打'注意'照常报 PASS 会让"
+                         "'改动没编进去'被读成'改动没效果'。本旗标给'故意跑现有产物复现问题'用，"
+                         "代价是本次的图不能当作「改动生效」的证据（日志里会写明豁免了几条）")
     ap.add_argument("--set", dest="overrides", action="append", default=None,
                     metavar="[FILE:]KEY=VALUE",
                     help="通用配置注入（可重复）：对 staging 的配置文件走 patch_lua "
@@ -1187,10 +1255,8 @@ def main() -> int:
     # 同步验证档的现场记录：syncval 是本工具唯一"改 env 才成立"的臂，而 env 不在上面那行
     # 配置摘要里——不写出来，事后拿着 errors=0 的读数无法回答"这次到底开没开"。
     print(f"同步验证: {'开（VK_LAYER_VALIDATE_SYNC=1，hazard 计入 errors）' if args.sync else '关（默认）'}")
-    for note in stale_shaders():
-        print(f"[smoke] 注意（陈旧 SPV）: {note}")
-    if newer := stale_binary():
-        print(f"[smoke] 注意（二进制早于源，先 just build？）: {', '.join(newer)}")
+    # 陈旧产物检查（默认拦下；理由与豁免语义 → guard_freshness 的注释）
+    guard_freshness(stale_shaders(), stale_binary(), allow_stale=args.allow_stale)
     if diff := dirty_build_copy():
         print(f"[smoke] 注意（build 副本 configs/ 与仓库不同）: {', '.join(diff)}")
 
@@ -1260,7 +1326,7 @@ def main() -> int:
 
 
 def selftest(quiet: bool = False) -> list[str]:
-    """量具自检（无引擎、毫秒级；由 `regress selftest` 调用）。两半，各钉一类静默失效：
+    """量具自检（无引擎、毫秒级；由 `regress selftest` 调用）。三块，各钉一类静默失效：
 
     **① `patch_lua` 文本补丁器**——单行子表那个 bug 的失效形态是**静默改坏配置**：护栏全绿、
     smoke 报 PASS errors=0，而量的是默认档（`--set shadow:izb.on=true` 曾把同块的 `grid`/
@@ -1275,7 +1341,11 @@ def selftest(quiet: bool = False) -> list[str]:
     段整个没了 / 字段改名 / 条目缺键 / 名字前缀相似——这些必须红（⑭ 组），而它们恰是旧夹具形态
     （手抄日志行）写不出来的。日志侧近邻行用例仍保留给运行模式类判据。
 
-    🔴 两半都不许加"要引擎"的用例：selftest 被 regress 在**每次判定前**调用，慢一秒 = 每次
+    **③ 陈旧产物检查 `guard_freshness`（2026-10-19）**——"跑的是旧 SPV/旧二进制"必须能让运行
+    FAIL；三态（拦/放行/豁免降级）与"非空但无害"的反向用例逐条钉住，拦截条件被改成恒不触发
+    时这里要红（⑮ 组）。
+
+    🔴 三块都不许加"要引擎"的用例：selftest 被 regress 在**每次判定前**调用，慢一秒 = 每次
     回归慢一秒。
     """
     import tempfile
@@ -1803,9 +1873,50 @@ def selftest(quiet: bool = False) -> list[str]:
     done.append(f"判据段 verdicts：{vcase} 个合成用例逐条钉住（阳性锚点 + 每条 fail() 会红、"
                 "每条放行档不红；批 2 新增「来源整个没了 / 字段改名 / 日志行不许顶替回包」三类）")
 
+    # ⑮ 陈旧产物检查（guard_freshness）：三态（拦 / 放行 / 豁免降级）+ 反向用例。
+    #    为什么这组必须存在：2026-10-19 的假阴性（哨兵没编进 SPV、截图与正常渲染逐像素相同、
+    #    末尾照样 `结果: PASS`）就是"只提示不拦"放出来的。把拦截条件改成恒不触发的哪天，
+    #    下面"必须拦"的三条要当场红。
+    def fresh_out(stale_spv=(), stale_src=(), allow_stale=False) -> tuple[str, list[str]]:
+        """跑一遍检查 → (FAIL 消息, 全部输出行)；没红 = FAIL 消息为空串。"""
+        out: list[str] = []
+        try:
+            guard_freshness(list(stale_spv), list(stale_src), allow_stale=allow_stale,
+                            say=out.append)
+        except SystemExit:
+            pass
+        return next((ln[len("[smoke] FAIL: "):] for ln in out
+                     if ln.startswith("[smoke] FAIL: ")), ""), out
+
+    STALE_SPV = "light.frag.spv 旧于 rgl/shaders/shadow.slang"
+    # 新鲜（两份清单都空）⟹ 不红、也不多打一行
+    msg, out = fresh_out()
+    vok(not msg and not out, f"全新鲜不该红、不该有输出：msg={msg!r} out={out}")
+    # 陈旧 SPV ⟹ 拦，且消息里点名到具体条目（只说"陈旧"不说是哪条 = 用户不知道该修哪个）
+    msg, _ = fresh_out(stale_spv=[STALE_SPV])
+    vok("陈旧 SPV" in msg and STALE_SPV in msg, f"陈旧 SPV 必须拦且点名条目：{msg[:80]!r}")
+    # 二进制早于 .cppm 源 ⟹ 二进制里没有那次改动，同一个病，也必须拦
+    msg, _ = fresh_out(stale_src=["rgl/ecs/foo.cppm"])
+    vok("rgl/ecs/foo.cppm" in msg, f"二进制早于 .cppm 源必须拦：{msg[:80]!r}")
+    # 清单读不到（stale_shaders 把"缺失"也做成一条）⟹ 拦——跳过会被读成"着色器是新的"
+    msg, _ = fresh_out(stale_spv=["shader_deps.txt 缺失（随 shader_dep_check 生成）——先 just build"])
+    vok("shader_deps.txt" in msg, f"清单缺失必须拦：{msg[:80]!r}")
+    # 豁免旗标 ⟹ 降级为提示：不红，但注意行与豁免行都要在输出里（一声不吭地放行 = 又回到老病）
+    msg, out = fresh_out(stale_spv=[STALE_SPV], allow_stale=True)
+    vok(not msg and any("陈旧 SPV" in ln for ln in out)
+        and any("--allow-stale" in ln for ln in out),
+        f"--allow-stale 应降级为提示且留痕：msg={msg!r} out={out}")
+    # 反向用例（输入**非空**，不是"空清单恒真"那种假断言）：configs/*.lua 与 .slang 比
+    # 二进制新只提示不拦——配置是启动时现读的、.slang 的产物是 SPV（已按 SPV 清单单独核过）。
+    # 钉住这条，"清单非空即拦"的一刀切改法会红在这里。
+    msg, out = fresh_out(stale_src=["configs/runtime.lua", "rgl/shaders/shadow.slang"])
+    vok(not msg and any("二进制早于源" in ln for ln in out),
+        f"配置/着色器源比二进制新不该拦、但注意行要在：msg={msg!r} out={out}")
+    done.append("陈旧产物检查 guard_freshness：三态（拦/放行/豁免降级）+ 反向用例（非空但无害）逐条钉住")
+
     if not quiet:
         print(f"[smoke] 自检 {len(done)} 项通过（patch_lua 单行子表/多行块/两条护栏 + "
-              "判据段 verdicts 逐条会红）")
+              "判据段 verdicts 逐条会红 + 陈旧产物检查三态与反向用例）")
     return done
 
 

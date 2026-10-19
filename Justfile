@@ -349,10 +349,16 @@ run:
 # build/rgl/.smoke/ 经 RGL_CONFIG_DIR 注入，跑完没有"需要复原"的状态；开头回显
 # 主机 / GPU / DGC 选路 / 二进制与 SPV 新鲜度 / 副本是否脏（三机轮换先认设备）。
 # 判据 = 真出一帧（llm_debug 截图），errors 抓 [error] 级日志行（含 VVL VUID）。
+# 🔴 陈旧产物**默认拦下不出图**（SPV 旧于源 / 二进制旧于 .cppm 源 ⟹ rc=1，先 just build）：
+#   旧行为只打一行"注意"就照常报 PASS，"改动没编进去"会被读成"改动没效果"（2026-10-19 实测
+#   的假阴性）。故意跑现有产物复现问题 → 加 --allow-stale（降级回提示，图仍出但日志留痕）。
 #   just smoke                                  冒烟（PASS/FAIL + errors/warnings 计数）
-#   just smoke --variant deferred               换渲染路线冒烟
+#   just smoke --aa taa                         换抗锯齿档（off|taa|fsr）
+#                                               ⚠ 渲染路线**没有开关**（`variant` 键与
+#                                               RgGraphVariant 枚举已删，写它 = 启动报错）
 #   just shot --name foo --size 1600x900        截图 → build/rgl/screenshots/foo.png
-#   just smoke --from-build                     以 build 副本现场为配置基准（默认基准 = 仓库 configs/）
+#   just smoke --from-build                     以 build 副本现场为配置基准（默认基准 = 仓库 configs/；
+#                                               ⚠ 不豁免陈旧检查——它换的是配置，不是产物）
 #   just smoke --sync                           **VVL 同步验证档**（syncval，改 barrier 后跑）
 #     开关名 = `VK_LAYER_VALIDATE_SYNC=1`（工具内置，`--syncval` 是同义写法）。hazard 以
 #     [error] 落日志 ⟹ 直接计入 errors，判据仍是 errors=0。默认不开：syncval 有实打实 CPU
@@ -377,7 +383,7 @@ shot *ARGS="":
 #   just regress ab                      同会话双构建（工作树 vs --ref，默认 HEAD）+ 归因
 #   just regress burst --lag 16          连拍量最小同相位周期（时域位级出口）
 # 三条不可谈：零容差（差异大小只归因不放行）· 不存 golden · 不存基线哈希（--expect 只
-# 接受你从文档抄来的前缀）。配置旗标与 just smoke 同源（--variant/--aa/--size/--clip/…）。
+# 接受你从文档抄来的前缀）。配置旗标与 just smoke 同源（--aa/--size/--clip/--render-scale/…）。
 regress *ARGS="":
     @python tools/regress.py {{ ARGS }}
 
