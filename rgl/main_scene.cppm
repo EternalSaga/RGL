@@ -711,10 +711,11 @@ bool computeFsrUsable(DeviceContext& device, const CompiledRenderGraph& graph,
  * @return 实际生效的时域开关（被拦时 = false，并出 warn）
  */
 bool resolveFsrTemporal(bool fsrUsable, bool fsrTemporal, bool taaDecorated) {
-	// **生效锚点**（`tools/smoke.py --fsr-temporal` 的双向核对读这一行）。为什么必须有：本函数
-	// 曾在 TAA 在图时把调参**判关**，而配置里写的仍然是 `true` ⟹ 只看配置会以为
-	// 开着。与 `fsr_jitter` 那条同族：申报值与生效值必须现场可读。
-	// ⚠ 文本格式被 smoke.py 的正则钉住（批 14.6 只改注释不改文案）。
+	// **生效锚点**：本函数曾在 TAA 在图时把调参**判关**，而配置里写的仍然是 `true`
+	// ⟹ 只看配置会以为开着。与 `fsr_jitter` 那条同族：申报值与生效值必须现场可读。
+	// 判据（`tools/smoke.py --fsr-temporal` 的双向核对）读的是 `/state` 的 fsr 段
+	// （temporalEffective / temporalConfig，能力观测批 2）——本行给人读，改文案不弄坏判据；
+	// 但「申报 vs 生效」这对事实**必须继续进 fsr 段**，那才是契约。
 	// 为什么写在**本函数**而不是调用方：`assembleBackEnd` 的认知复杂度已经压线（实测加两行
 	// 即超 15 被 source_checks 点名），而"生效状态"本来就是本函数的职责所在。
 	const auto logState = [&](bool effective) {
@@ -807,6 +808,10 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 	// 批 14.5 第二批：FSR 生效判据在装配层一次算完（判据本体见 computeFsrUsable）。
 	const bool fsrUsable = computeFsrUsable(device, graphResult.graph, fsrEnabled,
 		velocityDecorated, taaDecorated);
+	// 能力观测批 2：FSR **申报侧**两枚进 SceneEnv（`/state` fsr 段的 gateOpen /
+	// temporalConfig 唯一来源；生效侧由 Renderer 访问器现取，不记第二份）。
+	registry.ctx().get<SceneEnv>().fsrGateOpen = fsrEnabled;
+	registry.ctx().get<SceneEnv>().fsrTemporalConfig = fsrTemporal;
 	// 批 14.5 第四批：抖动解耦（判据与"为什么在装配层算相位数"见 wireFsrJitter）
 	wireFsrJitter(registry, swapchain, fsrUsable, fsrJitter);
 	assembleHdrAoChain(swapchain, resources, samplers, rtCache, pipelines, taaDecorated,

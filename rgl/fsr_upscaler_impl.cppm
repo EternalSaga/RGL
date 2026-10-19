@@ -412,6 +412,10 @@ vk::Extent2D FsrUpscaler::getRenderExtent() const {
 	return impl->renderExtent;
 }
 
+vk::Extent2D FsrUpscaler::getUpscaleExtent() const {
+	return impl->upscaleExtent;
+}
+
 uint64_t FsrUpscaler::vramBytes() const {
 	FfxEffectMemoryUsage vram{};
 	if (const auto e = ffxFsr3UpscalerContextGetGpuMemoryUsage(impl->ctx.get(), &vram);

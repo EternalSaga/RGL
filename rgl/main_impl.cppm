@@ -264,8 +264,8 @@ void wireWindowContexts(entt::registry& rg, const PreWindow& pre) {
  * 只装**初值**：之后每帧由 `resizeSystem` 帧首从 swapchain 同步（那条覆盖 OUT_OF_DATE
  * 重建路径——它改渲染 extent 却不改 WindowExtent）。
  *
- * 日志是判据的一部分：`tools/smoke.py --render-scale` 靠解析本行核对"请求的倍率真的
- * 生效了"，改了文案那条判据会当场报"口径日志没了"。
+ * 本行给人读；生效核对（`tools/smoke.py --render-scale`）读的是 `/state` 的 render 段
+ * （能力观测批 2），改这行文案不会弄坏任何判据——但也别删，三机排障都靠它。
  * @param rg registry（写 RenderExtent）
  * @param swapchain 已构造的交换链（渲染 extent 的唯一来源）
  */

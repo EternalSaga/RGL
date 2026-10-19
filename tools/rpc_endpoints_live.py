@@ -8,9 +8,10 @@
 1. `GET /` 的 routes 数组**逐条含序** == `rgl/rpc_schema.lua` 的记录顺序（批 1 的既有行为）；
 2. 每端点成功回包的**顶层键集合** == schema `response.fields`（无条件字段必须都在；出现
    声明外的键 = FAIL；条件性字段缺席合法）；
-3. `/state` 的 camera/render/graph/pages[0]/capabilities 与 `/camera` 的 camera **嵌套键集合**
-   == 根级 `shapes` 声明；外加两条反向用例（不带 `yaw_at_frame` 无 `yawPinnedFrame`；`on`
-   形态不回 `toggleFrames`）钉"条件性"确实是条件性。
+3. `/state` 的 camera/render/graph/pages[0]/capabilities/fsr 与 `/camera` 的 camera **嵌套键
+   集合** == 根级 `shapes` 声明；外加反向用例（不带 `yaw_at_frame` 无 `yawPinnedFrame`；`on`
+   形态不回 `toggleFrames`；出厂档 fsr 段 usable=false 时尺寸四键**不得出现**）钉
+   "条件性"确实是条件性。
 
 它钉的是**键集与序**，不钉值——值的行为锚另有其人（`tests/test_burst_protocol.cppm` 的文案、
 `just regress burst` 与两个截图锚）。为什么值得存在：`response` 段没有运行期消费者，
@@ -93,6 +94,11 @@ def main() -> int:
                         next(s for s in root["shapes"] if s["name"] == "capabilityAttachment")
                         ["fields"] if f.get("optional")}
     cap_att_required = cap_att_all - cap_att_optional
+    # fsr 段（能力观测批 2）同样分「必在 / conditional」两半（尺寸四键 = usable 才在）。
+    fsr_shape = next(s for s in root["shapes"] if s["name"] == "stateFsr")
+    fsr_all = {f["name"] for f in fsr_shape["fields"]}
+    fsr_optional = {f["name"] for f in fsr_shape["fields"] if f.get("optional")}
+    fsr_required = fsr_all - fsr_optional
 
     def declared(eid: str, only_required: bool):
         e = next(x for x in endpoints if x["id"] == eid)
@@ -236,6 +242,29 @@ def main() -> int:
             # 脏窗口用例；这条抓的是「能力段整个读错了图 / 读了空图」这类粗失效）。
             check("能力段 pass 名集合 == graph.presentPasses（稳态一致性）",
                   set(cap_pass_names), set(st["graph"]["presentPasses"]))
+
+            print("== 2c. GET /state FSR 段（能力观测批 2）==")
+            # 本脚本跑**出厂档**（aa 关）⟹ 这里钉的是反向半边：usable/gateOpen/时域/抖动
+            # 全 false、conditional 的尺寸四键**不得出现**（出现 = 门关不拢 / schema 与
+            # 处理函数一起自洽地漂了）。正向半边（aa=fsr 档 usable=true 且尺寸四键必在）
+            # 的实机消费者 = `just smoke --aa fsr`（判据本体在 tools/smoke.py 的 fsr 段）。
+            fsrSec = st["fsr"]
+            check("/state.fsr 键（出厂档 usable=false ⟹ 尺寸四键缺席合法）",
+                  set(fsrSec.keys()), fsr_required)
+            check("出厂档 fsr 门关（gateOpen/usable/temporalEffective/jitterWired 全 false）",
+                  [fsrSec["gateOpen"], fsrSec["usable"],
+                   fsrSec["temporalEffective"], fsrSec["jitterWired"]],
+                  [False, False, False, False])
+            check("出厂档 jitterPhase == 0", fsrSec["jitterPhase"], 0)
+            check("temporalConfig 是布尔（申报侧回显配置键，值随 configs/runtime.lua 不钉死）",
+                  isinstance(fsrSec["temporalConfig"], bool), True)
+            # 跨字段不变量（与档位无关）：生效侧三枚都蕴含 usable——「FSR 没跑却在按时域/
+            # 抖动」的回包是拼装错位，出厂档恰好全 false 时它们恒真，所以这两条要写成
+            # **蕴含式**而不是常量比对（门开档由 smoke 判据吃，这里兜形状错）。
+            check("蕴含式：temporalEffective ⟹ usable",
+                  (not fsrSec["temporalEffective"]) or fsrSec["usable"], True)
+            check("蕴含式：jitterWired ⟹ usable",
+                  (not fsrSec["jitterWired"]) or fsrSec["usable"], True)
 
             print("== 3. POST /camera ==")
             cam = rpc("POST", "/camera", {"fovDegrees": 60.0})

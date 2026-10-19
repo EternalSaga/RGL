@@ -526,6 +526,13 @@ export struct SceneEnv {
 	/// 0 = 未设置，消费侧回落 kTaaJitterPeriod。字段名刻意不叫 phaseCount：与同名自由函数
 	/// 并存时 `env.fsrJitterPhaseCount(...)` 这种表达式是纯阅读陷阱。
 	uint32_t fsrJitterPeriod = 0;
+	// FSR **申报侧**两枚（能力观测批 2：`/state` fsr 段的 gateOpen / temporalConfig）：
+	// gateOpen = runtime.lua `aa == "fsr"` 门开没开；fsrTemporalConfig = `fsr.temporal`
+	// 键原值。装配期由 assembleBackEnd 回填（与 fsrJitter 同批同时机）。**生效侧**
+	// （usable / temporalEffective / context 实收尺寸）不住这里——那是 Renderer 的
+	// 现状，两处各记各的，「申报了没生效」才有得查。
+	bool fsrGateOpen = false;
+	bool fsrTemporalConfig = false;
 	// 重投影消融门（`taa.reprojection`，默认 true = 逐位今天）：false ⟹ taaSystem 把
 	// 「上一帧矩阵」载荷换成本帧抖动后矩阵 + 位移清零 + motion 单位阵 ⟹ shader 的
 	// prevUvBase ≡ baseUv（历史按同基位置采样）。判据消费方 = imgqa temporal-motion M3。

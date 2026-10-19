@@ -132,6 +132,9 @@ export class FsrUpscaler {
 
 	/** @return 构造时锁定的渲染分辨率（重建判据用，同 IzbShadow::getExtent）。 */
 	vk::Extent2D getRenderExtent() const;
+	/** @return 构造时锁定的上屏分辨率（能力观测批 2：`/state` fsr 段报 context 实收尺寸，
+	 *  与 render 段的窗口尺寸是**两条独立代码路径**的读数，对拍才有意义）。 */
+	vk::Extent2D getUpscaleExtent() const;
 
    private:
 	struct Impl;  ///< vendor 类型不外泄（context 1 MiB + 5 张私有图 + 资源包装缓存）

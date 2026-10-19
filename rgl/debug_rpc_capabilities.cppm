@@ -16,8 +16,10 @@ namespace RGL {
  * ## 这一段的定位：能力事实的唯一结构化出口
  *
  * 「引擎当前具备哪些渲染能力」此前只有两处可观测形态：编译产物本体（进程内）与启动日志
- * 文案（外部只能抓这个，`tools/smoke.py` 的十几条正则）。本函数把前者变成一个 JSON 段，
- * 批 2 的消费者迁移（smoke.py / cpu_baseline.py 换读这里）以这一段为准。
+ * 文案（批 2 之前外部只能抓这个）。本函数把前者变成一个 JSON 段；批 2 已把消费者
+ * （smoke.py 的 RT / render-scale 判据 + cpu_baseline.py）迁到读这里——日志行保留给人读，
+ * 不再是判据契约。FSR 是图外 compute、不在编译图里，它的判据吃**兄弟段** `fsr`
+ * （本文件的 rpcFsrJson，申报侧 × 生效侧八枚事实）。
  *
  * ## 🔴 内容一律从编译产物现算，本函数没有第二个内容来源
  *
@@ -106,6 +108,60 @@ export nlohmann::json rpcCapabilitiesJson(const DynamicRenderGraph& graph,
 		{"attachments", std::move(attachments)},
 		{"passes", std::move(passes)},
 	};
+}
+
+/**
+ * `/state` 的 `fsr` 段入参：FSR 的**申报侧 + 生效侧**八枚事实（能力观测批 2）。
+ *
+ * 为什么这一段是 `capabilities` 的**兄弟段**而不是塞进能力段：能力段的内容一律从
+ * 编译产物现算（§3.1），而 FSR 是**图外 compute**——它的 context 构造、时域裁决、
+ * 抖动接线都不在编译图里，硬塞会把「能力段 = 图事实」这条来源单一性弄脏。
+ * 「velocity 附件在图」推不出「FSR 接起来了」（设备轴 shader16 降级档就是反例），
+ * 所以这四条判据需要自己的出口，而不是复用附件名单。
+ *
+ * 取数分工（每枚只有一个来源，调用点 = rpcHandleState）：
+ *  - `gateOpen` / `temporalConfig` = 申报侧（SceneEnv，装配期回填的配置原值）；
+ *  - `usable` / `temporalEffective` / 两对尺寸 = 生效侧（Renderer / FsrUpscaler 现状）。
+ */
+export struct RgFsrFacts {
+	bool gateOpen = false;         ///< runtime.lua `aa == "fsr"` 门开（与接没接起来无关）
+	bool usable = false;           ///< FSR context 真构造了（Renderer::fsrUsable）
+	uint32_t renderWidth = 0;      ///< context 实收渲染宽（仅 usable 时有意义、才出键）
+	uint32_t renderHeight = 0;     ///< context 实收渲染高
+	uint32_t upscaleWidth = 0;     ///< context 实收上屏宽
+	uint32_t upscaleHeight = 0;    ///< context 实收上屏高
+	bool temporalEffective = false;///< vendor 时域累积历史在跑（= usable && 互斥裁决通过）
+	bool temporalConfig = false;   ///< `fsr.temporal` 键原值（申报侧）
+	bool jitterWired = false;      ///< Halton 抖动接进了投影（= usable && 配置 fsr.jitter）
+	uint32_t jitterPhase = 0;      ///< 抖动序列周期（0 = 未接）
+};
+
+/**
+ * `fsr` 段拼装（纯函数；键集 = `rgl/rpc_schema.lua` 的 `stateFsr`）。
+ *
+ * 尺寸四键**只在 usable = true 时出现**（未构造就没有「实收尺寸」这个事实可报——
+ * 报 0 会把「没构造」与「构造在 0×0 上」塌成同一个值，正是批 2 要消灭的那类塌陷）。
+ * 其余六键恒在：消费者侧**缺键必须是错**（计划 §5 硬规则 1），所以这里一个默认值都不给。
+ *
+ * @param f 八枚事实（来源分工见 RgFsrFacts 注释）
+ * @return fsr 段的 JSON 对象
+ */
+export nlohmann::json rpcFsrJson(const RgFsrFacts& f) {
+	nlohmann::json out {
+		{"gateOpen", f.gateOpen},
+		{"usable", f.usable},
+		{"temporalEffective", f.temporalEffective},
+		{"temporalConfig", f.temporalConfig},
+		{"jitterWired", f.jitterWired},
+		{"jitterPhase", f.jitterPhase},
+	};
+	if (f.usable) {
+		out["renderWidth"] = f.renderWidth;
+		out["renderHeight"] = f.renderHeight;
+		out["upscaleWidth"] = f.upscaleWidth;
+		out["upscaleHeight"] = f.upscaleHeight;
+	}
+	return out;
 }
 
 }  // namespace RGL

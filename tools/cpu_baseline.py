@@ -53,7 +53,6 @@ import argparse
 import io
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -285,11 +284,21 @@ def run_engine(arm: str, window: int, warmup: int, timeout: int) -> tuple[Path, 
     if "headless 模式" not in log_text:
         raise ArmFail("引擎不是 headless（合成器 present 节奏与窗口尺寸会混进被测对象）"
                       "——staging 里的 headless 键没生效？")
-    extent = re.search(r"render scale = .*?→ render (\d+x\d+)", log_text)
+    # 渲染网格读 `/state` 的 render 段（能力观测批 2：与 smoke 判据同源，不再捞日志）。
+    # 🔴 缺键 = ArmFail 而不是"未取到"：extent 是每臂现场里被当权威读的尺寸，「来源坏了」
+    # 与「尺寸没捞到」不能塌成同一个读数（能力路径上 `.get(key, 默认)` 同罪——禁用）。
+    if "render" not in state:
+        raise ArmFail(f"/state 回包缺 render 段（顶层键 = {sorted(state.keys())}）"
+                      "——来源坏了，本臂读数不作数")
+    render = state["render"]
+    for k in ("renderWidth", "renderHeight"):
+        if k not in render:
+            raise ArmFail(f"/state render 段缺键 {k!r} ——缺键是错，不回落日志也不回落默认值")
+    extent = f"{int(render['renderWidth'])}x{int(render['renderHeight'])}"
     stats, trace = newest_profile(started_wall)
     return stats, trace, {
         "device": smoke.gpu_of(log_text),
-        "extent": extent.group(1) if extent else "未取到",
+        "extent": extent,
         "errors": len(errors),
         "warnings": len(warnings),
         "error_lines": errors[:3],

@@ -482,7 +482,8 @@ export inline constexpr std::string_view kAoApplyPassName = "ao_apply";
  */
 export inline constexpr std::string_view kSsrAppliedName = "ssr_applied";
 export inline constexpr std::string_view kSsrAppliedFormat = "rgba16_sfloat";
-/** apply pass 名（**沿用 15.1 的 "ssr"**——消费者链 / 日志 / smoke 判据零改动）与 state 名同源。 */
+/** apply pass 名（**沿用 15.1 的 "ssr"**——消费者链 / 日志 / smoke 判据吃的名字零改动；
+ *  批 2 起判据锚的是能力段附件名 ssr_applied 与 pass 名，不再是启动日志文案）与 state 名同源。 */
 export inline constexpr std::string_view kSsrPassName = "ssr";
 /** trace pass 的附件 / pass 名 / 格式 / 缩放（批 15.3 子步 B；缩放口径 → scaleRtExtent）。 */
 export inline constexpr std::string_view kSsrTraceName = "ssr_trace";
@@ -1113,7 +1114,7 @@ export bool decorateAoApplyPass(RgGraphDesc& desc);
  * 做的事 = 两附件 + 两全屏 pass + 一次消费者改写：
  *  - `ssr_trace` pass（state="ssr_trace"，半分辨率 extentScale）：读 light 的成片与
  *    G-buffer/深度，march 后写 premultiplied 反射贡献；
- *  - `ssr` pass（apply，state="ssr" **沿用原名**——消费者链/日志/smoke 判据零改动）：读
+ *  - `ssr` pass（apply，state="ssr" **沿用原名**——消费者链/日志/smoke 判据吃的名字零改动）：读
  *    scene_hdr + ssr_trace + gbuffer_metalrough，粗糙度感知模糊后加法写 ssr_applied；
  *  - 把「写 swapchain 且采色」那个 pass（tonemap）的色输入换成 `ssr_applied`。
  * 插入次序 = light → **trace → apply** → [taa | ao_applied] → tonemap（两 pass 一起插在

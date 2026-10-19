@@ -18,6 +18,8 @@ import debug_rpc_burst;  // /shotburst 协议判据（形状解析 + 锚点裁�
 import debug_rpc_shape;   // 批 2：请求形状校验（消费 rpc_schema.lua 生成表）
 import debug_rpc_payload;  // B2-5：应答形状闸 + 参数页↔JSON 编解码（拆出去顶的是文件行数红线）
 import debug_rpc_capabilities;  // 能力观测批 1：capabilities 段拼装（纯函数，判据在 tests/）
+                           //   + 批 2：fsr 段拼装（申报侧 × 生效侧八枚事实，同一纯函数模块）
+import scene_context;    // 能力观测批 2：SceneEnv 的 FSR 申报侧两枚 + 抖动生效值
 import rpc_schema_generated;  // 路由表（分发的唯一来源；真相源 = rgl/rpc_schema.lua）
 import asset_table;  // AssetTable（参数页构建）
 import vk_renderer;  // Renderer（/shot 帧捕获 + writeCapturePng 宿主）
@@ -156,7 +158,24 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 		{"capabilities", rpcCapabilitiesJson(
 			w.renderer.dynamicGraphRef(), w.renderer.getRenderGraphRef(),
 			[&w](std::string_view name) { return w.renderer.getRtCacheRef().isBuilt(name); },
-			vk::Extent2D { re.width, re.height }, w.frame)}});
+			vk::Extent2D { re.width, re.height }, w.frame)},
+		// FSR 段（能力观测批 2）：FSR 是**图外 compute**，不在编译图里 ⟹ 判据吃不到能力段，
+		// 给它一个兄弟段。申报侧两枚 = SceneEnv（装配期回填的配置原值），生效侧六枚 =
+		// Renderer / FsrUpscaler 现状（context 建没建、时域跑没跑、vendor 实收尺寸）。
+		// 抖动接线（jitterWired / jitterPhase）也是生效侧：SceneEnv 里那两枚就是
+		// wireFsrJitter 按 fsrUsable 裁决后的值（申报值 = 配置键，今天无消费者，不报）。
+		{"fsr", rpcFsrJson(RgFsrFacts {
+			.gateOpen = w.registry.ctx().get<SceneEnv>().fsrGateOpen,
+			.usable = w.renderer.fsrUsable(),
+			.renderWidth = w.renderer.fsrRenderExtent().width,
+			.renderHeight = w.renderer.fsrRenderExtent().height,
+			.upscaleWidth = w.renderer.fsrUpscaleExtent().width,
+			.upscaleHeight = w.renderer.fsrUpscaleExtent().height,
+			.temporalEffective = w.renderer.fsrTemporalEffective(),
+			.temporalConfig = w.registry.ctx().get<SceneEnv>().fsrTemporalConfig,
+			.jitterWired = w.registry.ctx().get<SceneEnv>().fsrJitter,
+			.jitterPhase = w.registry.ctx().get<SceneEnv>().fsrJitterPeriod,
+		})}});
 }
 
 /**

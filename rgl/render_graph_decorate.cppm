@@ -568,7 +568,8 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 	//  ① 挪错的症状从「SSR 静默建在时域滤波之后」变成「SSR 静默消失」——前者图仍自洽
 	//    （能编译、无 hazard、无 warning，只是抖动网格不匹配且 SSR 不被滤波），图/布局/
 	//    像素三个层面都无异常，单测与冒烟全绿抓不到（缺口 2，phase15_plan §3.2）；后者
-	//    可被观测（tools/smoke.py --ssr 的双向核对看见 ssr RT 行消失即 FAIL）。
+	//    可被观测（tools/smoke.py --ssr 的双向核对看见能力段 ssr_applied/ssr_trace 附件
+	//    消失即 FAIL；启动日志的 RT 行给人读，不是判据——能力观测批 2）。
 	//  ② 端到端兜底 = 真 shader 落地后 `aa=taa` 档 SSR 开/关差分必须不同（那条判据由主
 	//    agent 在 15.1 后半验收执行，护栏设计 → phase15_plan §3.2 缺口 1/2）。
 	//  ③ 与 decorateAoApplyPass 的「taa 在图里就跳过」**语义不同**：那条是**互斥**（AO
@@ -656,7 +657,8 @@ bool decorateSsrPass(RgGraphDesc& desc) {
 		.loadOp = RgLoadOp::load, .storeOp = RgStoreOp::store});
 
 	// ── apply pass（全分辨率，粗糙度感知螺旋模糊 + 加法，写 ssr_applied）──
-	// pass/state 名**沿用 "ssr"**（15.1 起消费者链 / 启动日志 / smoke 判据的锚点不动）。
+	// pass/state 名**沿用 "ssr"**（15.1 起消费者链的锚点不动；批 2 起 smoke 判据吃的是
+	// 能力段附件名 ssr_applied / ssr_trace，启动日志行只剩人读用途，不在契约里）。
 	RgPassDesc apply{
 		.name = std::string{kSsrPassName}, .kind = RgPassKind::drawLight,
 		.state = std::string{kSsrPassName},

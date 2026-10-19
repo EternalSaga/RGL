@@ -45,6 +45,7 @@
   - `render`（object，见共享结构 `stateRender`）窗口/渲染尺寸与生效倍率（像素类判据的口径记录）
   - `graph`（object，见共享结构 `stateGraph`）渲染图快照（开关是否真的生效的唯一观测面：无选中时 highlight 零 draw，画面本来就不该变）
   - `capabilities`（object，见共享结构 `stateCapabilities`）渲染能力快照（docs/能力观测_plan.md 批 1）：内容一律从编译产物现算 = 「这一帧实际在画什么」；与 graph 段是两个口径（那边读声明，来源问题见 stateGraph.note 与计划 §1.1）
+  - `fsr`（object，见共享结构 `stateFsr`）FSR 生效快照（能力观测批 2）：FSR 是图外 compute、不在编译图里 ⟹ 它的判据吃不到 capabilities 段，单给一段。申报侧（gateOpen/temporalConfig）与生效侧（usable/temporalEffective/尺寸/jitter）分列，「申报了没生效」的差就是本段的读数对象
 
 ### `POST /camera`
 
@@ -201,6 +202,22 @@ pass 级动态开关（复合事务的安全点入口；toggle_frames = 逐帧�
 - `dirty`（boolean）——true = 声明侧有变更尚未落图（申报后、重编译前，或重编译失败正逐帧重试）——此时 attachments/passes 是执行器当前编译图的读数，声明侧已是另一份
 - `attachments`（object[]，见共享结构 `capabilityAttachment`）——编译图附件逐条（顺序 = slot 下标）
 - `passes`（object[]，见共享结构 `capabilityPass`）——编译图 pass 逐条（顺序 = 执行序）
+
+
+### `stateFsr`
+
+FSR 生效快照（rpcFsrJson 拼装，能力观测_plan 批 2）。FSR = 图外 compute，编译图里没有它的事实（capabilities 段按 §3.1 只装图事实），故单列一段。gateOpen/temporalConfig = 申报侧（SceneEnv，装配期回填的配置原值）；usable/temporalEffective/render*/upscale*/jitter* = 生效侧（Renderer/FsrUpscaler/SceneEnv 现状）。⚠ 「velocity 附件在图」推不出「FSR 接起来了」——设备轴 shader16 降级档就是反例，两侧必须分开报
+
+- `gateOpen`（boolean）——runtime.lua aa == "fsr" 门开（配置事实；与有没有真的接起来无关）
+- `usable`（boolean）——FSR context 真的构造并接进图了（= gateOpen ∧ velocity 在图 ∧ 设备 shader16 ∧ 输入附件齐备；gateOpen ∧ ¬usable = 设备轴降级，原因见启动日志「aa="fsr" 开门但接不起来」行）
+- `renderWidth`（uint32）——FsrUpscaler 构造/重建时实收的渲染宽（像素；与 render 段 renderWidth 相等是「接线没错」的交叉判据，两条读数来自不同代码路径）
+- `renderHeight`（uint32）——vendor 实收渲染高
+- `upscaleWidth`（uint32）——vendor 实收上屏宽（= 构造入参 swapchain extent）
+- `upscaleHeight`（uint32）——vendor 实收上屏高
+- `temporalEffective`（boolean）——vendor 时域累积历史真的在跑（= usable ∧ 互斥裁决通过；¬usable 恒 false——FSR 没跑就没有时域）
+- `temporalConfig`（boolean）——配置键 fsr.temporal 原值（申报侧；与 temporalEffective 的差 = 「静默换臂」的窗口，判据读生效侧）
+- `jitterWired`（boolean）——Halton 亚像素抖动接进了投影并申报给 FSR（= usable ∧ 配置 fsr.jitter，wireFsrJitter 的裁决结果）
+- `jitterPhase`（uint32）——抖动序列周期（相位计数；0 = 未接。口径 = fsrJitterPhaseCount(渲染宽, 上屏宽)，与 vendor 内部自算的 JitterSequenceLength 必须同值）
 
 
 ### `capabilityAttachment`

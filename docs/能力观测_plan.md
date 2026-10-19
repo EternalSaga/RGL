@@ -1,6 +1,6 @@
 # 渲染能力观测单源化计划
 
-> **状态：方向已定，批 1 可开工**（2026-10-19 用户拍板四条，结论见 §7；批 4 探针另有三条待定）。
+> **状态：批 1、批 2 已落地**（2026-10-19 用户拍板四条，结论见 §7；批 3 错误面收口与批 4 探针未动，批 4 另有三条待定）。批 2 落地时新增一条拍板：**FSR 判据的出口 = `/state` 增 `fsr` 兄弟段**——FSR 是图外 compute，`capabilities` 段按 §3.1 只装编译图事实，塞不进去（「velocity 附件在图」推不出「FSR context 构造了」，设备轴 shader16 降级档就是反例）。§3.5 那句「RT / FSR / TAA / render-scale 判据改成读 `/state.capabilities`」按此执行：RT / TAA / render-scale 读 `capabilities` + `render` 段，FSR 四条读 `fsr` 段（申报侧 gateOpen/temporalConfig × 生效侧 usable/temporalEffective/尺寸/jitter）。
 > 一句话：把「引擎当前具备哪些渲染能力」从**被正则捞的日志文案**收成**一个运行期可查询的结构化出口**，
 > 并且**消费者同批改过去**——消费者不同批，这条计划就该像债-129 S1b 一样被砍掉。
 >
@@ -173,8 +173,16 @@ add 和 del 失败正好说明渲染图动态能力不足」。
 
 - **批 1**：`RenderTargetCache` 的按 slot 枚举问法 + `/state.capabilities` 回包 + schema 登记 + 三份
   生成物 + 实机对拍扩面（`tools/rpc_endpoints_live.py` 加一条"声明的附件名集合 == 回包附件名集合"）。
-- **批 2**：消费者迁移（smoke.py / cpu_baseline.py）+ selftest 夹具换 JSON + 双向变异 + 删"文案被钉住"
-  注释。**批 1 无消费者，不许单独交付**（债-129 S1b 的下场）。
+- **批 2**（已落地 2026-10-19）：消费者迁移（smoke.py / cpu_baseline.py）+ selftest 夹具换 JSON + 双向变异 +
+  删"文案被钉住"注释。**批 1 无消费者，不许单独交付**（债-129 S1b 的下场）。落地形态补充：
+  smoke 自动在 staging 里开 `diagnostics.rpc`（端口每次现挑），引擎活着时取一次 `/state`；
+  能力判据的数据源 = `render` / `capabilities` / `fsr` 三段回包，运行模式类判据（headless、no_vvl、
+  出图名、errors 计数）仍读日志。三条硬规则逐条有合成用例钉住（`tools/smoke.py --selftest` ⑭ 组：
+  回包整个没拿到而日志行全在 ⟹ 红；`capabilities` 段缺失 ⟹ 红；`attachments` 改名 ⟹ 红）。
+  实机变异四条全部验红：① 门关不拢 + RT 行文案改拼写 → 迁移前静默 PASS、迁移后 FAIL（对照组：
+  只漏门不改文案，旧判据也红——归因坐实到文案）；② 门开而能力段不报 ssr_trace → 正向红（旧判据
+  同变异下反而 PASS——来源说谎只有吃 JSON 才抓得住）；③ 门关而能力段注入 ssr_trace → 反向红；
+  ④ 回包删掉整个 capabilities 段 → FAIL 不回落（`--ssr` 档日志行在场也不救）。
 
 ### 批 2 的三条硬规则（2026-10-19 定，来自"迁移会不会把同一个病搬过去"）
 

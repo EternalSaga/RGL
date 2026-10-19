@@ -288,6 +288,23 @@ export class Renderer {
 	 */
 	[[nodiscard]] const RGL::RenderTargetCache& getRtCacheRef() const { return *rtCache; }
 
+	// ── FSR 生效侧快照（能力观测批 2：`/state` 的 fsr 段）──────────────────────────
+	// 申报侧（gateOpen / temporalConfig）不住这里——那是配置事实，住 SceneEnv；
+	// 这里四条全是**执行侧现状**：context 建没建、时域跑没跑、vendor 实收的两个尺寸。
+	// 「申报 vs 生效」的差正是这批判据要抓的窗口，两侧各只有一处来源。
+	/** @return FSR context 真的构造了（门关 / 设备轴降级 = false；口径 = `fsr` 指针非空） */
+	[[nodiscard]] bool fsrUsable() const { return fsr != nullptr; }
+	/** @return vendor 时域累积历史真的在跑（= fsrUsable() && 互斥裁决后的 temporal） */
+	[[nodiscard]] bool fsrTemporalEffective() const { return fsr != nullptr && fsrTemporal; }
+	/** @return FsrUpscaler 构造/重建时实收的渲染分辨率（未构造 = {}，调用方先问 fsrUsable()） */
+	[[nodiscard]] vk::Extent2D fsrRenderExtent() const {
+		return fsr ? fsr->getRenderExtent() : vk::Extent2D {};
+	}
+	/** @return FsrUpscaler 构造/重建时实收的上屏分辨率（口径同 fsrRenderExtent） */
+	[[nodiscard]] vk::Extent2D fsrUpscaleExtent() const {
+		return fsr ? fsr->getUpscaleExtent() : vk::Extent2D {};
+	}
+
 	// ── 批次 B2-5：pass 级动态开关（D5 收官一刀；定案 → docs/compute_调研.md §6 D5）─────
 	/**
 	 * 收单「把这个 pass 插上 / 拔掉」（B2-5；RPC 帧边界调，**不改图**）。

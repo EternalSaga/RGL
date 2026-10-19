@@ -39,6 +39,12 @@ module;
  *  8. state 字段改取 drawSource → 用例 1 的 light/tonemap state 断言红（drawLight 档
  *     drawSource 为空串）。
  *  9. 空编译图回 null/缺键而不是空数组 → 用例 5 的 is_array 红。
+ *  10. fsr 段（批 2）「尺寸四键无条件出」（usable=false 也出 0）→ 用例 6 的
+ *      「未构造半边无 renderWidth 键」红——报 0 把「没构造」与「构造在 0 宽上」塌成同值。
+ *  11. fsr 段 temporalEffective / temporalConfig 互换（相邻两键抄错是真实失误形态）→
+ *      用例 6 的逐键回显红（两键刻意取**不同**值，同值则换序不可见 = 假绿）。
+ *  12. fsr 段某布尔恒 false（gateOpen 漏接线）→ 用例 6 的 true 半边红；恒 true →
+ *      用例 7 的 false 半边红（对称判据两半各钉）。
  */
 #include <doctest/doctest.h>
 #include <initializer_list>  // 🔴 modules 坑：initializer_list 不从 import rlstd 带进来
@@ -371,6 +377,71 @@ TEST_CASE("能力段：空编译图回空数组而不是缺键/null（退化守�
 	CHECK(caps["passes"].empty());
 	CHECK(caps["frame"] == 0);
 	CHECK(caps["dirty"] == false);
+}
+
+// ── fsr 段（能力观测批 2）─────────────────────────────────────────────────────
+// 契约三句话：① 六枚标量键恒在、逐键回显入参（键名抄错 / 相邻键互换在这里红）；
+// ② 尺寸四键**只在 usable = true 时出现**——usable = false 时报 0 会把「没构造」与
+//   「构造在 0×0 上」塌成同一个值（批 2 要消灭的正是这类塌陷）；③ 本函数没有默认值、
+//   不做任何裁决——申报 vs 生效的差是消费者的判据，不是拼装器的内容。
+// 期望值出处 = RgFsrFacts 入参本身（回显契约），不抄被测实现。
+
+TEST_CASE("fsr 段：usable = true 全键回显（逐键取不同值，换序必红）") {
+	const auto fsr = rpcFsrJson(RgFsrFacts {
+		.gateOpen = true,
+		.usable = true,
+		.renderWidth = 1280,
+		.renderHeight = 720,
+		.upscaleWidth = 1920,
+		.upscaleHeight = 1080,
+		.temporalEffective = false,  // 与 temporalConfig **刻意不同值**：两键互换的可见性锚
+		.temporalConfig = true,
+		.jitterWired = true,
+		.jitterPhase = 14,
+	});
+	CHECK(fsr["gateOpen"] == true);
+	CHECK(fsr["usable"] == true);
+	CHECK(fsr["renderWidth"] == 1280);
+	CHECK(fsr["renderHeight"] == 720);
+	CHECK(fsr["upscaleWidth"] == 1920);
+	CHECK(fsr["upscaleHeight"] == 1080);
+	CHECK(fsr["temporalEffective"] == false);  // 变异「与 temporalConfig 互换」红在这里
+	CHECK(fsr["temporalConfig"] == true);
+	CHECK(fsr["jitterWired"] == true);
+	CHECK(fsr["jitterPhase"] == 14);           // 变异「恒 0」红在这里
+	CHECK(fsr.size() == 10);                   // 键数钉死：多键 = 悄悄扩契约
+}
+
+TEST_CASE("fsr 段：usable = false 时尺寸四键缺席而不是报 0（反向半边）") {
+	const auto fsr = rpcFsrJson(RgFsrFacts {
+		.gateOpen = true,  // 门开但接不起来（设备轴降级档）= shader16 缺失机器上的真实形态
+		.usable = false,
+		.renderWidth = 1280,  // 故意给非 0：出键判据必须是「usable 决定」而不是「值决定」
+		.renderHeight = 720,
+		.upscaleWidth = 1920,
+		.upscaleHeight = 1080,
+	});
+	CHECK(fsr["gateOpen"] == true);
+	CHECK(fsr["usable"] == false);
+	CHECK_FALSE(fsr.contains("renderWidth"));  // 变异「无条件出尺寸」红（变异判据 ⑩）
+	CHECK_FALSE(fsr.contains("renderHeight"));
+	CHECK_FALSE(fsr.contains("upscaleWidth"));
+	CHECK_FALSE(fsr.contains("upscaleHeight"));
+	// 六枚标量键恒在（缺任何一枚 = 消费者侧「缺键是错」被触发，这里先钉住生产者）
+	CHECK(fsr.contains("temporalEffective"));
+	CHECK(fsr.contains("temporalConfig"));
+	CHECK(fsr.contains("jitterWired"));
+	CHECK(fsr.contains("jitterPhase"));
+	CHECK(fsr.size() == 6);
+	// 默认入参（全 false）的 false 半边：变异「某布尔恒 true」红在这里
+	const auto off = rpcFsrJson(RgFsrFacts {});
+	CHECK(off["gateOpen"] == false);
+	CHECK(off["usable"] == false);
+	CHECK(off["temporalEffective"] == false);
+	CHECK(off["temporalConfig"] == false);
+	CHECK(off["jitterWired"] == false);
+	CHECK(off["jitterPhase"] == 0);
+	CHECK(off.size() == 6);
 }
 
 }  // namespace RGL
