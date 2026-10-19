@@ -45,6 +45,9 @@ module;
  *      用例 6 的逐键回显红（两键刻意取**不同**值，同值则换序不可见 = 假绿）。
  *  12. fsr 段某布尔恒 false（gateOpen 漏接线）→ 用例 6 的 true 半边红；恒 true →
  *      用例 7 的 false 半边红（对称判据两半各钉）。
+ *  13. 批 3：状态码映射两 case 对调（unresolved→400）→ 用例 8 红；两 case 返回**同一个码**
+ *      → 用例 8 的「两半边不许塌成一个」红（那条断言专门防"把能力事实与请求错误混为一谈"，
+ *      正是用户 2026-10-19 定原则要禁的东西）。
  */
 #include <doctest/doctest.h>
 #include <initializer_list>  // 🔴 modules 坑：initializer_list 不从 import rlstd 带进来
@@ -60,6 +63,7 @@ import rlvk;
 import vkerror;
 import render_graph;
 import dynamic_render_graph;
+import frame_capture;            // CaptureFailureKind（批 3：类别 → 状态码的入参）
 import debug_rpc_capabilities;
 
 namespace RGL {
@@ -442,6 +446,19 @@ TEST_CASE("fsr 段：usable = false 时尺寸四键缺席而不是报 0（反向
 	CHECK(off["jitterWired"] == false);
 	CHECK(off["jitterPhase"] == 0);
 	CHECK(off.size() == 6);
+}
+
+TEST_CASE("捕获失败类别 → 状态码：两半边各钉一格，404 与 400 不许塌成一个") {
+	// 契约（docs/能力观测_plan.md §4）：请求**点名**的东西不存在 = 引用解析失败 = 404（与未知
+	// 路由同族，引擎没有「尝试」可言）；参数越界 = 请求本身不合协议 = 400。
+	// 🔴 两条必须**不同**：塌成一个就等于把「能力事实」与「请求错误」混为一谈——用户 2026-10-19
+	// 定的原则（渲染能力不得用错误回包表示）禁止的正是这个混法。
+	CHECK(rpcStatusForCaptureFailure(CaptureFailureKind::unresolved) == 404);
+	CHECK(rpcStatusForCaptureFailure(CaptureFailureKind::invalidArgument) == 400);
+	// 反向半边：写成显式不等，是为了让「两个 case 返回同一个码」这种漂移红——只断言各自等于
+	// 某个常数的话，将来有人把两档都改成 400，第一条会红但归因指向错的地方。
+	CHECK(rpcStatusForCaptureFailure(CaptureFailureKind::unresolved)
+		!= rpcStatusForCaptureFailure(CaptureFailureKind::invalidArgument));
 }
 
 }  // namespace RGL

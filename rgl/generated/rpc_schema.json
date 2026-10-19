@@ -290,12 +290,7 @@
             "exclusiveError": "'attachment' and 'gbuf' are mutually exclusive",
             "kind": "string",
             "name": "attachment",
-            "nonEmpty": true,
-            "oneOf": [
-              "swapchain",
-              "taa_out"
-            ],
-            "oneOfError": "'attachment' only supports swapchain | taa_out"
+            "nonEmpty": true
           },
           {
             "error": "'gbuf' must be an integer",

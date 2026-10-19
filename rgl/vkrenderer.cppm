@@ -184,10 +184,11 @@ export class Renderer {
 	[[nodiscard]] bool hasFrameCaptureFailure() const { return capturer.hasFailure(); }
 
 	/**
-	 * 取走捕获失败原因（取后即清，一条失败只兑现一个请求）。
-	 * @return 可直接进 400 应答体的原因；空 = 无失败
+	 * 取走捕获失败（取后即清，一条失败只兑现一个请求）。
+	 * @return 失败（类别 + 原因）；空 = 无失败。类别决定回哪个状态码，见
+	 *   `rpcStatusForCaptureFailure`（消费方**不许**解析 message 猜类别）
 	 */
-	std::optional<std::string> takeFrameCaptureFailure() { return capturer.takeFailure(); }
+	std::optional<CaptureFailure> takeFrameCaptureFailure() { return capturer.takeFailure(); }
 
 	/**
 	 * 帧末扩展段 hook（Phase 10 调试层：imgui 面板；main 装配，缺省空）。

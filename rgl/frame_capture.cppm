@@ -28,6 +28,29 @@ export struct FrameCapture {
 };
 
 /**
+ * 捕获失败的**类别**（2026-10-19 批 3 加）。
+ *
+ * 为什么类别必须由产生失败的那一层给：只有帧捕获知道这次没产物是「你点名的东西不存在」还是
+ * 「你参数写越界」——让 RPC 层去解析原因字符串挑状态码 = 把契约写在文案里，改一个字就漂。
+ * 消费方（`/shot`、`/shotburst`）按类别挑状态码，**不许**解析 `message`。
+ */
+export enum class CaptureFailureKind {
+	unresolved,      ///< 点名的回读源不存在（图里没这个附件 / 附件在但 RT 没建）
+	invalidArgument, ///< 参数本身越界（gbuf 通道号不在词表里）
+};
+
+/**
+ * 一条捕获失败：类别 + 可直接进错误体的原因。
+ *
+ * ⚠ 两者都**不是**「渲染能力用错误回包表示」：要问能力请读 `/state.capabilities`（那里是事实，
+ * 不是错误）。这里的错误只说「你这个请求我没法照做」，不解释引擎为什么没有它。
+ */
+export struct CaptureFailure {
+	CaptureFailureKind kind;  ///< 类别（消费方按它挑状态码）
+	std::string message;      ///< 一句原因（给人看，不是判据）
+};
+
+/**
  * 捕获未命中的分类（**纯函数**，无设备可测——本类的 record/collect 要 VkDevice，
  * 而"这次未命中该重试还是该判死"是纯逻辑，拆出来才能在 `just test` 里钉住）。
  */
@@ -167,11 +190,11 @@ export class FrameCapturer {
 	[[nodiscard]] bool hasFailure() const { return captureFailure.has_value(); }
 
 	/**
-	 * 取走失败原因（取后即清，与 take() 的"取走即清"同语义：一条失败只兑现一个请求，
+	 * 取走失败（取后即清，与 take() 的"取走即清"同语义：一条失败只兑现一个请求，
 	 * 不许留在里面把下一个合法请求也判死）。
-	 * @return 失败原因（可直接进 400 应答体）；空 = 无失败
+	 * @return 失败（类别 + 原因）；空 = 无失败
 	 */
-	std::optional<std::string> takeFailure() {
+	std::optional<CaptureFailure> takeFailure() {
 		auto out = std::move(captureFailure);
 		captureFailure.reset();
 		return out;
@@ -225,7 +248,7 @@ export class FrameCapturer {
 	RGL::VmaBuffer captureStaging;              // host-visible 回读缓冲（按需增长重建）
 	VkDeviceSize captureStagingSize = 0;
 	void* captureMapped = nullptr;              // 常驻映射指针（createBuffer 不回传 mapped，随分配自存）
-	std::optional<std::string> captureFailure;  // 永久失败原因（hasFailure/takeFailure 消费，见其注释）
+	std::optional<CaptureFailure> captureFailure;  // 永久失败（hasFailure/takeFailure 消费，见其注释）
 	uint32_t captureRtMisses = 0;               // 「图里有、RT 这帧没建」的连续未命中帧数（限次用）
 };
 

@@ -128,13 +128,6 @@ export namespace rpc_field::shotburst {
     inline constexpr std::string_view start_frame{"start_frame"};
 }  // namespace rpc_field::shotburst
 
-/** `/shotburst` 的 `attachment` 白名单取值常量：处理函数按它分支，吃常量而不是再抄一遍
- *  字面量 ⟹ 改 schema 里的取值 = 那个分支编译不过（不这样就是第二份副本）。 */
-export namespace rpc_value::shotburst::attachment {
-    inline constexpr std::string_view swapchain{"swapchain"};
-    inline constexpr std::string_view taa_out{"taa_out"};
-}  // namespace rpc_value::shotburst::attachment
-
 /** `/resize` 的请求字段名常量（改 schema 里的 name = 引用处编译不过）。 */
 export namespace rpc_field::resize {
     inline constexpr std::string_view width{"width"};
@@ -153,11 +146,6 @@ namespace rpc_schema_detail {
 inline constexpr std::array<std::string_view, 2> kOneOf_camera_mode{
     std::string_view{"trackball"},
     std::string_view{"fps"},
-};
-
-inline constexpr std::array<std::string_view, 2> kOneOf_shotburst_attachment{
-    std::string_view{"swapchain"},
-    std::string_view{"taa_out"},
 };
 }  // namespace rpc_schema_detail
 
@@ -202,7 +190,7 @@ inline constexpr std::array<RpcFieldDef, 6> kRequestFields_shotburst{
     RpcFieldDef{.name = rpc_field::shotburst::n, .kind = RpcFieldKind::integer, .required = true, .minValue = 1, .maxValue = 1024, .error = "'n' must be an integer in [1, 1024]", },
     RpcFieldDef{.name = rpc_field::shotburst::dir, .kind = RpcFieldKind::string, .required = true, .nonEmpty = true, .error = "'dir' must be a non-empty path", },
     RpcFieldDef{.name = rpc_field::shotburst::prefix, .kind = RpcFieldKind::string, .error = "'prefix' must be a string", },
-    RpcFieldDef{.name = rpc_field::shotburst::attachment, .kind = RpcFieldKind::string, .nonEmpty = true, .exclusive = rpc_field::shotburst::gbuf, .oneOf = rpc_schema_detail::kOneOf_shotburst_attachment, .error = "'attachment' must be a string", .emptyError = "'attachment' must be a non-empty name", .oneOfError = "'attachment' only supports swapchain | taa_out", .exclusiveError = "'attachment' and 'gbuf' are mutually exclusive", },
+    RpcFieldDef{.name = rpc_field::shotburst::attachment, .kind = RpcFieldKind::string, .nonEmpty = true, .exclusive = rpc_field::shotburst::gbuf, .error = "'attachment' must be a string", .emptyError = "'attachment' must be a non-empty name", .exclusiveError = "'attachment' and 'gbuf' are mutually exclusive", },
     RpcFieldDef{.name = rpc_field::shotburst::gbuf, .kind = RpcFieldKind::integer, .error = "'gbuf' must be an integer", },
     RpcFieldDef{.name = rpc_field::shotburst::start_frame, .kind = RpcFieldKind::integer, .minValue = 1, .maxValue = 4294967295, .error = "'start_frame' must be an integer in [1, 2^32)", },
 };

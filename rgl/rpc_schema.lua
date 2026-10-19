@@ -201,12 +201,15 @@ return {
                 { name = "dir", kind = "string", required = true, nonEmpty = true,
                   error = "'dir' must be a non-empty path" },
                 { name = "prefix", kind = "string", error = "'prefix' must be a string" },
+                -- ⚠ 这里**没有**取值白名单（批 3 删了原来的 oneOf = { "swapchain", "taa_out" }）：
+                -- 「哪个附件名合法」由**运行期的图与门**决定（同一份二进制，ssr 关就没有 ssr_trace），
+                -- 静态白名单 = 把能力写死成请求校验，会拒掉引擎本可以服务的请求，且与
+                -- /shot 同名字段两套口径。要问能力读 /state.capabilities；点名的东西真不存在
+                -- ⟹ 404（引用解析失败，与未知路由同族），不是 400。
                 { name = "attachment", kind = "string", exclusive = "gbuf", nonEmpty = true,
-                  oneOf = { "swapchain", "taa_out" },
                   error = "'attachment' must be a string",
                   exclusiveError = "'attachment' and 'gbuf' are mutually exclusive",
-                  emptyError = "'attachment' must be a non-empty name",
-                  oneOfError = "'attachment' only supports swapchain | taa_out" },
+                  emptyError = "'attachment' must be a non-empty name" },
                 { name = "gbuf", kind = "integer", error = "'gbuf' must be an integer" },
                 { name = "start_frame", kind = "integer", min = 1, max = 4294967295,
                   error = "'start_frame' must be an integer in [1, 2^32)" },

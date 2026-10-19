@@ -177,9 +177,9 @@ de01fc38b71e62544fec716ee7415fea21775a58  rgl/features_config.json
 466d23d4488547c694a978f192043fda391ae176  tools/templates/features_cppm.inja
 56b0abc4169eeddac39f5aa8981642a583de52af  rgl/param_semantics.json
 bea192a811bf3d98992a548e32b9a5c3a23df225  tools/templates/param_semantics_cppm.inja
-87303ad7d73ea5c2aa223cfa923e125528dfdac5  rgl/rpc_schema.lua
+d0f06a54add108aaffd2f86bfd8b7bbc7a5d4d12  rgl/rpc_schema.lua
 edac740d2c3554649433009f6a6ecdeb562930ae  tools/templates/rpc_schema_cppm.inja
-87303ad7d73ea5c2aa223cfa923e125528dfdac5  rgl/rpc_schema.lua
+d0f06a54add108aaffd2f86bfd8b7bbc7a5d4d12  rgl/rpc_schema.lua
 edac740d2c3554649433009f6a6ecdeb562930ae  tools/templates/rpc_schema_cppm.inja
-87303ad7d73ea5c2aa223cfa923e125528dfdac5  rgl/rpc_schema.lua
+d0f06a54add108aaffd2f86bfd8b7bbc7a5d4d12  rgl/rpc_schema.lua
 d39851c8fe2c3f2a61b590ecb48bd4d81e1b80d8  tools/templates/rpc_schema_md.inja

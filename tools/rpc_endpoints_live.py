@@ -302,15 +302,27 @@ def main() -> int:
                                   "file": f"screenshots/rpcverify/cap_{a['name']}.png"})
                 check(f"/shot attachment={a['name']}（rtBuilt=true 的图属 RT 必须拍得出）",
                       got, 200)
-            check("反向：/shot attachment=zzz_not_in_graph 被拒",
+            # 点名的附件不在编译图里 ⟹ **404**（批 3：原来是 400）。分类口径 = 请求写得完全合法、
+            # 只是它点名的东西不存在，与未知路由同族；400 留给「参数不合协议」（如 gbuf 越界）。
+            # 🔴 这条同时是「端点没被打死」的判据：404 必须**当帧**回来，若退化成 504 超时
+            #    （= 回读请求悬挂），说明批 3 之前那个「一次拼错打死 /shot」的缺陷回来了。
+            check("反向：/shot attachment=zzz_not_in_graph → 404（不是 400，也不是 504 悬挂）",
                   rpc_status("POST", "/shot",
                              {"attachment": "zzz_not_in_graph",
-                              "file": "screenshots/rpcverify/cap_zzz.png"}), 400)
+                              "file": "screenshots/rpcverify/cap_zzz.png"}), 404)
 
             print("== 6. POST /shotburst ==")
             (BUILD_RGL / "screenshots" / "rpcverify").mkdir(parents=True, exist_ok=True)
             bu = rpc("POST", "/shotburst", {"n": 3, "dir": "screenshots/rpcverify"})
             check_keys("/shotburst 顶层键", bu, "shotburst")
+            # 批 3 删掉了 /shotburst 的静态白名单 oneOf = {swapchain, taa_out}（能力伪装成协议）。
+            # 删了之后必须与 /shot **同一口径**：点名的东西不存在 → 404，而不是 400 也不是挂死。
+            check("反向：/shotburst attachment=zzz_not_in_graph → 404（与 /shot 同口径）",
+                  rpc_status("POST", "/shotburst",
+                             {"n": 1, "dir": "screenshots/rpcverify",
+                              "attachment": "zzz_not_in_graph"}), 404)
+            check("反向后 /shotburst 仍可用（端点没被一次拼错打死）",
+                  rpc_status("POST", "/shotburst", {"n": 1, "dir": "screenshots/rpcverify"}), 200)
 
             print("== 7. POST /resize ==")
             rz = rpc("POST", "/resize", {"width": 900, "height": 640})

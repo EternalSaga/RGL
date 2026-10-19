@@ -67,21 +67,25 @@ TEST_CASE("burst 协议：最小请求通过 + 逐字段套用（未传 prefix =
 	CHECK(r2.gbuf == 2);
 	CHECK(r2.startFrame == 528u);
 
-	// attachment 白名单两档各自通过（taa_out = temporal-motion 的拒收掩膜连拍）
+	// attachment 两档各自通过（taa_out = temporal-motion 的拒收掩膜连拍）。批 3 起这里**不再有
+	// 白名单**，两档只是"任意非空字符串都能过形状关"的两个样本；取值合法性由回读层判。
 	const nlohmann::json att = { { "n", 4 }, { "dir", "d" }, { "attachment", "taa_out" } };
 	BurstRequest r3;
 	CHECK(parseBurstRequest(att, r3).empty());
 	CHECK(r3.attachment == "taa_out");
 }
 
-TEST_CASE("burst 协议：形状反向九条全部响亮 + 归因按字段收敛（同分支共享文案是契约）") {
+TEST_CASE("burst 协议：形状反向八条全部响亮 + 归因按字段收敛（同分支共享文案是契约）") {
 	const std::vector<nlohmann::json> bad = {
 		{ { "n", 0 }, { "dir", "d" } },                                        // n 下界
 		{ { "n", 1025 }, { "dir", "d" } },                                     // n 上界
 		{ { "n", "8" }, { "dir", "d" } },                                      // n 非整数
 		{ { "n", 4 }, { "dir", "" } },                                         // dir 空
 		{ { "n", 4 }, { "dir", "d" }, { "attachment", "gbuf" }, { "gbuf", 1 } },  // 互斥
-		{ { "n", 4 }, { "dir", "d" }, { "attachment", "depth" } },             // 非白名单
+		// ⚠ 原有一条 `{ "attachment", "depth" }`（非白名单）批 3 删了：那个静态白名单是
+		// 「能力伪装成请求校验」（附件名合法与否由运行期的图与门决定），删掉后这类输入改由
+		// 回读层判 → 404（判据 = tools/rpc_endpoints_live.py 的「/shotburst attachment=zzz → 404」，
+		// 那里同时钉着「端点没被一次拼错打死」）。本用例的九条 ⟹ 八条，五条文案 ⟹ 四条。
 		{ { "n", 4 }, { "dir", "d" }, { "start_frame", 0 } },                  // 锚 = 0
 		{ { "n", 4 }, { "dir", "d" }, { "start_frame", -5 } },                 // 锚为负
 		{ { "n", 4 }, { "dir", "d" }, { "start_frame", 1.5 } },                // 锚非整数
@@ -95,13 +99,12 @@ TEST_CASE("burst 协议：形状反向九条全部响亮 + 归因按字段收敛
 		msgs.push_back(err);
 	}
 	// 归因粒度 = **字段**：同一校验分支的多条输入共享一条文案是设计如此（客户端按文案归因，
-	// 文案也是契约），但不同字段必须给不同串——九条输入按字段收敛成五条，一条不多一条不少。
+	// 文案也是契约），但不同字段必须给不同串——八条输入按字段收敛成四条，一条不多一条不少。
 	// 少一条 = 某个分支的输入被静默放行；多一条 = 同字段给了两种说法（读者无法枚举）。
 	const std::vector<std::string> expect = {
 		"'n' must be an integer in [1, 1024]",
 		"'dir' must be a non-empty path",
 		"'attachment' and 'gbuf' are mutually exclusive",
-		"'attachment' only supports swapchain | taa_out",
 		"'start_frame' must be an integer in [1, 2^32)",
 	};
 	for (const auto& e: expect)

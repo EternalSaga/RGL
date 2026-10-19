@@ -103,7 +103,7 @@
   - `n`（integer），必填，≥ 1，≤ 1024 —— 违反文案：`'n' must be an integer in [1, 1024]`
   - `dir`（string），必填，非空 —— 违反文案：`'dir' must be a non-empty path`
   - `prefix`（string） —— 违反文案：`'prefix' must be a string`
-  - `attachment`（string），非空，白名单 swapchain | taa_out，与 `gbuf` 互斥 —— 违反文案：`'attachment' must be a string`；空值文案：`'attachment' must be a non-empty name`；白名单外文案：`'attachment' only supports swapchain | taa_out`；互斥文案：`'attachment' and 'gbuf' are mutually exclusive`
+  - `attachment`（string），非空，与 `gbuf` 互斥 —— 违反文案：`'attachment' must be a string`；空值文案：`'attachment' must be a non-empty name`；互斥文案：`'attachment' and 'gbuf' are mutually exclusive`
   - `gbuf`（integer） —— 违反文案：`'gbuf' must be an integer`
   - `start_frame`（integer），≥ 1，≤ 4294967295 —— 违反文案：`'start_frame' must be an integer in [1, 2^32)`
 - 成功回包字段：

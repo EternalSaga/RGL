@@ -17,7 +17,7 @@ import camera;       // Camera ctx（/camera 写、/state 读）
 import debug_rpc_burst;  // /shotburst 协议判据（形状解析 + 锚点裁决，rlbase 层纯逻辑）
 import debug_rpc_shape;   // 批 2：请求形状校验（消费 rpc_schema.lua 生成表）
 import debug_rpc_payload;  // B2-5：应答形状闸 + 参数页↔JSON 编解码（拆出去顶的是文件行数红线）
-import debug_rpc_capabilities;  // 能力观测批 1：capabilities 段拼装（纯函数，判据在 tests/）
+import debug_rpc_capabilities;  // 能力观测批 1：capabilities 段拼装 + 批 3 失败类别→状态码（纯函数，判据在 tests/）
                            //   + 批 2：fsr 段拼装（申报侧 × 生效侧八枚事实，同一纯函数模块）
 import scene_context;    // 能力观测批 2：SceneEnv 的 FSR 申报侧两枚 + 抖动生效值
 import rpc_schema_generated;  // 路由表（分发的唯一来源；真相源 = rgl/rpc_schema.lua）
@@ -454,7 +454,9 @@ void rpcSettleBurst(RpcWiring& w) {
 		auto responder = std::move(*w.pendingBurst);
 		w.pendingBurst.reset();
 		w.burstRemaining = 0;
-		rpcReject(responder, 400, why.value_or("frame capture source unavailable"));
+		// 状态码按**类别**挑（404 = 点名的东西不存在；400 = 参数越界），不解析 message 猜。
+		rpcReject(responder, why ? rpcStatusForCaptureFailure(why->kind) : 500,
+		          why ? std::move(why->message) : std::string("frame capture source unavailable"));
 		return;
 	}
 	if (!w.renderer.hasFrameCapture())
@@ -509,7 +511,9 @@ void rpcSettleShot(RpcWiring& w) {
 		const auto why = w.renderer.takeFrameCaptureFailure();
 		auto responder = std::move(*w.pendingShot);
 		w.pendingShot.reset();
-		rpcReject(responder, 400, why.value_or("frame capture source unavailable"));
+		// 状态码按**类别**挑（404 = 点名的东西不存在；400 = 参数越界），不解析 message 猜。
+		rpcReject(responder, why ? rpcStatusForCaptureFailure(why->kind) : 500,
+		          why ? std::move(why->message) : std::string("frame capture source unavailable"));
 		return;
 	}
 	if (!w.renderer.hasFrameCapture())

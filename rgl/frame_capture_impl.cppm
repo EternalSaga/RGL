@@ -116,11 +116,11 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	// 失败收口（2026-10-19）：原因字符串**同时**是日志文本与回给消费方的原因——一个意思写
 	// 两遍迟早漂（旧代码正是两处各写一份，结果两处都没兑现"warn 一次"）。清具名请求 = 让本
 	// 请求退出"每帧重演"；失败值由 hasFailure()/takeFailure() 取走，一条失败只兑现一个请求。
-	auto failWith = [&](std::string why) {
+	auto failWith = [&](CaptureFailureKind kind, std::string why) {
 		captureRequestName.clear();
 		if (auto logger = RLLogger::getInstance())
 			logger->warn("frame capture: {}", why);
-		captureFailure = std::move(why);
+		captureFailure = CaptureFailure{.kind = kind, .message = std::move(why)};
 	};
 	// GB 直读分支（captureRequest = gbuf 通道号）：deferred 图专属。**未命中必须置失败通道**
 	// （2026-10-19 补）——本分支的 `captureRequest` 在 record 末尾被无条件复位，不会像具名
@@ -130,17 +130,17 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 	// 由它自己负责；本类只负责把"这次为什么没产物"说清楚。
 	auto recordGBuffer = [&] {
 		if (captureRequest >= static_cast<int>(kGBufferAttachments.size()))
-			return failWith(fmt::format("gbuf channel {} out of range [0, {})", captureRequest,
+			return failWith(CaptureFailureKind::invalidArgument, fmt::format("gbuf channel {} out of range [0, {})", captureRequest,
 				kGBufferAttachments.size()));
 		const std::string name{kGBufferAttachments[captureRequest].name};
 		const auto slot = graphAttachmentSlot(graph.attachments, name);
 		if (!slot.has_value())
-			return failWith(fmt::format(
+			return failWith(CaptureFailureKind::unresolved, fmt::format(
 				"gbuf channel {} ('{}') is not in the compiled render graph (非 deferred 图？)",
 				captureRequest, name));
 		auto* rt = rts.find(name);
 		if (rt == nullptr)
-			return failWith(fmt::format(
+			return failWith(CaptureFailureKind::unresolved, fmt::format(
 				"gbuf channel {} ('{}') is in the graph but its RT is not created",
 				captureRequest, name));
 		const auto from = layouts[*slot];  // deferred 帧末 = SRO（light 采样后）
@@ -182,7 +182,7 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 		//   ⟹ 之后每个 `/shot` 都吃 409，**一次拼错把端点打死到进程重启** ③ 客户端只能等到
 		//   超时（504），拿不到任何原因
 		if (!slot.has_value())
-			return failWith(fmt::format(
+			return failWith(CaptureFailureKind::unresolved, fmt::format(
 				"attachment '{}' is not in the compiled render graph (未装饰的图 / 门未开？)", name));
 		auto* rt = rts.find(name);
 		if (rt == nullptr) {
@@ -192,7 +192,7 @@ void FrameCapturer::record(vk::raii::CommandBuffer& cmd, VkImage swapchainImage,
 			++captureRtMisses;
 			if (classifyCaptureMiss(true, captureRtMisses) == CaptureMiss::retryable)
 				return;  // 保持 pending，下个帧边界重试
-			return failWith(fmt::format(
+			return failWith(CaptureFailureKind::unresolved, fmt::format(
 				"attachment '{}' is in the graph but its RT was never created ({} 帧内)",
 				name, captureRtMisses));
 		}

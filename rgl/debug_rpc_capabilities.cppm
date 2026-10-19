@@ -5,6 +5,7 @@ export module debug_rpc_capabilities;
 
 import rlstd;
 import rlvk;                 // vk::Extent2D（渲染网格入参；纯值，不碰设备）
+import frame_capture;       // CaptureFailureKind（rpcStatusForCaptureFailure 的入参）
 import render_graph;         // CompiledRenderGraph / RgGraphDesc / kindName / resolvedRtExtent
 import dynamic_render_graph; // DynamicRenderGraph（脏位读数 + desc 声明侧）
 
@@ -135,6 +136,33 @@ export struct RgFsrFacts {
 	bool jitterWired = false;      ///< Halton 抖动接进了投影（= usable && 配置 fsr.jitter）
 	uint32_t jitterPhase = 0;      ///< 抖动序列周期（0 = 未接）
 };
+
+/**
+ * 捕获失败类别 → HTTP 状态码（**纯函数**，判据 = `tests/test_rpc_capabilities.cppm`）。
+ *
+ * 分工（`docs/能力观测_plan.md` §4，用户 2026-10-19 定的原则「渲染能力不得用错误回包表示」）：
+ *  - `unresolved` → **404**：请求**点名**的东西不存在（图里没这个附件 / 附件在但 RT 没建）。
+ *    与未知路由同族 = 引用解析失败，属协议层；引擎没有「尝试」可言，所以不是能力评论。
+ *  - `invalidArgument` → **400**：参数本身不合协议（gbuf 通道号不在词表里）。
+ * 🔴 客户端要问「引擎现在能不能给我 object_id」，读 `/state.capabilities`（那里是事实），
+ *    不是靠这里回的错误码反推。
+ * 为什么住在**本模块**而不是 `debug_rpc_exec`：那是个有 impl 分区的模块，同一个函数在主接口
+ * 声明、在 impl 定义时，若参数类型跨模块（此处 = frame_capture 的枚举），clang 会把两处当成
+ * 两个候选而报 call ambiguous（实测）。纯函数放这个零设备模块里既绕开它，又保住可测。
+ * @param kind 失败类别（由产生失败的层给，见 `CaptureFailureKind`）
+ * @return HTTP 状态码
+ */
+export uint16_t rpcStatusForCaptureFailure(CaptureFailureKind kind) {
+	// 不写 default：类别由产生层给全，加档不写分支 = 编译不过。
+	switch (kind) {
+	case CaptureFailureKind::unresolved: return 404;
+	case CaptureFailureKind::invalidArgument: return 400;
+	}
+	// 不可达：上面穷尽了枚举。写成 500 而不是 __builtin_unreachable，是为了让「哪天加档忘了写
+	// 分支」退化成「回一个诚实的内部错误」（客户端据此去看引擎日志），而不是退化成 UB（编译器
+	// 已先 -Werror 拦下）。先例 = debug_rpc_shape.cppm 的 rpcFieldTypeOk。
+	return 500;
+}
 
 /**
  * `fsr` 段拼装（纯函数；键集 = `rgl/rpc_schema.lua` 的 `stateFsr`）。

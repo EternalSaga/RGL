@@ -237,20 +237,22 @@ TEST_CASE("rpc 形状校验：反向八类各归各的字段（只断非空 = �
 	CHECK(rpcValidateRequest(RpcRouteId::shotburst,
 		nlohmann::json{{"n", 4}, {"dir", ""}})
 		== (dir->emptyError.empty() ? dir->error : dir->emptyError));
-	// ⑥ 白名单外
+	// ⑥ 白名单外。**主体 = /camera 的 mode**（批 3 换的）：原先挂在 shotburst 的 attachment 上，
+	// 而那个白名单已删——「哪个附件名合法」由运行期的图与门决定，静态白名单是**能力伪装成请求
+	// 校验**（会拒掉引擎本可以服务的请求，见 rpc_schema.lua 里那段注释与 docs/能力观测_plan.md §4）。
+	// 本条锚保护的是「oneOf 这条校验分支确实在跑」，不是「某个字段必须有白名单」⟹ 换主体不换判据。
+	const auto* mode = findField(RpcRouteId::camera, "mode");
+	REQUIRE(mode != nullptr);
+	REQUIRE(!mode->oneOf.empty());
+	CHECK(rpcValidateRequest(RpcRouteId::camera, nlohmann::json{{"mode", "orbit"}})
+		== (mode->oneOfError.empty() ? mode->error : mode->oneOfError));
+	// 白名单内每一档都必须过（少一档 = 白名单被改窄而没人发现）
+	for (const auto allowed : mode->oneOf)
+		CHECK(rpcValidateRequest(RpcRouteId::camera, nlohmann::json{{"mode", allowed}}).empty());
+	// ⑦ 互斥（attachment 与 gbuf 二选一——这条**没**随白名单一起动：互斥是请求自相矛盾，
+	// 属协议层；白名单才是能力，两者不是一回事）
 	const auto* att = findField(RpcRouteId::shotburst, "attachment");
 	REQUIRE(att != nullptr);
-	REQUIRE(!att->oneOf.empty());
-	CHECK(rpcValidateRequest(RpcRouteId::shotburst,
-		nlohmann::json{{"n", 4}, {"dir", "d"}, {"attachment", "depth"}})
-		== (att->oneOfError.empty() ? att->error : att->oneOfError));
-	// 白名单内每一档都必须过（少一档 = 白名单被改窄而没人发现）
-	for (const auto allowed : att->oneOf) {
-		auto body = validBurst();
-		body["attachment"] = allowed;
-		CHECK(rpcValidateRequest(RpcRouteId::shotburst, body).empty());
-	}
-	// ⑦ 互斥
 	CHECK(rpcValidateRequest(RpcRouteId::shotburst,
 		nlohmann::json{{"n", 4}, {"dir", "d"}, {"attachment", "swapchain"}, {"gbuf", 1}})
 		== (att->exclusiveError.empty() ? att->error : att->exclusiveError));

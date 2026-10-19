@@ -36,8 +36,8 @@ export struct BurstRequest {
 /**
  * 解析 `/shotburst` 请求体的**形状**并取值。
  *
- * 形状判据 = `rgl/rpc_schema.lua` 的 shotburst 段（字段名 / 类型 / 必填 / 区间 / 互斥 /
- * 白名单 + 六条归因文案），经生成表由 `rpcValidateRequest` 执行。错误消息与拆分前逐字相同
+ * 形状判据 = `rgl/rpc_schema.lua` 的 shotburst 段（字段名 / 类型 / 必填 / 区间 / 互斥
+ * + 归因文案；**attachment 没有白名单**——批 3 删的，理由见 schema 里那段注释），经生成表由 `rpcValidateRequest` 执行。错误消息与拆分前逐字相同
  * （客户端按文案归因，文案也是契约的一部分）。
  *
  * 🔴 本函数**必须**自己调一次校验，不能只信分发层：`tests/test_burst_protocol.cppm` 不经
@@ -56,7 +56,8 @@ export [[nodiscard]] std::string parseBurstRequest(const nlohmann::json& body, B
 	out.prefix = body.contains(rpc_field::shotburst::prefix)
 		? std::optional<std::string>{ body.at(rpc_field::shotburst::prefix).get<std::string>() }
 		: std::nullopt;
-	// attachment 与 gbuf 的互斥、attachment 的白名单都在表里；走到这里两者可以共存地读
+	// attachment 与 gbuf 的互斥在表里；走到这里两者可以共存地读。attachment 的**取值合法性不在
+	// 这里判**（它由运行期的图与门决定）：点名的东西不存在 ⟹ 回读层给 unresolved ⟹ 404
 	out.attachment = body.contains(rpc_field::shotburst::attachment)
 		? body.at(rpc_field::shotburst::attachment).get<std::string>()
 		: std::string{};
