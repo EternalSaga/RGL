@@ -238,6 +238,40 @@ std::vector<uint8_t> toRgba8(const Renderer::FrameCapture& cap, bool gbufRaw) {
 /** 实现流水（语义/契约见接口声明）：takeFrameCapture（无产物 = Error）→
  * toRgba8（gbufRaw 由 gbufChannel 判定）→ 路径解析（gbuffer_N.png / attach_<名>.png /
  * cfg.file / 时间戳名）→ create_directories + image_codec::writePng → 返回绝对路径。 */
+/**
+ * 建截图的输出目录，返回错误消息（空 = 成功或无需建）。
+ *
+ * 两个不显然的点：① 裸文件名（无目录段）时 `create_directories("")` 会置
+ * `Invalid argument`，**必须跳过**——旧代码把 ec 整个吞掉所以从没暴露，一旦给 ec 加判据，
+ * 「任何裸文件名的截图都失败」立刻发生（2026-10-19 实测，被实机对拍的回归锚抓到）。
+ * ② ec 原先被接住又**丢掉**：写盘失败时日志只剩一个路径，读者无从区分目录建不了 / 没权限 /
+ * 盘满。RPC 侧 500 的口径是「本通道不诊断，根因看引擎日志」⟹ 日志必须真的能诊断，否则那句
+ * 话是空的（docs/能力观测_plan.md §4 批 3）。
+ * @param parent 目标文件的父目录（空 = 落在 CWD，不建）
+ * @return 错误消息（空 = 成功）
+ */
+std::string ensureOutputDir(const std::filesystem::path& parent) {
+	if (parent.empty())
+		return {};
+	std::error_code ec;
+	std::filesystem::create_directories(parent, ec);
+	return ec ? ec.message() : std::string{};
+}
+
+/**
+ * 写盘失败时**观察得到的事实**：`writePng` 只回 bool（stb 包装），拿不到根因。
+ * 「建了但 0 字节」与「根本没建」是两类故障（写失败 / 盘满 vs 路径不可写），分开报才有诊断价值。
+ * 不猜 errno——它可能是更早某次调用留下的陈旧值，报出来是假精确。
+ * @param path 目标文件
+ * @return 一句观察结果
+ */
+std::string observeWriteFailure(const std::filesystem::path& path) {
+	std::error_code ec;
+	const auto sz = std::filesystem::file_size(path, ec);
+	return ec ? fmt::format("文件未创建（{}）", ec.message())
+	          : fmt::format("文件已创建但只有 {} 字节", sz);
+}
+
 std::expected<std::string, Error> writeCapturePng(RGL::Renderer& renderer, const LlmDebugConfig& cfg) {
 	auto* logger = RLLogger::getInstance();
 	auto cap = renderer.takeFrameCapture();
@@ -265,13 +299,20 @@ std::expected<std::string, Error> writeCapturePng(RGL::Renderer& renderer, const
 		relPath = fmt::format("screenshots/llm_{}.png",
 			std::chrono::duration_cast<std::chrono::seconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count());
-	std::error_code ec;
-	std::filesystem::create_directories(relPath.parent_path(), ec);
-	if (!writePng(relPath.string(), cap->width, cap->height, rgba.data())) {
+	if (auto why = ensureOutputDir(relPath.parent_path()); !why.empty()) {
 		if (logger)
-			logger->error("llm_debug: writePng failed: {}", relPath.string());
+			logger->error("llm_debug: 建输出目录失败 {} —— {}", relPath.parent_path().string(), why);
 		return std::unexpected(Error{ErrorCode::Unknown,
-			fmt::format("llm_debug: failed to write PNG: {}", relPath.string())});
+			fmt::format("llm_debug: cannot create output directory {}（根因见引擎日志 error 行）",
+				relPath.parent_path().string())});
+	}
+	if (!writePng(relPath.string(), cap->width, cap->height, rgba.data())) {
+		const auto observed = observeWriteFailure(relPath);
+		if (logger)
+			logger->error("llm_debug: writePng failed: {} —— {}", relPath.string(), observed);
+		return std::unexpected(Error{ErrorCode::Unknown,
+			fmt::format("llm_debug: failed to write PNG: {}（{}；根因见引擎日志 error 行）",
+				relPath.string(), observed)});
 	}
 	return std::filesystem::absolute(relPath).string();
 }

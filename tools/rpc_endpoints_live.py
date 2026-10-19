@@ -288,11 +288,25 @@ def main() -> int:
             sh = rpc("POST", "/shot", {"file": "screenshots/rpcverify_shot.png"})
             check_keys("/shot 顶层键", sh, "shot")
 
+            # ── 500 的口径（批 3，用户选 (a)：保留一个诚实的失败码，本通道不诊断）──
+            # 三条一起才钉住：① 裸文件名必须能写（**回归锚**：给 create_directories 的 ec 加判据
+            #    之后，裸文件名没有父目录段 → ec=Invalid argument → 全部截图变 500，实测被这条抓到）
+            # ② 写不进去必须回 500（不是 200「成功但没文件」，也不是 400 怪客户端）
+            # ③ 失败之后端点必须还能用（否则又回到「一次拼错打死 /shot」那个缺陷）
+            check("裸文件名（无目录段）能写 —— 回归锚",
+                  rpc_status("POST", "/shot", {"file": "rpcverify_bare.png"}), 200)
+            check("写不进的路径 → 500（诚实失败码，不假装成功）",
+                  rpc_status("POST", "/shot", {"file": "/etc/rgl_rpcverify_nope/x.png"}), 500)
+            check("500 之后 /shot 仍可用（端点没被打死）",
+                  rpc_status("POST", "/shot", {"file": "rpcverify_bare2.png"}), 200)
+            for junk in ("rpcverify_bare.png", "rpcverify_bare2.png"):
+                (BUILD_RGL / junk).unlink(missing_ok=True)
+
             print("== 5b. POST /shot 逐附件回读（能力段名单 × RT 缓存交叉对账）==")
             # /shot 的 attachment 解析吃的是 frame_capture 持有的**编译图** + RT 缓存 find()
             # ⟹ 200 = 「图里有这个名字」且「缓存里真建了这张」，与能力段的 rtBuilt=true 是
-            # 两条独立代码路径读同一份事实。反向：图里没有的名字必须被拒（400，引用解析失败；
-            # 批 3 计划改 404——本脚本按**当前**行为对拍，改语义时同步改这里）。
+# 两条独立代码路径读同一份事实。反向：图里没有的名字必须被拒 ⟹ **404**（批 3：点名的东西
+            # 不存在 = 引用解析失败，与未知路由同族；以前是 400，把能力事实混进了请求错误）。
             (BUILD_RGL / "screenshots" / "rpcverify").mkdir(parents=True, exist_ok=True)
             for a in atts:
                 if a["kind"] != "offscreen":
