@@ -89,6 +89,33 @@ void assertKeys(const std::string& fileName, const std::set<std::string>& emitte
 
 const char* lb(bool v) { return v ? "true" : "false"; }
 
+/**
+ * 生成期语法护栏：profile 目录里**每份** `.lua` 的花括号必须配对（配对判据本体 =
+ * `engine_lua_edit.cpp` 的 `bracesBalanced`，本函数只做读盘与点名）。
+ *
+ * 为什么必须有它（债-110 实测）：交付配置模式是「读回仓库配置 → 文本层逐键覆写」，而覆写原语
+ * 一旦把值跨度算错（`valueSpanAt` 曾把单行表末位标量的 ` }` 吃进跨度），写出的就是**括号不配对
+ * 的 Lua**。没有这条护栏时，唯一暴露点是引擎启动期的 `ConfigLoadFailed: '}' expected`——它只给
+ * 行号，不给「是哪一门的覆写写坏的」，13 臂的仪器会报成"引擎退出 status=65280"。
+ * 本护栏把失效搬回生成期并点名文件。**只查配对**，不查语义（语义由写后读回 + 引擎回显对账管）。
+ */
+void requireLuaSyntax(const std::string& dir)
+{
+    std::string bad;
+    for (const auto& e : fs::directory_iterator(dir)) {
+        if (e.path().extension() != ".lua" || bracesBalanced(readFile(e.path())))
+            continue;
+        if (!bad.empty())
+            bad += ", ";
+        bad += e.path().filename().string();
+    }
+    if (bad.empty())
+        return;
+    throw std::runtime_error("生成的 profile 里这些 lua 花括号不配对: " + bad
+        + " —— 覆写原语把值跨度算错了（常见形态：单行表末位标量被替换时吃掉 `}`）。"
+          "拒绝把语法坏的配置交给引擎");
+}
+
 /// 交付配置模式：整段替换 `scene.lua` 的 `taa = { ... },` 块为显式键。
 /// 缺块就在 `return {` 之后插一段——**不静默跳过**（跳过 = 判据跑在「TAA 关」的配置上，
 /// 恒等式会因「pass 根本不在图里」而平凡成立 = 最阴的假绿）。
@@ -100,20 +127,56 @@ const char* lb(bool v) { return v ? "true" : "false"; }
 /// 交付态的 `clip_mode` 会被这次整块替换丢掉 ⟹ **出声**。抽成独立函数的理由：判据自成一件事，
 /// 而 `rewriteTaaBlock` 的认知复杂度上限很紧（早返回把三个守卫从调用点挪走）。
 /// ⚠ 判据**不硬编码交付值**，而是从即将被替换掉的原文里读——交付档位再改也不会漂。
+/// 从 `clip_mode` 命中处往后取那枚数字的**原文**（只为把提示写准，不做数值解析、不吃默认值）。
+std::string luaNumberText(const std::string& text, std::string::size_type from)
+{
+    const auto b = text.find_first_of("-0123456789", from);
+    if (b == std::string::npos)
+        return "?";
+    const auto e = text.find_first_not_of("-0123456789.", b);
+    return e == std::string::npos ? text.substr(b) : text.substr(b, e - b);
+}
+
+/// 在 [begin, end) 内找 `clip_mode` **键行**，跳过注释里的同名提及。
+/// 为什么不能直接 `find("clip_mode")`：交付 scene.lua 的 taa 段注释里就写着
+/// 「默认 clip_mode=0 = 逐位今天」，而它**排在真键前面**——只取第一个命中会读出注释里的 0
+/// （实测提示写成 "clip_mode = 0"）。旧代码只把它当"存不存在"用，所以这个坑没出声。
+std::string::size_type findClipModeKey(const std::string& scene, std::string::size_type begin,
+    std::string::size_type end)
+{
+    for (auto p = scene.find("clip_mode", begin); p != std::string::npos && p < end;
+        p = scene.find("clip_mode", p + 1)) {
+        const auto ls = scene.rfind('\n', p) + 1;
+        const auto dash = scene.find("--", ls);
+        if (dash != std::string::npos && dash < p)
+            continue;  // 本行 `--` 之后的散文
+        const auto eq = scene.find('=', p);
+        if (eq == std::string::npos || eq >= end
+            || scene.find_first_not_of(" \t", p + 9) != eq)
+            continue;  // 不是 `clip_mode =` 形态（`clip_mode=0` 的注释形态已被上一条挡掉）
+        return p;
+    }
+    return std::string::npos;
+}
+
 void warnIfDropsDeliveryClipMode(const std::string& scene, std::string::size_type begin,
     std::string::size_type blockEnd, double clipMode)
 {
     static bool warned = false;
     if (warned || clipMode != 0.0 || blockEnd == std::string::npos)
         return;
-    const auto hit = scene.find("clip_mode", begin);
-    if (hit == std::string::npos || hit >= blockEnd)
+    const auto hit = findClipModeKey(scene, begin, blockEnd);
+    if (hit == std::string::npos)
         return;
     warned = true;
+    // 🔴 提示里的档位**从即将被替换掉的原文里读**，不硬编码（原来硬写"请显式 `--clip 11`"，
+    // 而批 14.5 已把交付转正到 13 ⟹ 那条指令会把人带去一个**既不是交付态也不是门关**的档位）。
+    const std::string delivery = luaNumberText(scene, hit);
     std::printf("⚠ 本次**未指定 `--clip`** ⟹ 不写 `clip_mode` 键 ⟹ 回落引擎默认 **0**（门关硬盒），"
-                "而交付配置 scene.lua 的 taa 段里写的是非零档位（整块替换会把它丢掉）。"
-                "**读数不是交付态**：要测交付态请显式 `--clip 11`，要测门关就接受它叫门关。"
-                "（本行每次运行只打一次）\n");
+                "而交付配置 scene.lua 的 taa 段里写的是 **clip_mode = %s**（整块替换会把它丢掉）。"
+                "**读数不是交付态**：要测交付态请显式 `--clip %s`，要测门关就接受它叫门关。"
+                "（本行每次运行只打一次）\n",
+        delivery.c_str(), delivery.c_str());
 }
 
 void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
@@ -234,6 +297,65 @@ void applyLlmShotGate(const std::string& dir, const ProfileOpts& o)
     std::string dg = readFile(dir + "/diagnostics.lua");
     replaceValue(dg, "diagnostics.lua", "rpc", "false");
     writeFile(dir + "/diagnostics.lua", dg);
+}
+
+/**
+ * 块内键的**写后读回**（第 6/7 例外门共用）。读回的是 `topLevelValueOf(表名)` 拿到的**整块
+ * 值文本**，再在里面找 `键 = 值`。为什么不在全文里搜：
+ *  ① 块内搜 = 只可能命中本块的那枚键（与 `overrideValueInTable` 的「表跨度内未命中 = 不越界
+ *     去别的表找」同口径）——覆写与自检**必须同一套定位判据**，否则覆写打偏到别的块而自检说
+ *     「没问题」，自检就成了摆设（`applyShadowRouteGate` 的注释把这条写在了顶层口径上）；
+ *  ② 带 ` = ` 的形态顺带避开同前缀兄弟键（`shadow_lod_fallback` 不含 `shadow_lod = `）。
+ * ⚠ 本自检**不是**「引擎读到的值」的终局证据，它只保证「我写进去的就是我要的那个值」。引擎
+ * 是否真按这个值跑，由消费方的**引擎回显对账**钉（`shadow_cascade_seam.cpp` 查
+ * `csm.force_cascade=` 与 `min(D=` 两条回显）。两层各管一段，缺任一段就有一段静默。
+ */
+void requireBlockKey(const std::string& text, const std::string& file,
+    const std::string& table, const std::string& key, const std::string& value)
+{
+    const std::string block = topLevelValueOf(text, table, file);
+    if (block.find(key + " = " + value) == std::string::npos
+        && block.find(key + "=" + value) == std::string::npos)
+        throw std::runtime_error(file + " 覆写后自检失败：`" + table + "." + key
+            + "` 读回的不是 " + value + "（读回块 = " + block
+            + "）——覆写打偏或被别处盖掉，拒绝在旧值上下判据");
+}
+
+/**
+ * 第 6 个例外门（`shadow-cascade-seam`，债-110）：覆写交付配置 `runtime.lua` 的
+ * `meshlet.shadow_lod`（★18 远级簇 LOD 的 uniform 选级 D）。门闭 = 第一行返回 = 一个键都不
+ * 多写 = 现有判据逐位不变。取值语义（-1 = 关 / 0 = 阳性对照 L0 臂 / N≥1 = 选级 D=N）的唯一
+ * 真相源 = `configs/runtime.lua` 与 `rgl/runtime_config.cppm`，本函数只搬运不解释。
+ * @throws 块/键不存在（`overrideValueInTable` 抛）/ 写后读回不是给定值
+ */
+void applyShadowLodGate(const std::string& dir, const ProfileOpts& o)
+{
+    if (!o.overrideShadowLod)
+        return;
+    std::string rt = readFile(dir + "/runtime.lua");
+    const std::string v = std::to_string(o.shadowLodValue);
+    overrideValueInTable(rt, "runtime.lua", "meshlet", "shadow_lod", v);
+    requireBlockKey(rt, "runtime.lua", "meshlet", "shadow_lod", v);
+    writeFile(dir + "/runtime.lua", rt);
+}
+
+/**
+ * 第 7 个例外门（同上判据）：覆写交付配置 `shadow.lua` 的 `csm.force_cascade`（**强制选级
+ * 诊断键**，不是画质旋钮）。为什么不并进第 4 枚（`overrideShadowRoute`）：那枚覆写的是**软影
+ * 滤波轴**、且会连带把 `izb` 强制成 `{ on = false }`，与本键正交——两件事装一扇门，改一条
+ * 必踩另一条（而这两条的改动缝本来就不同：一条是滤波档定案，一条是诊断仪器）。
+ * 门闭 = 第一行返回 = 逐位不变。
+ * @throws `csm` 块/键不存在 / 写后读回不是给定值
+ */
+void applyShadowForceCascadeGate(const std::string& dir, const ProfileOpts& o)
+{
+    if (!o.overrideShadowForceCascade)
+        return;
+    std::string sh = readFile(dir + "/shadow.lua");
+    const std::string v = std::to_string(o.shadowForceCascadeValue);
+    overrideValueInTable(sh, "shadow.lua", "csm", "force_cascade", v);
+    requireBlockKey(sh, "shadow.lua", "csm", "force_cascade", v);
+    writeFile(dir + "/shadow.lua", sh);
 }
 
 /**
@@ -625,6 +747,14 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             "mode/izb/sun_degrees），而本 opts 没给 deliveryConfigDir ⟹ 这个门根本没有实现路径"
             "（合成 profile 请直接写 shadowPass / shadowLuaOverride 等字段）。"
             "开着门却静默不生效 = 在出厂值上下判据，拒绝生成");
+    // 第 6/7 例外门（shadow_lod / csm.force_cascade）同罪同判据：它们覆写的是**交付**配置里
+    // 的两枚键，合成 profile 的 runtime.lua 里连 meshlet 块都没有（写了 = overrideValueInTable
+    // 抛「没有表 meshlet」，但那是在一半生成状态下抛，排查成本更高），故同样在生成期就拒。
+    if (o.deliveryConfigDir.empty() && (o.overrideShadowLod || o.overrideShadowForceCascade))
+        throw std::runtime_error(
+            "overrideShadowLod / overrideShadowForceCascade 是交付配置模式的例外门（覆写**交付** "
+            "runtime.lua 的 meshlet.shadow_lod 与 shadow.lua 的 csm.force_cascade），而本 opts "
+            "没给 deliveryConfigDir ⟹ 没有实现路径。开着门却静默不生效 = 在出厂值上下判据，拒绝生成");
     fs::create_directories(outDir);
     // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
     // 判据必须在**用户实际跑的那份配置**上求值（ProfileOpts::deliveryConfigDir 的注释里
@@ -643,6 +773,15 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         // 「门闭 = 逐位不变」由门函数自己保证，不靠调用侧记得加 if）。
         applyShadowRouteGate(outDir, o);
         applyLlmShotGate(outDir, o);
+        // 第 6/7 例外门（`shadow-cascade-seam` 的两枚自变量）。放在两条既有门**之后**：
+        // applyShadowRouteGate 会整值重写 shadow.lua 的 mode/izb、applyLlmShotGate 会重写
+        // runtime.lua 的 llm_*，本批两门各自 read-modify-write 同一份文件，顺序 = 后写的
+        // 吃前写的结果（换序 = 前面的覆写被丢掉）。门闭 = 各自第一行返回 = 逐位不变。
+        applyShadowLodGate(outDir, o);
+        applyShadowForceCascadeGate(outDir, o);
+        // 所有覆写落盘后统一过一遍语法护栏（理由见该函数注释：坏配置必须在生成期点名文件，
+        // 不能变成引擎的 `'{' expected` 天书）。
+        requireLuaSyntax(outDir);
         return outDir;
     }
     // 合成路径：render_graph 整拷 → 两份 json → runtime / diagnostics / shadow / scene 逐份写。
@@ -657,6 +796,7 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
     applyCameraLua(outDir, o);  // 合成路径同样支持机位/帧驱动 yaw（见 applyCameraLua 注释）
     // 第 5 例外门（钉死帧号的一次性截图形态）。门闭 = 函数第一行返回 = 现有合成判据逐位不变。
     applyLlmShotGate(outDir, o);
+    requireLuaSyntax(outDir);  // 同交付路径：合成串写坏也要在生成期出声
     return outDir;
 }
 

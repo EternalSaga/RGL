@@ -522,6 +522,10 @@ std::vector<SubcommandSpec> allSpecs()
     // shadow-kernel-scale 与 blend-sort 之间——那会让上一条注释的位置声明失效；-h 顺序
     // 只是打印序，同族相邻的好处在下一条 append 注释里已让位于既有声明的字面真。
     append(shadowGrainSpecs());
+    // `shadow-cascade-seam` 排在 shadow-grain 之后（正文住 `cli_table_seam.cpp`）。同上一条
+    // 的理由：不插进 shadow-kernel-scale 与 blend-sort 之间，那会让那两条 append 注释里的
+    // 位置声明失效；-h 顺序只是打印序。
+    append(shadowCascadeSeamSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

@@ -64,6 +64,11 @@ const SubcommandSpec* findSubcommand(const std::string& name);
 /// `cli_table.cpp` 的 allSpecs() 注）。
 [[nodiscard]] std::vector<SubcommandSpec> shadowGrainSpecs();
 
+/// `shadow-cascade-seam` 段的正文在 `cli_table_seam.cpp`（同 grain 段的拆法：主表撞 500 行、
+/// `specsSwimAndProbe()` 撞 120 行，缝按仪器切）。-h 位置 = shadow-grain 段之后（理由见
+/// `cli_table.cpp` 的 allSpecs() 注）。
+[[nodiscard]] std::vector<SubcommandSpec> shadowCascadeSeamSpecs();
+
 /// 绑定到某个 spec 的解析结果。**默认值只能来自 spec**——旧的三参数
 /// `get(args, key, def)` 已删除：留着它，字面量默认值就还有地方活。
 /// 读未声明的 flag 直接抛（不抛 = 校验是摆设）。

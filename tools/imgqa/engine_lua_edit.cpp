@@ -17,6 +17,26 @@ namespace {
 // 下面五枚只服务本 TU 的 `overrideTopLevelValue` / `overrideValueInTable`（两种定位口径的
 // 判据本体），不跨 TU ⟹ 留在匿名 namespace：跨 TU 暴露面 = 真被用到的面。
 
+/// 标量值的跨度收尾：吃到 `,` / 换行 / `}`，并**剥掉尾部空白**。
+/// 为什么要认 `}`（债-110 实测踩出的原语缺陷）：`csm = { slope_bias = 0.0, force_cascade = -1 }`
+/// 里末位标量的右邻不是 `,` 也不是换行，而是 ` }`——旧版把 ` }` 一起算进值跨度，替换
+/// `force_cascade = 0` 就吃掉闭括号，生成的 shadow.lua 少一个 `}`（引擎报
+/// `'}' expected (to close '{' at line 16)`）。此前没有「单行表末位标量」这种覆写目标，
+/// 所以原语一直带着这个洞没出声。
+/// ⚠ 与 `valueSpanAt` 同一条既有前提：值里不得出现 `,` `}` 或换行（`mode = "csm"` / 路径都不含，
+/// 本工具的键已逐一核对）。对既有调用点是纯收益：值文本本来就不含空白，而 `topLevelValueOf`
+/// 读回后还要再 trim 一次。
+std::pair<size_t, size_t> scalarSpanTo(const std::string& text, size_t b)
+{
+    size_t e = text.find_first_of(",\n}", b);
+    if (e == std::string::npos)
+        e = text.size();
+    size_t len = e - b;
+    while (len > 0 && (text[b + len - 1] == ' ' || text[b + len - 1] == '\t'))
+        --len;
+    return {b, len};
+}
+
 /// 定位 `key =` 之后**值**的跨度：标量吃到 `,`/换行，表值吃到配对 `}`（嵌套计数）。
 /// ⚠ 不支持"引号内含逗号/花括号"的值（`mode = "csm"` / 路径都不含，本工具的键已逐一核对）。
 std::pair<size_t, size_t> valueSpanAt(const std::string& text, size_t from,
@@ -25,17 +45,15 @@ std::pair<size_t, size_t> valueSpanAt(const std::string& text, size_t from,
     size_t b = from;
     while (b < text.size() && (text[b] == ' ' || text[b] == '\t'))
         ++b;
-    if (b < text.size() && text[b] == '{') {
-        for (size_t i = b, depth = 0; i < text.size(); ++i) {
-            if (text[i] == '{')
-                ++depth;
-            else if (text[i] == '}' && --depth == 0)
-                return {b, i + 1 - b};
-        }
-        throw std::runtime_error("交付配置 " + file + " 的 `" + what + "` 表值没有收尾");
+    if (b >= text.size() || text[b] != '{')
+        return scalarSpanTo(text, b);
+    for (size_t i = b, depth = 0; i < text.size(); ++i) {
+        if (text[i] == '{')
+            ++depth;
+        else if (text[i] == '}' && --depth == 0)
+            return {b, i + 1 - b};
     }
-    const size_t e = text.find_first_of(",\n", b);
-    return {b, (e == std::string::npos ? text.size() : e) - b};
+    throw std::runtime_error("交付配置 " + file + " 的 `" + what + "` 表值没有收尾");
 }
 
 /// 顶层口径的位置判据：键必须在行首（允许缩进）。
@@ -317,6 +335,32 @@ void overrideValueInTable(std::string& text, const std::string& file, const std:
     const size_t eq = text.find('=', inner[0] + key.size());
     const auto val = valueSpanAt(text, eq + 1, file, table + "." + key);
     text.replace(val.first, val.second, newValue);
+}
+
+/// 花括号是否配对（**跳过 `--` 行注释**后计数）。
+/// 为什么要跳注释：configs/shadow.lua 的注释块正在讲子表形态怎么写，里面有成对的 `}`
+/// 也有单边的（"…= { on = false, grid = 512, dump_frame = 0 }" 之类示例）——不跳注释，
+/// 计数会被散文带着跑，护栏就在**好配置**上误抛。
+/// ⚠ 不认长括号注释 `--[[ ]]`、不认字符串里的 `--`：本仓库的 lua 里两者都没有，而这条护栏
+/// 的失效方向是「多抛」（拒绝生成）而不是「漏抛」，代价可接受。
+bool bracesBalanced(const std::string& src)
+{
+    long depth = 0;
+    for (size_t i = 0; i < src.size();) {
+        if (src.compare(i, 2, "--") == 0) {  // 行注释：整条跳到行尾
+            const size_t nl = src.find('\n', i);
+            if (nl == std::string::npos)
+                break;
+            i = nl + 1;
+            continue;
+        }
+        if (src[i] == '{')
+            ++depth;
+        else if (src[i] == '}' && --depth < 0)
+            return false;  // 先关后开 = 已经坏了，不必等计数收尾
+        ++i;
+    }
+    return depth == 0;
 }
 
 }  // namespace RGL::imgqa

@@ -65,6 +65,12 @@ namespace RGL::imgqa {
 /// （单帧开关对拍），缝按**仪器**切。📄 正文在 `judgments_table_grain.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& shadowGrainJudgments();
 
+/// 地基族 · **相邻级联对阴影的分歧**（`shadow-cascade-seam`，3 条）：LOD 归因的缝台阶增量
+/// ≤ 纹素下界的一倍裕量 / 两 force 臂不得逐位相同（阳性锚点，它红时主判据的绿不作数）/
+/// D 扫描单调不减且高段饱和。族仍是 Foundation（同机位同帧的纯空间差分），缝按**仪器**切。
+/// 📄 正文在 `judgments_table_seam.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& shadowCascadeSeamJudgments();
+
 /// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
 /// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
 /// 📄 正文在 `judgments_table_ssr.cpp`。

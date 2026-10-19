@@ -193,6 +193,31 @@ struct ProfileOpts {
     std::string llmShotFile;       ///< `llm_shot.file`（相对引擎 CWD build/rgl；门开时必填）
     int llmShotDelayFrames = 8;    ///< `llm_shot.delay_frames`（消费方写死，别用默认值——理由见上）
     std::string deliveryConfigDir;
+    /// **第 6 个例外**（`shadow-cascade-seam`，债-110）：true = 覆写交付配置 `runtime.lua`
+    /// 的 `meshlet.shadow_lod`（★18 远级簇 LOD 的 uniform 选级 D）成 `shadowLodValue`。
+    ///
+    /// 为什么这**不算**「工具再抄一份真相」（这条必须写清，否则本字段就是那条红线的例外请求）：
+    /// 例外判据 = 「覆写的是不是 A/B 实验本身」。`shadow_lod` 住在 runtime.lua，而本判据的
+    /// **自变量就是这个旋钮**（D=5 出厂臂 vs D=-1 几何一致参照臂 vs D∈{0,3,7,11} 扫描），
+    /// 不覆写它就做不出实验；这与 env/AO/软影档三枚例外同性质。反例是「把 meshlet.assets
+    /// 也抄一份进 ProfileOpts」——那枚不是任何判据的自变量，抄进来只会与 configs 漂。
+    /// 语义（`-1` = 关 / `0` = 阳性对照 L0 臂 / `N≥1` = 选级 D=N）以 `configs/runtime.lua`
+    /// 与 `rgl/runtime_config.cppm` 为唯一真相源，本字段不重述取值含义。
+    /// 🔴 只在交付配置路径有实现（合成 profile 的 runtime.lua 里根本没有 meshlet 块，
+    /// 写了 = 静默不生效），门开而无 `deliveryConfigDir` 一律抛。覆写失败（键不存在）抛。
+    bool overrideShadowLod = false;
+    int shadowLodValue = 5;
+    /// **第 7 个例外**（同上判据）：true = 覆写交付配置 `shadow.lua` 的
+    /// `csm.force_cascade`（**强制选级诊断键**，不是画质旋钮）成 `shadowForceCascadeValue`。
+    ///
+    /// 为什么必须有它而不能借第 4 枚例外（`overrideShadowRoute`）：那枚门覆写的是**软影滤波轴**
+    /// （mode / izb / sun_degrees），语义与「钉哪一级采样」正交；把 force_cascade 塞进去会把
+    /// 一扇门变成两件事（且它会连带强制 izb=false，那是另一条 A/B）。本键同样是「A/B 实验
+    /// 本身」——force=c 与 force=c+1 两臂的**唯一差别 = 采哪张阴影图**，这是本判据的立命仪器
+    /// （论证全文 → `docs/mdi_plan.md` 与 commit 6cd65b4）。
+    /// ⚠ 只在交付配置路径有实现（同第 6 枚）；覆写失败（`csm` 块或键不存在）抛。
+    bool overrideShadowForceCascade = false;
+    int shadowForceCascadeValue = -1;
     /// 可选机位（**写进 profile 的 camera.lua**，从第 1 帧生效）。false = 不动 camera.lua。
     ///
     /// 为什么不能只靠 `Engine::setCamera`（RPC）：RPC 落在引擎已经跑了几帧之后，而那些帧是用
@@ -1148,6 +1173,31 @@ int cmdShadowKernelScale();
  * 缺靶（.glb / .manifest.json）= 抛，**不 SKIP**。
  */
 int cmdShadowGrain();
+
+// ═══════════════════════════════════════ 相邻级联阴影分歧（shadow-cascade-seam，债-110）
+//
+// 缺陷类 = **相邻级联对「这块表面有没有影子」给出不同答案**。已定死的实例 = 债-104 的远级簇
+// LOD（`rgl/render_list_mdi.cppm:284` 的 `if (c >= 1u && …)` ⟹ 级 0 画全量几何、级 1..3 画粗簇
+// LOD），用户报障 = 债-139 那块随相机突然出现/消失阴影的地面。判据本体与全部口径理由 =
+// `tools/imgqa/shadow_cascade_seam.cpp` 头注释；cov / 翻转率 / 最硬横向台阶三条算子住
+// `shadow_seam_metric.{h,cpp}`，被 `just imgqa selftest` 用闭式输入直接测（判据 4，不启引擎）。
+// 仪器 = 诊断键 `csm.force_cascade`（commit 6cd65b4）把全场景钉到某一级采样后做**差分**——
+// 🔴 单张屏幕空间统计量已被主 agent 实测证伪（D=5 与 D=-1 两臂全幅最大台阶**逐位同值**
+// = 它对 LOD 是瞎的），照它建判据会在 LOD 坏掉时照样绿。
+
+/**
+ * 相邻级联的阴影分歧（13 臂：`none` 分母 + D ∈ {5,-1} × force ∈ {0,1} + D ∈ {0,3,7,11} ×
+ * force ∈ {0,1}）。**无 flag**：机位 / 尺寸 / 帧号 / 带子 / 阈值都是量具的组成部分。
+ * 三条判决线：`shadow-seam-lod-growth`（**J1 主判据**：LOD 归因的缝台阶增量 ≤ 0.1，
+ * 固有下界 = 一个纹素的影边摆放误差 ≈ 0.057；🔴 **今天这条红，且红是正确的交付内容**）·
+ * `shadow-cascade-seam-arms-alive`（**J2 阳性锚点**：D=5 的两 force 臂不得逐位相同，
+ * 它红时 J1 的绿一律不作数）· `shadow-seam-sweep-monotone`（**J3**：D 扫描单调不减 +
+ * 高段饱和 + force=0 反向对照恰 0；D 点不足 3 个抛）。
+ * 🔴 跑在**交付配置**（仓库 `configs/`）上：合成 profile 没有簇产物 ⟹ LOD 不生效 ⟹ 恒绿。
+ * 每臂先过**簇路径生效闸门**（不生效 = 抛 rc=3，全部读数作废），再对账引擎回显
+ * （`shadow: mode=` / `csm.force_cascade=` / `min(D=`），拼错键即抛。
+ */
+int cmdShadowCascadeSeam();
 
 // ═══════════════════════════════════════════ 透明合成次序（blend-sort，债-132 结案）
 //

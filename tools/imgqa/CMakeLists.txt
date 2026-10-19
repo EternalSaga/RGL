@@ -23,6 +23,9 @@ add_executable(imgqa
     # `shadow-grain` 的 spec 段（同 blend 段的拆法：主表撞 500 行、specsSwimAndProbe 撞 120 行，
     # 缝按仪器切）。
     cli_table_grain.cpp
+    # `shadow-cascade-seam` 的 spec 段（同 grain 段的拆法：主表撞 500 行、specsSwimAndProbe
+    # 撞 120 行，缝按仪器切）。
+    cli_table_seam.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -65,6 +68,9 @@ add_executable(imgqa
     # `shadow-grain` 判据段（2 条：痤疮上界 + slope_bias 接线阳性锚点），缝按仪器切
     # （`judgments_table_shadow.cpp` 把头注缝声明为「三条全部属于 shadow-kernel-scale」）。
     judgments_table_grain.cpp
+    # `shadow-cascade-seam` 判据段（3 条：LOD 归因增量 / 两 force 臂阳性锚点 / D 扫描形状），
+    # 缝按仪器切（`judgments_table_grain.cpp` 把头注缝声明为「三条全部属于 shadow-grain」）。
+    judgments_table_seam.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -97,6 +103,12 @@ add_executable(imgqa
     # clip / 窗口纪律 + 三条判决线挂号，全部闭式不启引擎（合成 cov 场直打
     # `shadow_grain_metric.cpp`）。
     selftest_grain.cpp
+    # `shadow-cascade-seam` 口径层（相邻级联阴影分歧）的自检段 = **判据 4**：任务钦定的闭式
+    # （常数场台阶 = 恰 0、单条 0.25 台阶 = 恰 0.25、高度 1 = 恰 1.0、宽 33 斜坡 halfWidth=1 =
+    # 恰 1/33、翻转率精确分数）+ 线性域锚点 / eps 守卫 / clip / 严格阈值 / band 是分母 +
+    # 四条守卫各一条 throwsStd + 三条判决线挂号，全部闭式不启引擎（合成场直打
+    # `shadow_seam_metric.cpp`）。
+    selftest_seam.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -212,6 +224,16 @@ add_executable(imgqa
     shadow_grain_target.cpp
     shadow_grain_judge.cpp
     shadow_grain.cpp
+    # `shadow-cascade-seam`：相邻级联对阴影的分歧（远级簇 LOD 不许造出级联交界缝，债-110）。
+    # 拆 TU 的缝 = **口径 vs 仪器内部**（四切法照 shadow_grain，但**没有 target TU**：本仪器
+    # 的区域是与几何无关的固定带，理由住 `shadow_cascade_seam.cpp` 头注「区域为什么是固定带」）：
+    # `shadow_seam_metric.cpp` = 口径层（覆盖度场 / 翻转率 / 最硬横向台阶，被 selftest 闭式直测）；
+    # `shadow_cascade_seam.cpp` = 臂表 + 采集 + 引擎回显对账 + 🔴 簇路径生效闸门 + 入口编排；
+    # `shadow_cascade_seam_judge.cpp` = 三条判决线。跨 TU 类型与量具常数唯一出处 =
+    # `shadow_cascade_seam.h`（口径常数在 `shadow_seam_metric.h`）。
+    shadow_seam_metric.cpp
+    shadow_cascade_seam_judge.cpp
+    shadow_cascade_seam.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器

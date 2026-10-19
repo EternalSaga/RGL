@@ -4,8 +4,9 @@
 // 的覆写键 + 阴影路由枚举 + shadow.lua 的键形状）：一次改配置键要同时动这四个块，切成四个
 // 文件只会把「漏改一处」变成静默漂移。
 //   · profile 生成面（`testShadowSoftnessArms` / `…IzbForm` / `…CommentTrap` /
-//     `testShadowKernelScaleInstrument`）—— 测 `makeProfile` 的 lua 覆写门：臂塌缩、矛盾
-//     组合拒绝、izb 的覆写形态（引擎只收子表；覆写器两种文本跨度都吃）、注释陷阱、截图门、以及「门关态逐位不变」。
+//     `testShadowLuaSpanLastScalar` / `testShadowKernelScaleInstrument`）—— 测 `makeProfile`
+//     的 lua 覆写门：臂塌缩、矛盾组合拒绝、izb 的覆写形态（引擎只收子表；覆写器两种文本跨度
+//     都吃）、注释陷阱、单行表末位标量的值跨度（债-110）、截图门、以及「门关态逐位不变」。
 //   · 度量算子面（`testShadowSoftnessMetrics` / `testShadowKernelScale` / `…Sampling`）——
 //     期望全部来自闭式（阈值交叉位置是解析的、覆盖率是整数比），不吃截图。
 // 实机数字只能证明「与上次一样」，闭式才能证明「算子算的是我说的那个量」（同 testAoMetrics）。
@@ -13,6 +14,7 @@
 // 搬动纪律：断言本体逐字搬自拆分前的 selftest.cpp（一条不多、一条不少、不改判定方向与阈值）。
 #include "selftest.h"
 
+#include "engine_lua_edit.h"
 #include "shadow_kernel_metric.h"
 #include "imgqa.h"
 
@@ -288,6 +290,72 @@ void testShadowSoftnessCommentTrap(Checker& c)
     c.chk("softness 注释陷阱：注释含 `on = true` 时覆写仍成功且 izb = { on = false }",
         got.find("izb = { on = false }") != std::string::npos && got.find("mode = \"csm\"") != std::string::npos,
         "自检若在全文搜 `on = true`，会因这行注释抛「覆写后自检失败」= 配置没错、工具自己错");
+}
+
+/// 面 E：单行表**末位标量**的覆写跨度（债-110 实测踩出的原语缺陷，落成回归靶）。
+/// `csm = { slope_bias = 0.0, force_cascade = -1 }` 里末位标量的右邻不是 `,` 也不是换行，
+/// 而是 ` }`——旧 `valueSpanAt` 把 ` }` 一起算进值跨度 ⟹ 替换后吃掉闭括号 ⟹ 生成的
+/// shadow.lua 语法坏，而当时**唯一**的暴露点是引擎启动期的 `'{' expected (to close '{')`
+/// 天书（13 臂仪器只报成"引擎退出 status=65280"）。五条断言各堵一种失效：
+///   ① 护栏不在**好配置**上误抛（误抛 = 仪器永久红，比漏抛更贵）；
+///   ② 护栏不是恒真（删掉一个 `}` 必须判不配对，否则 ①③④⑤ 全是摆设）；
+///   ③ 护栏跳注释（configs/shadow.lua 的注释里有单边 `}` 示例，不跳就在好配置上抛）；
+///   ④ 原语级：末位标量被换掉后闭括号还在、兄弟键没被吃；
+///   ⑤ 门级（走 makeProfile 全路径）：第 6/7 例外门写出的两份 lua 都合法且真的落上值。
+/// 变异红线：`scalarSpanTo` 的 `find_first_of(",\n}")` 改回 `",\n"` → ④⑤ 红；
+/// `bracesBalanced` 改成 `return true` → ② 红；删掉它跳 `--` 的那三行 → ③ 红；
+/// 删掉 `makeProfile` 末尾的 `requireLuaSyntax` → 本面**不**红（它只守实机路径，
+/// ④⑤ 才是把坏配置钉在生成期的那两条）。
+void testShadowLuaSpanLastScalar(Checker& c)
+{
+    const std::string src = projectRoot() + "/configs/shadow.lua";
+    std::ifstream in(src);
+    const std::string delivery { std::istreambuf_iterator<char>{in}, {} };
+    c.chk("lua 跨度：交付 configs/shadow.lua 自身判为配对（护栏不在好配置上误抛）",
+        bracesBalanced(delivery));
+
+    // ② 反向：删掉文件里最后一个 `}`（`return {` 的收尾）必须判不配对。
+    const size_t last = delivery.rfind('}');
+    c.chk("lua 跨度：删掉一个 `}` 后判为不配对（护栏不是恒真）",
+        last != std::string::npos
+            && !bracesBalanced(delivery.substr(0, last) + delivery.substr(last + 1)));
+
+    // ③ 注释里的单边 `}` 不算数——这条正是"护栏在好配置上误抛"的形态。
+    c.chk("lua 跨度：`--` 注释里的单边 `}` 不计入配对",
+        bracesBalanced("return { a = 1, -- 例：x = { on = true }\n}\n"),
+        "不跳注释 ⟹ configs/shadow.lua 的注释示例让生成期护栏直接抛 = 仪器永久红");
+
+    // ④ 原语级回归：交付文本里 csm 块是**单行表**，force_cascade 是末位标量。
+    std::string sh = delivery;
+    overrideValueInTable(sh, "shadow.lua", "csm", "force_cascade", "0");
+    c.chk("lua 跨度：单行表末位标量被替换后闭括号还在（债-110 的缺陷本体）",
+        sh.find("slope_bias = 0.0, force_cascade = 0 }") != std::string::npos
+            && bracesBalanced(sh),
+        "旧跨度把 ` }` 算进值里 ⟹ 替换吃掉闭括号 ⟹ 引擎报 `'{' expected`");
+
+    // ⑤ 门级：第 6/7 例外门走完整 makeProfile（含 requireLuaSyntax 护栏）。
+    const std::string dst = "/tmp/imgqa_selftest_lua_span";
+    ProfileOpts o;
+    o.deliveryConfigDir = projectRoot() + "/configs";
+    o.overrideShadowLod = true;
+    o.shadowLodValue = 5;
+    o.overrideShadowForceCascade = true;
+    o.shadowForceCascadeValue = 1;
+    try {
+        makeProfile(dst, o);
+    } catch (const std::exception& e) {
+        c.chk("lua 跨度：shadow_lod + force_cascade 两门生成 profile 不抛", false, e.what());
+    }
+    const auto slurp = [](const std::string& p) {
+        std::ifstream f(p);
+        return std::string { std::istreambuf_iterator<char>{f}, {} };
+    };
+    const std::string genSh = slurp(dst + "/shadow.lua");
+    const std::string genRt = slurp(dst + "/runtime.lua");
+    c.chk("lua 跨度：门级产物 shadow.lua 配对且 force_cascade = 1 落在 csm 块内",
+        bracesBalanced(genSh) && genSh.find("force_cascade = 1 }") != std::string::npos);
+    c.chk("lua 跨度：门级产物 runtime.lua 配对且 shadow_lod = 5 落上",
+        bracesBalanced(genRt) && genRt.find("shadow_lod = 5") != std::string::npos);
 }
 
 /// 面 B：度量算子的闭式期望（不吃截图——实机数字只能证明「与上次一样」）

@@ -259,8 +259,10 @@ void testJudgmentFamilies(Checker& c)
     // 重叠区钉合成次序），见 judgments_table_blend.cpp。
     // 69 → 71 → 72：`shadow-grain` 首版两条（痤疮上界 + 锚点，69→71）→ 2026-10-19 判决
     // 方向纠正：两条退役、三条新立（J1 存活率 / J2 接线锚点 / J3 出厂档对账），见 judgments_table_grain.cpp。
+    // 72 → 75：`shadow-cascade-seam` 三条（债-110 把 ★18 的图像侧判据从一次性脚本入库）：
+    // J1 LOD 归因的缝台阶增量 / J2 两 force 臂阳性锚点 / J3 D 扫描形状，见 judgments_table_seam.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 72（族拆分最容易掉条目）", all.size() == 72, std::to_string(all.size()));
+    c.chk("判据总数 == 75（族拆分最容易掉条目）", all.size() == 75, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -537,11 +539,15 @@ int cmdSelftest()
     testShadowSoftnessArms(c);
     testShadowSoftnessIzbForm(c);
     testShadowSoftnessCommentTrap(c);
+    testShadowLuaSpanLastScalar(c);
     testShadowSoftnessMetrics(c);
     testShadowKernelScale(c);
     testShadowKernelScaleSampling(c);
     testShadowKernelScaleInstrument(c);
     testShadowGrain(c);
+    testShadowSeam(c);
+    testShadowSeamGuards(c);
+    testShadowSeamSignalGates(c);
     testDiffStructMetric(c);
     testDiffStructDomainGuard(c);
     testDiffBlockAnchors(c);
