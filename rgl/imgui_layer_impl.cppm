@@ -454,10 +454,15 @@ bool ImGuiLayer::renderFrame(vk::raii::CommandBuffer& cmd, vk::Extent2D extent,
 	return true;
 }
 
-/** 面板内容（接口注释）：profiler 读数区 + 参数页 TabBar（builder 非空时）。 */
+/** 面板内容（接口注释）：帧率读数 + profiler 读数区 + 参数页 TabBar（builder 非空时）。 */
 void ImGuiLayer::buildPanels() {
 	const ProfilerSnapshot snap = profilerSnapshotNow();
 	ImGui::Begin("RGL Debug");
+	// 帧率读数（上屏状态下的常显行，不依赖 profiler 门——profiler 默认关，原来整段只剩提示语）。
+	// 口径 = imgui demo overlay 同款：Framerate 是 imgui 按 io.DeltaTime 自带的 60 帧滚动平均
+	//（NewFrame 内更新），DeltaTime 由 SDL3 后端每帧按墙钟重算（相邻 NewFrame 间隔 = 帧周期）。
+	const ImGuiIO& io = ImGui::GetIO();
+	ImGui::Text("fps %.1f   %.2f ms/frame", io.Framerate, io.DeltaTime * 1000.0f);
 	if (!snap.enabled) {
 		ImGui::TextUnformatted("profiler = 0（configs/diagnostics.lua 设 profiler=N 出读数）");
 	} else {

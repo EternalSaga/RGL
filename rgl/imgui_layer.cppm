@@ -97,7 +97,7 @@ export class ImGuiLayer {
 	bool renderFrame(vk::raii::CommandBuffer& cmd, vk::Extent2D extent, vk::ImageView swapchainView);
 
   private:
-	/** 面板内容（10.1 = profiler 读数；10.2b = 参数页 TabBar）。 */
+	/** 面板内容（帧率常显行 + 10.1 profiler 读数；10.2b = 参数页 TabBar）。 */
 	void buildPanels();
 	/** 渲染参数页（pageBuilder 非空时；TabItem per page，条目 = Slider/ColorEdit3/Drag3）。 */
 	void buildParamTabs();
