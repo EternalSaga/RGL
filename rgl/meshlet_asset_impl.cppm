@@ -25,9 +25,10 @@ struct SectionInfo {
 };
 
 /** 七段固定顺序（= format.h 的落盘顺序），下标即段序。
- *  ⚠ v2 起产物尾部还可有第八段 MustL0，**本模块不读它**（口径见接口头 kMeshletFormatVersionMax
- *  那条）；本表只列"读取侧会拿视图的段"，所以 `checkSectionChain` 的末段仍是 Nodes，
- *  尾部多出来的字节由「Nodes 段尾 ≤ 文件长」这条放过。 */
+ *  ⚠ v2 起产物尾部还可有第八段 MustL0，但它**不在这张表里**：它是可选段（v1 产物没有），
+ *  而本表的两条链式判据（相邻段不重叠 + 末段落在文件内）要求每个槽位都有合法偏移。
+ *  MustL0 由 `checkMustL0Section` 单独判（count==0 直接放行 = v1 兼容的全部要点），
+ *  它的「不重叠」下界 = 本表末段（Nodes）的段尾。 */
 constexpr size_t kSectionCount = 7;
 
 /** sourceSha1 等身份字段的小写 hex（仅日志身份，→ 接口裁决 1）。 */
@@ -237,6 +238,48 @@ std::optional<std::string> checkRemapValues(const MeshletAsset& a) {
 	return std::nullopt;
 }
 
+/**
+ * MustL0 段校验（v2 尾部可选段，视图 = `MeshletAsset::mustL0`）。
+ *
+ * 🔴 `mustL0Count == 0` **直接放行、连 offMustL0 都不看**：v1 产物那两枚字段位在 `reserved`
+ * 里 = 0，而 v1 的 `offMustL0 = 0` 连「落在文件内」都不成立 —— 拿 v2 的契约去要求 v1 产物
+ * = 把兼容读侧变成只认新产物。空 = **空视图，合法常态**（消费方据此建空 proxy 表，
+ * 一条 draw 都不钉），不是错误也不是警告。
+ * 非 0 时**五条各一条两两不同**的错误串：版本不够 / 元素对齐 / 偏移加法绕回 /
+ * 整段落不进文件 / 压过 Nodes（段表自洽的 MustL0 半边）。
+ *
+ * ⚠ 这里只保证「按 12B 一条切字节不会越界读」。前缀性、prim 严格升序、与区间表的对照
+ * 都在 `shadow_proxy_types` —— 本模块没有 `MeshletRangeScan`，硬要判就得在这儿重扫一遍
+ * groups（第二个真相源，AGENTS 哲学第 1 条）。
+ */
+std::optional<std::string> checkMustL0Section(const MeshletDiskHeader& h, uint64_t fileSize,
+                                              uint64_t nodesEnd) {
+	if (h.mustL0Count == 0)
+		return std::nullopt;
+	if (h.formatVersion < 2)
+		return fmt::format(
+		    "meshlet asset: MustL0 section declared ({} entries) but formatVersion {} predates v2 — "
+		    "header disagrees with itself (reserved bits set, or a v1 writer grew a tail?)",
+		    h.mustL0Count, h.formatVersion);
+	if (h.offMustL0 % alignof(MeshletDiskMustL0) != 0)
+		return fmt::format(
+		    "meshlet asset: MustL0 offset {} not a multiple of its {}-byte element alignment",
+		    h.offMustL0, alignof(MeshletDiskMustL0));
+	const uint64_t bytes = uint64_t(h.mustL0Count) * sizeof(MeshletDiskMustL0);
+	if (bytes > std::numeric_limits<uint64_t>::max() - h.offMustL0)
+		return fmt::format(
+		    "meshlet asset: MustL0 offset {} + size {} wraps around 64-bit", h.offMustL0, bytes);
+	if (h.offMustL0 + bytes > fileSize)
+		return fmt::format(
+		    "meshlet asset: MustL0 section extends beyond file (end {} > file size {}) — truncated tail?",
+		    h.offMustL0 + bytes, fileSize);
+	if (h.offMustL0 < nodesEnd)
+		return fmt::format(
+		    "meshlet asset: MustL0 offset {} overlaps Nodes section (ends at {})", h.offMustL0,
+		    nodesEnd);
+	return std::nullopt;
+}
+
 }  // namespace
 
 std::expected<MeshletAsset, std::string> parseMeshletAsset(std::vector<std::byte>&& image) {
@@ -249,6 +292,11 @@ std::expected<MeshletAsset, std::string> parseMeshletAsset(std::vector<std::byte
 	if (auto err = checkEachSection(sections, image.size()))
 		return std::unexpected(*err);
 	if (auto err = checkSectionChain(sections, image.size()))
+		return std::unexpected(*err);
+	// MustL0 排在链校验之后：它要拿 Nodes 的段尾当「不得重叠」的下界，而 Nodes 自身的
+	// 越界/绕回已由上面两条判过。
+	if (auto err = checkMustL0Section(*header, image.size(),
+	        sections[kSectionCount - 1].offset + sections[kSectionCount - 1].bytes))
 		return std::unexpected(*err);
 
 	// 校验全过才拼视图：镜像 move 进 asset 后堆缓冲地址不变（vector 移动语义），
@@ -269,6 +317,14 @@ std::expected<MeshletAsset, std::string> parseMeshletAsset(std::vector<std::byte
 	    asset.header.groupCount};
 	asset.nodes = {reinterpret_cast<const MeshletDiskNode*>(base + sections[6].offset),
 	    asset.header.nodeCount};
+	// MustL0（v2 可选段）：count==0 时**不给 reinterpret_cast 造一个 base+0 的悬空视图**
+	// （v1 产物 offMustL0 = 0，指针非空但指向文件头 —— 空视图必须是空指针）。
+	asset.mustL0 = asset.header.mustL0Count == 0
+	                   ? std::span<const MeshletDiskMustL0>{}
+	                   : std::span<const MeshletDiskMustL0>(
+	                         reinterpret_cast<const MeshletDiskMustL0*>(base
+	                             + asset.header.offMustL0),
+	                         asset.header.mustL0Count);
 	asset.sourceSha1Hex = toHexLower(asset.header.sourceSha1, sizeof(asset.header.sourceSha1));
 
 	if (auto err = checkClusters(asset))

@@ -592,6 +592,25 @@ export struct RuntimeConfig {
 	 */
 	bool meshletMdiShadow = false;
 
+	/**
+	 * N10 P2 阴影代理**钉段表**档（`runtime.lua meshlet.shadow_proxy`，🔴 默认关）。
+	 *
+	 * 开 = 启动期把簇产物 v2 的 MustL0 段读成 per-objectSlot 的 `ShadowProxyTable`
+	 * （`shadow_proxy_types.cppm`）+ emplace 进 registry ctx + 打 INFO 读数（条目数 /
+	 * Σ 被钉簇数 / texel 门在 8 档 × 4 级联下的活跃条目数表）。
+	 * 门关 = **连表都不建**（一行日志都不打），与 `wireMeshletBindings` 首行早退同构。
+	 *
+	 * 🔴 **本批（P2）零消费者**：表建好放进 ctx，但没有任何 draw 由它发出——接消费点是 P3
+	 * （整条线第一次变画面的一批）。所以「门开态截图 == 出厂锚」就是 P2 没接画面的自证，
+	 * 而**不是**「这键没用」：它与 `meshlet.shadow_lod` 的关系正相反，后者一开就改画面。
+	 * 生效前置 = `meshlet.assets = true`（MustL0 段住在簇产物里，产物没读 ⟹ 段不存在），
+	 * 孤立组合由 gate_lint 启动期申报（meshlet.shadow_proxy 规则）。
+	 *
+	 * 与 `meshlet.shadow_lod` 无依赖关系（本批）：钉段条目的消费者是 P3 的「第一条 draw」，
+	 * 而那条 draw 的**存在**与 uniform 选级 D 正交（D 决定其余簇画到哪一级，钉段恒画 L0）。
+	 */
+	bool meshletShadowProxy = false;
+
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {
 		return aa == AaMode::taa;

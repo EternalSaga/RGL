@@ -178,12 +178,13 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	                                  // csm.slope_bias 批：预留空块的 `{"csm",…,nullptr}` 挂号行
 	                                  // 随该块填入第一枚键删除，改由 kGateBlocks 的 csm 块覆盖）
 	CHECK(blocks.size() == 7u);       // csm / pcss / evssm / 三探针 / meshlet
-	CHECK(blockKeys.size() == 21u);   // 2 + 3 + 4 + 2 + 2 + 2 + 6（csm 两块键：slope_bias + force_cascade）
+	CHECK(blockKeys.size() == 22u);   // 2 + 3 + 4 + 2 + 2 + 2 + 7（csm 两块键：slope_bias + force_cascade；
+	                                  // meshlet 块 7 枚 = N10 P2 加 shadow_proxy）
 	CHECK(echo.size() == 30u);
 	CHECK(shadowEcho.size() == 14u);
-	CHECK(meshletKeys.size() == 8u);  // 整块 8 枚（债-106 红线：接管整块 = 一枚都不能少；
+	CHECK(meshletKeys.size() == 9u);  // 整块 9 枚（债-106 红线：接管整块 = 一枚都不能少；
 	                                  // 债-129 S2 起 debug+tint 合并为 instrument、
-	                                  // overlay+switch 合并为 mode）
+	                                  // overlay+switch 合并为 mode；N10 P2 加 shadow_proxy）
 	// 正向：每一枚来源键必须被「块条目」或「独立行」至少一个覆盖，两者都没有 = 红并点名。
 	auto coveredBy = [&](std::string_view k) {
 		return hasGate(rules, k) ? "独立行" : (hasGate(blockKeys, k) ? "块条目" : "");
@@ -197,7 +198,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 去重门数钉在「独立行 ∪ 块条目」的并集上（= 三方来源键数之和）。
 	std::vector<std::string> unionGates = rules;
 	unionGates.insert(unionGates.end(), blockKeys.begin(), blockKeys.end());
-	CHECK(distinctGateCount(unionGates) == 52u);
+	CHECK(distinctGateCount(unionGates) == 53u);
 	// 反向：独立行与块条目吃的都必须是已知来源键（陈旧/拼错门名）。
 	auto known = [&](std::string_view k) {
 		return hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);

@@ -24,6 +24,7 @@ import environment;        // Environment（架构债务续账步骤 3）
 import render_target_cache;  // RenderTargetCache（架构债务续账步骤 2）
 import asset_table;        // AssetTable（装配 helper 参数，F 拆出）
 import meshlet_asset;       // MeshletAsset（★0-b2 簇产物容器元素，纯 CPU 只读视图）
+import meshlet_ranges;       // MeshletRangeScan（N10 P2 wireShadowProxyTable 入参：与区间表同一份扫描）
 import meshlet_geometry;     // MeshletGeometryStore（★1-a0 簇产物 4 段的 GPU 侧持有者）
 import gltf_loader;         // GltfModel
 import texture_pool;        // ModelTextureIds
@@ -516,6 +517,27 @@ export void wireClusterRangeTable(entt::registry& registry, const UploadedAssets
 								  const MeshletAssetStore& meshlets, bool meshletAssets, bool meshletCull,
 								  MeshletCullService* cullService, const AssetTable& assetTable,
 								  const RuntimeConfig& cfg, const DeviceContext& device);
+
+/**
+ * N10 P2：阴影代理**钉段表**装配（门 `runtime.lua meshlet.shadow_proxy`，🔴 默认关）。定义在
+ * main:shadow_proxy（拆出理由 = 500 代码行红线，见该文件头）。
+ *
+ * 门开 = 把簇产物 v2 尾部的 MustL0 段读成 per-objectSlot 的 `ShadowProxyTable`（建表本体 =
+ * `shadow_proxy_types` 的纯函数，五条产物 invariant 任一不过 = **不 emplace** 并 error 出声）
+ * + emplace 进 registry ctx + INFO 读数（条目数 / Σ 被钉簇数 / texel 门在 8 档 × 4 级联下的
+ * 活跃条目数表）。门关 = 调用方（`wireClusterRangeTable` 第六步）**根本不调** = 连表都不建。
+ *
+ * 🔴 **本批零消费者**：表放进 ctx 后没有任何 draw 由它发出（接消费点 = P3）⟹ 门开态截图必须
+ * 与出厂态逐位相同，那张截图就是「P2 真的没接画面」的自证。
+ *
+ * @param registry 已注册实体的 registry（读 MeshRef / Transform / NextObjectSlot / Camera /
+ *        RenderExtent，写 ctx）
+ * @param scans **区间表那一步已经扫好的**逐产物扫描（🔴 不在此重扫：invariant 1 的对照面必须
+ *        就是 `ClusterRangeTable` 实际吃的那份，两处各扫一遍 = 第二个真相源）
+ */
+export void wireShadowProxyTable(entt::registry& registry, const UploadedAssets& assets,
+								  const MeshletAssetStore& meshlets,
+								  const std::map<std::string, MeshletRangeScan>& scans);
 
 /**
  * 设备发射规格核对的结果（★1-a2-i；★18-B2 抬出 = switch 与阴影 LOD 两条装配路径共用，

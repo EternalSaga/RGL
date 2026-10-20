@@ -139,8 +139,11 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	return volumes;
 }
 
+}  // namespace
+
 /**
- * 级联包围球（自 renderListSystem 抽出 = stylecheck 函数行数预算，纯搬移零行为变化）。
+ * 定义（接口声明与「为什么抬成接缝」→ render_list.cppm）。级联包围球（自 renderListSystem
+ * 抽出 = stylecheck 函数行数预算，纯搬移零行为变化）。
  * 级 0 的近平面用**固定小值**而非量化 near：自适应 near（下限实测 0.05）量化后可能
  * 抬高到 0.125，视深落在 [0.05, 0.125) 的近处片元（选级 = c0）会掉出子视锥 → 出块
  * 全亮旁路 → 脚下没影子。固定 0.02 恒低于任何自适应值，且姿态无关（不引入游动）。
@@ -161,8 +164,6 @@ std::array<Bounds, kActiveShadowCascades> computeCascadeSpheres(const ViewProjec
 	}
 	return spheres;
 }
-
-}  // namespace
 
 /**
  * 定义（接口声明与契约见 render_list.cppm）——簇路径单条 draw 的 task 数（★1-a1ii-β-1 抬出 =

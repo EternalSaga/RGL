@@ -252,6 +252,8 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_ranges_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_lod.cppm"        # §18 批 A：逐 prim 选级扫描（远级联 LOD 第一刀的纯函数层 + 五条不变量；纯 CPU 无设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_lod_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shadow_proxy_types.cppm"  # N10 P2：阴影代理钉段表（读 v2 MustL0 段 → per-objectSlot 条目 + 五条不变量 + texel 门纯函数；纯 CPU 无设备）
+    "${CMAKE_CURRENT_SOURCE_DIR}/shadow_proxy_types_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_hand.cppm"       # ★0.5-c：UV 手性 CPU 参考实现 + 簇→三角寻址遍历（★1-a1ii mesh shader 的对账伙伴；纯 CPU 无设备）
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_hand_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mdi_rows.cppm"           # ★M-0（§19.3）：真 MDI 阴影段行表构建器（24B 行 + 聚合锚；纯 CPU 无设备，零消费者）
@@ -409,6 +411,7 @@ set(RGL_APP_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/main_wiring.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/main_meshlets.cppm"   # ★1-a1i：簇区间表装配（★1-a1 挂号 ①：装配接线不再塞 main_scene）
     "${CMAKE_CURRENT_SOURCE_DIR}/main_meshlet_tables.cppm"  # ★18-B2：簇轴「建表半区」分区（区间表 + 阴影 LOD 表），自 main_meshlets 拆出（500 行红线）
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_shadow_proxy.cppm"    # N10 P2：阴影代理钉段表装配分区（读 MustL0 段 + texel 门读数表），自 main:meshlet_tables 拆出（同款 500 行红线）
 )
 
 # ── 归属完整性闸门（configure 期，违反即 FATAL_ERROR）────────────────────

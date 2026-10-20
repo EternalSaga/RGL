@@ -29,10 +29,9 @@ import rlstd;
  *
  * ## 布局口径（= format.h 的读取侧重述，改动必须同步两侧与 formatVersion）
  * `[FileHeader 192B][PrimTable][VertexPool][Clusters][Tris][Remap][Groups][Nodes]`，
- * v2 起尾部还可有一段 `[MustL0]`（**本模块不读**，口径见上面版本范围那条；校验只保证它存在时
- * 不骗过「末段段尾 ≤ 文件长」）。小端、段起始 16B 对齐、段间 0x00 填充；顶点池 48B/顶点 =
- * ModelVertex 契约（`rgl/shaders/model_schema.lua` 单一真相源，本模块**不解释顶点字段**，
- * 只给字节视图）。
+ * v2 起尾部还可有一段 `[MustL0]`（**可选**：v1 产物与「门槛关着打包」的 v2 产物都没有它）。
+ * 小端、段起始 16B 对齐、段间 0x00 填充；顶点池 48B/顶点 = ModelVertex 契约
+ * （`rgl/shaders/model_schema.lua` 单一真相源，本模块**不解释顶点字段**，只给字节视图）。
  * **段字节数从 header 段表推导**（相邻偏移差 + 文件尾），本模块不硬编码任何绝对偏移；
  * 定长段的 `count × stride` 只用于**验证段表自洽**（段表容得下、不重叠、落在文件内）。
  * `count × stride` 本身在 uint64 下恒不溢出（count 是 uint32、stride ≤ 48，积 < 2^38），
@@ -44,7 +43,10 @@ import rlstd;
  * 字节 == Σ vertCount×4，容差 = 段间对齐填充 < 16B，见 `kMeshletSectionAlign`）/ 逐簇 8bit
  * 契约与 tri/remap 范围 / `clusterCount == Σ group.clusterCount` 且逐 group 簇区间有界 /
  * `refined` 指向更浅 group（结构不变量，与工具 `--verify ④` 同口径）/ `remap` 下标全部
- * `< vertexCount`。
+ * `< vertexCount` / **MustL0 段**（v2）：`mustL0Count == 0` = 空视图不校验（v1 兼容），非 0 时
+ * 要求 `formatVersion ≥ 2` + 元素对齐 + 偏移加法不绕回 + 整段落在文件内 + 不与 Nodes 重叠。
+ * ⚠ MustL0 的**语义**（前缀性、prim 严格升序、与区间表对照）不在本清单——那是
+ * `shadow_proxy_types` 的四条 invariant，本模块只保证「按 12B 一条切字节不会越界读」。
  */
 
 namespace RGL {
@@ -54,11 +56,13 @@ export inline constexpr char kMeshletMagic[8] = {'R', 'G', 'L', 'C', 'L', 'O', '
 
 /** 引擎可读的 `formatVersion` 兼容范围（产物布局版本；布局改动写侧必须抬版本，本模块按此拒读）。
  *
- *  🔴 **v2 = v1 + 尾部一段可选的 MustL0**（shadow proxy N10 P1，写侧 `format.h` 版本史）：
- *  本模块**不读**那段（P2 才读），抬 Max 到 2 的全部理由是「不认识 ≠ 拒读」——v2 相对 v1 只多了
- *  一张还没人消费的表，前 144B 字段序与七段布局逐位未动，照旧画得出来。反过来，若这里停在 1，
- *  出厂默认态（`meshlet.assets=true`）会**整资产拒读** ⟹ 阴影段回落旧路径 ⟹ 截图变、红线 A 与
- *  出厂锚一起飞。尾部多出来的字节由「末段（Nodes）段尾 ≤ 文件长」这条天然放过，不额外放宽判据。
+ *  🔴 **v2 = v1 + 尾部一段可选的 MustL0**（写侧 = shadow proxy N10 P1，读本批 = P2）：本模块给
+ *  它的**视图与段边界校验**（`MeshletAsset::mustL0`），语义判据（前缀性 / prim 严格升序 /
+ *  与区间表对照）住 `shadow_proxy_types`——那里才有 `MeshletRangeScan` 这个对照面。
+ *  抬 Max 到 2 的全部理由是「不认识 ≠ 拒读」——v2 相对 v1 只多了一段，前 144B 字段序与七段
+ *  布局逐位未动，照旧画得出来。反过来，若这里停在 1，出厂默认态（`meshlet.assets=true`）会
+ *  **整资产拒读** ⟹ 阴影段回落旧路径 ⟹ 截图变、红线 A 与出厂锚一起飞。尾部多出来的字节由
+ *  「末段（Nodes）段尾 ≤ 文件长」这条天然放过，不额外放宽判据。
  *  ⚠ 这条兼容是**单向**的：v1 读取器读到 v2 不会崩，但别指望它画得对（v2 的 L0 段内簇序变了）；
  *  布局一变就抬版本、抬版本就写清"旧读取器会怎样"，是 `format.h` 版本史那一节的职责。 */
 export inline constexpr uint32_t kMeshletFormatVersionMin = 1;
@@ -118,8 +122,9 @@ export struct MeshletDiskHeader {
 	uint64_t totalTriangleCount;
 	/** 七段起始偏移（相对文件头；单调 + 不重叠 + 落在文件内由本模块校验）。 */
 	uint64_t offPrimTable, offVertexPool, offClusters, offTris, offRemap, offGroups, offNodes;
-	/** v2：MustL0 段起始偏移与条数。**本模块不读那段**（口径见上面版本范围那条注释），
-	 *  镜像它只为「两侧字段序逐位相同」这条镜像契约本身——不解释、不校验、不给视图。 */
+	/** v2：MustL0 段起始偏移与条数。段本身**本模块给视图但不解释语义**（语义 = 写侧
+	 *  `format.h::DiskMustL0` 注释 + 消费方 `shadow_proxy_types`）；镜像这两枚字段是为了
+	 *  「两侧字段序逐位相同」这条镜像契约，校验见 impl 的 `checkMustL0Section`。 */
 	uint64_t offMustL0;
 	uint32_t mustL0Count;
 	/** 头部扩位（写侧凑满 192B 用；读取侧不解释）。 */
@@ -188,6 +193,27 @@ export struct MeshletDiskNode {
 static_assert(sizeof(MeshletDiskNode) == 32);
 
 /**
+ * must_L0 的簇区间条目（= `format.h::DiskMustL0` 镜像，**v2 尾部可选段**）。
+ *
+ * 语义（一条 = 一个 prim）：该 prim 的 `depth==0` 段里最前面 `clusterCount` 个簇所属的 group
+ * 全部「必须 L0」（打包期判出的资产固有属性，判据本体 = `tools/meshlet_pack/components.h`）。
+ * 本模块**只给视图 + 校验段边界**，不判语义、不查前缀性 —— 那些住在 `shadow_proxy_types`
+ * （它才有 `MeshletRangeScan` 这个对照面）。
+ *
+ * 期望字节数的独立出处 = 字段算式（3 × uint32 = 12），不是抄写侧的 `static_assert`；写侧漂了
+ * 会由「段字节 == mustL0Count × 12」与真产物端到端冒烟一起红，而不是静默错位。
+ */
+export struct MeshletDiskMustL0 {
+	/** 归属 primitive（每 prim 至多一条，段内按 prim 严格升序 —— 由消费方 invariant ③ 钉）。 */
+	uint32_t prim;
+	/** 被钉簇区间起点（= 该 prim `depth==0` 段起点，前缀性由消费方 invariant ① 钉）。 */
+	uint32_t clusterOffset;
+	/** 被钉簇数（≥1）。 */
+	uint32_t clusterCount;
+};
+static_assert(sizeof(MeshletDiskMustL0) == 12, "3 × uint32 = 12B（对齐写侧 format.h::DiskMustL0）");
+
+/**
  * 一份经校验的簇产物（只读视图 + 文件镜像）。
  *
  * 所有 span 指向内部文件镜像 `image`（段偏移的对齐由校验保证，reinterpret_cast 合法）。
@@ -220,6 +246,12 @@ export struct MeshletAsset {
 	std::span<const MeshletDiskGroup> groups;
 	/** 空间层级节点森林（`header.nodeCount` 条）。 */
 	std::span<const MeshletDiskNode> nodes;
+	/**
+	 * must_L0 簇区间表（`header.mustL0Count` 条，**v2 尾部可选段**）。
+	 * 🔴 **空视图是合法常态，不是错误**：v1 产物（该字段位在 reserved 里 = 0）与「门槛关着打包」
+	 * 的 v2 产物都给空表 ⟹ 消费方（`shadow_proxy_types`）建出空 proxy 表，一条 draw 都不钉。
+	 */
+	std::span<const MeshletDiskMustL0> mustL0;
 	/** header.sourceSha1 的小写 hex（40 字符）——**日志身份，不做校验**（→ 文件头裁决 1）。 */
 	std::string sourceSha1Hex;
 

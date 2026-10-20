@@ -152,6 +152,22 @@ export void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar
 	std::span<const ShadowVolume> volumes, bool shadowPassEnabled, int forceCascade);
 
 /**
+ * 级联包围球（4 级，与写进 scene data 的 texel 尺寸同一套几何）。定义在 render_list_impl
+ * （partition impl unit，实现侧不写 export）。
+ *
+ * 导出为**接缝**（N10 P2）：启动期的「texel 门在 8 档 × 4 级联下的活跃条目数」读数表
+ * （`main:meshlet_tables` 的 shadow proxy INFO）必须与运行期吃**同一套**级联几何，否则那张表
+ * 读的是另一个世界的数——`quantizeShadowDistance` / `cascadeSplitDistance` /
+ * `frustumBoundingSphere` 三段组合各写一遍就是三个可漂点（抬出先例 = `meshletTaskCount`，
+ * 因同款理由导出）。🔴 运行期唯一消费者仍是 `renderListSystem`，本批零行为变化。
+ * @param viewProj 相机（**只用 proj 里的 fov/aspect**：视锥 8 角共球、半径与相机姿态无关，
+ *        见 `frustumBoundingSphere` 闭式解那条注释 ⟹ 启动期可以喂规范机位）
+ * @param shadowNear/shadowFar **量化后**的切分深度界（与 `fillShadowData` 同源）
+ */
+export std::array<Bounds, kActiveShadowCascades> computeCascadeSpheres(
+	const ViewProjection& viewProj, float shadowNear, float shadowFar);
+
+/**
  * 阴影投影体候选（★18-B2 抬为可测接缝的契约类型；实体遍历内先攒，循环结束后才定光空间体）。
  *
  * 为何要两段：光空间盒的 Z 下界依赖**全部投影体**的 AABB，而剔除要用这个盒——顺序上必须

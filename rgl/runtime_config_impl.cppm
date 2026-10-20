@@ -51,6 +51,7 @@ constexpr std::string_view kRuntimeKeys[]{
 	"meshlet.shadow_lod",
 	"meshlet.shadow_lod_fallback",
 	"meshlet.mdi_shadow",
+	"meshlet.shadow_proxy",
 	"meshlet.coplanar",
 	"show_after",
 	"present_mode",
@@ -668,6 +669,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 	trace.read.emplace_back("meshlet.shadow_lod");
 	trace.read.emplace_back("meshlet.shadow_lod_fallback");
 	trace.read.emplace_back("meshlet.mdi_shadow");
+	trace.read.emplace_back("meshlet.shadow_proxy");
 	trace.read.emplace_back("meshlet.coplanar");
 	sol::table meshlet = root["meshlet"];
 	if (!meshlet.valid() || !meshlet.is<sol::table>())
@@ -693,6 +695,9 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 		return err;
 	// ★M-0（§19.2 D2）真 MDI 阴影段档（本批零消费者 = 读到也不改变任何一帧行为）
 	if (auto err = readStrictBoolKey(meshlet, "mdi_shadow", cfg.meshletMdiShadow, path))
+		return err;
+	// N10 P2 阴影代理钉段表档（🔴 P2 本批零消费者：建表 + 打日志，接消费点 = P3）
+	if (auto err = readStrictBoolKey(meshlet, "shadow_proxy", cfg.meshletShadowProxy, path))
 		return err;
 	return applyMeshletCoplanarKey(meshlet, cfg, path);
 }

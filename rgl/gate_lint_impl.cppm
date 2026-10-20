@@ -136,6 +136,16 @@ constexpr std::string_view kMsgMeshletMdiShadow{
 	"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）"};
 
 /**
+ * shadow_proxy（N10 P2 钉段表）的宿主 = assets（MustL0 段住在簇产物 v2 尾部），消息里必须
+ * 与「本批零消费者」分开写清 —— 后者**不是**孤立组合（门开且 assets 开时它照样建表打日志），
+ * 混进本条会让「P2 只建表不接画面」这条被读成「这键没生效」。
+ */
+constexpr std::string_view kMsgMeshletShadowProxy{
+	"shadow_proxy 读的是簇产物 v2 尾部的 MustL0 段（宿主 = meshlet.assets）⟹ 本组合下产物根本没加载，"
+	"钉段表必然建不出来。⚠ 另注：P2 本批**零消费者**（只建表 + 打 INFO 读数，接消费点 = P3），"
+	"所以宿主成立时它也不改变任何一帧画面 —— 那是本批的交付形态，不是孤立组合"};
+
+/**
  * 独立申报行（按来源分三段：diagnostics / shadow / runtime.lua **meshlet 块**）。
  * 🔴 行数与门数不在本注释抄写（抄一次漂一次）——覆盖率护栏 = `tests/test_gate_lint.cppm`，
  * 它钉「本表行 ∪ 块条目 == 三方来源键表」+ 逐表计数，本表动而护栏不红 = 判据失效。
@@ -392,6 +402,8 @@ const BlockKey kMeshletKeys[]{
 		"assets）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。"
 		"门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留"},
 	{"meshlet.mdi_shadow", [](const Ctx& c) { return c.runtime.meshletMdiShadow; }, kMsgMeshletMdiShadow},
+	{"meshlet.shadow_proxy", [](const Ctx& c) { return c.runtime.meshletShadowProxy; },
+		kMsgMeshletShadowProxy},
 };
 
 // ⚠ 同 kGateRules：原生数组——显式 N 写错会零填充出**空 keys**（块静默少键）。

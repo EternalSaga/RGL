@@ -7,7 +7,7 @@ module;
 // 同一个 MeshRef 落表循环**建出（LOD start 是相对区间表 base 的偏移，一致性是构造出来的，
 // 不是两处各算再对账），而 main_meshlets.cppm 已在 500 行代码红线。职责边界：
 //   本单元 = ★1-a1i 簇区间表（ClusterRangeTable）+ ★18-B2 阴影 LOD 选级表（MeshletShadowLodTable）
-//            + 设备发射规格核对（两条簇路径共用的闸门）；
+//            + N10 P2 阴影代理钉段表（ShadowProxyTable）+ 设备发射规格核对（两条簇路径共用的闸门）；
 //   main:meshlets = 簇 buffer 描述符 / 管线条目烘焙 / switch 原位取代 / cull 生效。
 module main:meshlet_tables;
 
@@ -456,10 +456,11 @@ bool warnIfMeshletDeviceUnfit(const DeviceContext& device) {
 }
 
 /**
- * 接口声明与完整口径 → main.cppm `wireClusterRangeTable`。本定义做五步：
+ * 接口声明与完整口径 → main.cppm `wireClusterRangeTable`。本定义做六步：
  * 门早退 → 逐模型扫描（scanModelRanges）→ ★18-B2 阴影 LOD 前置（设备规格闸门 + 同一份扫描
  * 逐模型选级）→ 按 `MeshRef{asset → objectSlot}` **同一个循环**落两张表
- * （`ClusterRangeTable` + 局部的 `MeshletShadowLodTable`）→ ★1-a2-i 剔除项表 → LOD 对账生效。
+ * （`ClusterRangeTable` + 局部的 `MeshletShadowLodTable`）→ ★1-a2-i 剔除项表 → LOD 对账生效
+ * → N10 P2 阴影代理钉段表（独立档，共用同一份 scans）。
  *
  * 落表按 **mesh 资产 id** 反查（不是「注册序 + prim 序」）：同文件多实例各占一个 objectSlot、
  * 共享同一份区间，资产 id 反查天然实例无关，也不依赖 registerScene 的分配序。
@@ -545,6 +546,12 @@ void wireClusterRangeTable(entt::registry& registry, const UploadedAssets& asset
 	if (lodAlive)
 		activateShadowLodTable(registry, std::move(lodTable), lodScans, lodFill, assetTable, cfg,
 			device);
+	// N10 P2 步骤⑥：阴影代理钉段表（独立档 `meshlet.shadow_proxy`，🔴 本批零消费者）。
+	// 门关 = 连表都不建；门开也只建表 + 打日志（接消费点 = P3）⟹ 门开态截图 == 出厂态，
+	// 那张截图就是「P2 真的没接画面」的自证。与 LOD 表共用**同一份** scans（不重扫 = 不造
+	// 第二个真相源；invariant 1 的对照面必须就是区间表实际吃的那份）。
+	if (cfg.meshletShadowProxy)
+		wireShadowProxyTable(registry, assets, meshlets, scans);
 }
 
 }  // namespace RGL
