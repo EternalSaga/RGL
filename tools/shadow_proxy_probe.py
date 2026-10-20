@@ -112,7 +112,11 @@ THRESHOLDS = (1, 4, 16, 64, 256, 1024, 4096)
 # 🔴 为什么还要再来一张尺寸表：三角数是**复杂度**，而阴影可见性的判据是**长度**（分量投影占不占得
 # 下本级纹素）。两者会分家：一片 30 三角的大遮阳篷在阴影图里比一块 3,000 三角的浮雕墙更该保。
 # 所以 P1 的判据必须长在尺寸上，本表就是给那条判据定档用的。
-SIZE_BINS = (0.03, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)
+# 🔴 门槛用**世界米**定义、内部除以 `--glb-scale` 换成源单位。首版直接把源单位当分档，
+# 于是 bistro（scale=0.01）的"1.00m"档实际是源单位 100 = 1m 侥幸对上了，而换一个 scale
+# 不同的资产，同一张表的门槛含义就整体平移——分档本身变成资产相关的隐式参数。
+# 分档范围按 bistro 实测的消失分量尺寸分布定（对角线 204~1624 源单位 = 2~16m）。
+SIZE_BINS_M = (0.1, 0.3, 1.0, 3.0, 10.0, 30.0)
 
 
 def die(msg: str) -> None:
@@ -280,6 +284,26 @@ def weld(prod: Product, p: int, on: bool = True) -> tuple[array, int]:
     return lid, len(uniq), pos
 
 
+def _fill(avail: dict, levels_present: list) -> list:
+    """分量 → 逐级三角数数组，**按 prim 的实际级集合**索引（预计算，数 1c 要查 8×14.6 万次）。
+
+    🔴 两件事必须分开，首版混一起做错过一次（症状：数 1c 对门槛八档全等）：
+    ① **回落是 prim 级的事实**——prim 没有级 L 的 group 时，选级 L 回落到 ≤L 的最深存在级
+      （`MeshletLodFallback::deepest`），所以"沿用上一个值"只在 `lv not in levels_present` 时对；
+    ② 而"分量 c 在 prim 级 L 的表示里出现 **0 次**"就是 **0**，绝不能沿用上一个级。
+    首版按 `max(avail)` 填、缺失一律沿用 ⟹ 所有早死的分量在 `want=D` 时都被算成还活着，
+    于是"不受保护 = 随大流取 D"这一半恒等于"受保护"，门槛自然不动。
+    """
+    if not levels_present:
+        return [0]
+    out, cur = [], 0
+    for lv in range(max(levels_present) + 1):
+        if lv in levels_present:
+            cur = avail.get(lv, 0)
+        out.append(cur)
+    return out
+
+
 def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     """一个 prim 的全部分量 + 逐分量逐级覆盖 + maxSafeLevel。一趟解码，两遍使用。"""
     base, vcnt = prod.prim_table[p][0], prod.prim_table[p][1]
@@ -349,6 +373,9 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     # ---- 第二遍：逐级覆盖，找每个分量的死亡级 ----
     alive_level = {c: INF for c in comp_l0}            # 未死亡 = INF（哨兵，见上面 INF 的注释）
     level_tris: dict[int, int] = {}
+    # 🔴 顺手存下**逐分量逐级**的覆盖量（首版只留了死亡级，于是"分量级理想形态能省多少"这个
+    # 数算不出来——而它恰恰是"要不要动打包工具"的唯一判据，见 main 的数 1c）。
+    comp_level: dict[int, dict[int, int]] = {c: {} for c in comp_l0}
     for lv in sorted(per_level):
         seen: Counter = Counter()
         for c in per_level[lv]:
@@ -356,6 +383,9 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
             for i in range(0, len(g), 3):
                 seen[ds.find(logical(g[i]))] += 1
         level_tris[lv] = sum(seen.values())
+        for c, n in seen.items():
+            if c in comp_level:
+                comp_level[c][lv] = n
         for comp, n in comp_l0.items():
             if alive_level[comp] == INF and seen.get(comp, 0) == 0:
                 alive_level[comp] = lv
@@ -370,6 +400,14 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
             # (分量三角数, 该分量的死亡级, 分量包围对角线) ——门槛扫描要用这个**对应关系**，
             # 只留排序后的尺寸列表会把"谁在哪级死"丢掉（本探针首跑即如此，门槛扫描做不了）。
             "comps_detail": [(n, alive_level[c], diag(c)) for c, n in comp_l0.items()],
+            "comp_level": {c: comp_level[c] for c in comp_l0},
+            # 分量 → 逐级三角数**数组**，已按引擎的 `deepest` 回落策略填平（级不存在时沿用上一个
+            # 存在级的值）。数 1c 要按 8 个门槛 × 14.6 万分量查，不预填平就是分钟级而不是秒级。
+            "comp_at": {c: _fill(comp_level[c], sorted(per_level)) for c in comp_l0},
+            # 分量 id → (L0 三角数, 死亡级, 包围对角线)。数 1c 要按**分量**取自己的级，
+            # 而 comps_detail 是丢 id 的列表，所以这里保留 id 索引的那一份。
+            "comps_info": {c: (n, alive_level[c], diag(c)) for c, n in comp_l0.items()},
+            "levels_present": sorted(per_level),
             "comp_sizes": sorted(comp_l0.values(), reverse=True)}
 
 
@@ -530,8 +568,8 @@ def main() -> int:
         return r["level_tris"].get(lv, 0)
 
     def safe_level(r: dict, threshold: int) -> int:
-        """门槛 threshold 下该 prim 的 maxSafeLevel（无受保护分量 = 不受限）。"""
-        cand = [lv for n, lv, _d in r["comps_detail"] if n >= threshold]
+        """门槛 threshold（**三角数**）下该 prim 能选的**最深一级**；无受保护分量 = 不受限。"""
+        cand = [max(lv - 1, 0) for n, lv, _d in r["comps_detail"] if n >= threshold and lv < INF]
         return min(cand) if cand else INF
 
     print(f"\n== 数 1：prim 级保守的代价（uniform 整级语义下）==")
@@ -560,16 +598,23 @@ def main() -> int:
         row += f"{dragged:>14}"
         print(row)
     # ---- 数 1b：门槛换成空间尺寸（P1 的判据该长在这上面）----
+    dmins = [m / args.glb_scale for m in SIZE_BINS_M]
     def safe_level_size(r: dict, dmin: float) -> int:
-        cand = [lv for _n, lv, d in r["comps_detail"] if d >= dmin]
+        """门槛 dmin（**对角线**）下该 prim 能选的最深一级。
+
+        🔴 **`lv - 1` 不是笔误，是首跑漏掉的一个 off-by-one**：`alive_level[c] = L` 的含义是
+        "级 L 的表示里 c 的三角已经归零"，所以保住 c 要求选级 **≤ L-1**。首版直接取 L ⟹ 保守
+        选到 c 已经死了的那一级，代价被**系统性低估**（bistro D=5 首跑报 1.46×）。
+        """
+        cand = [max(lv - 1, 0) for _n, lv, d in r["comps_detail"] if d >= dmin and lv < INF]
         return min(cand) if cand else INF
 
     print(f"\n== 数 1b：门槛换成**空间尺寸**（对角线，源 glb 单位；世界米按 --glb-scale "
-          f"{args.glb_scale} 换算）==")
+          f"{args.glb_scale} 换算；分档按世界米定义，见 SIZE_BINS_M 注释）==")
     print(f"  {'对角线≥':>9} {'世界米':>8} {'消失分量':>9} {'涉及prim':>8} {'条目数':>9} │"
           f"{'D=5 代价':>10}{'D=7 代价':>10}{'D=11 代价':>10}")
     size_rows = []
-    for dmin in SIZE_BINS:
+    for dmin in dmins:
         dying = sum(1 for r in res for _n, lv, d in r["comps_detail"] if d >= dmin and lv <= 5)
         prims_hit = sum(1 for r in res
                         if any(d >= dmin and lv <= 5 for _n, lv, d in r["comps_detail"]))
@@ -585,6 +630,43 @@ def main() -> int:
             rec[f"ratio_D{D}"] = cons / max(now, 1)
         size_rows.append(rec)
         print(row)
+
+    # ---- 数 1c：分量级理想形态——"要不要动打包工具"的唯一判据 ----
+    def comp_tris_at(r: dict, comp: int, lv: int) -> int:
+        """分量 comp 在级 lv 的三角数（回落已在 `comp_at` 里预填平成 deepest 策略）。"""
+        arr = r["comp_at"][comp]
+        return arr[lv] if lv < len(arr) else arr[-1]
+
+    def comp_level_total(r: dict, D: int, dmin: float) -> int:
+        """分量级理想形态下该 prim 在选级上限 D 时的三角数。
+
+        每个分量**各取自己的级**：受保护（对角线 ≥ dmin）的分量取 `min(D, 死亡级-1)`，
+        不受保护的直接取 D（即"随大流"，它在 D 已死也不管——这如实反映"我们不保护它"）。
+        """
+        total = 0
+        for c, avail in r["comp_level"].items():
+            _n, death, d = r["comps_info"][c]
+            want = D if (d < dmin or death >= INF) else min(D, max(death - 1, 0))
+            total += comp_tris_at(r, c, want)
+        return total
+
+    print(f"\n== 数 1c：**分量级理想形态**（每个分量各取自己的级）vs prim 级 vs 现状 ==")
+    print(f"  这是「同分量的簇必须在产物里连续」那条离线重排能拿到的**收益上限**——")
+    print(f"  上限都不划算，就不该动 `meshlet_pack`。门槛同样按对角线（世界米）。")
+    print(f"  {'门槛':>7} {'现状 D=5':>12} {'prim级 D=5':>12} {'分量级 D=5':>12}"
+          f"{'分量级/现状':>11} {'分量级 D=7':>12} {'D=3 全量':>12}")
+    comp_rows = []
+    for dmin in dmins:
+        now5 = sum(tris_at(r, 5) for r in res)
+        prim5 = sum(tris_at(r, min(5, safe_level_size(r, dmin))) for r in res)
+        cf5 = sum(comp_level_total(r, 5, dmin) for r in res)
+        cf7 = sum(comp_level_total(r, 7, dmin) for r in res)
+        d3 = sum(tris_at(r, 3) for r in res)
+        comp_rows.append({"diag_min": dmin, "now_D5": now5, "prim_D5": prim5,
+                          "comp_D5": cf5, "comp_D7": cf7, "D3": d3,
+                          "comp_vs_now": cf5 / max(now5, 1)})
+        print(f"  {dmin * args.glb_scale:>6.2f}m {now5:>12,} {prim5:>12,} {cf5:>12,}"
+              f"{cf5 / max(now5, 1):>10.2f}× {cf7:>12,} {d3:>12,}")
 
     # ---- 门槛的"看内容"对账：拒绝让门槛只由代价曲线决定 ----
     if args.list_affected > 0:
@@ -656,6 +738,7 @@ def main() -> int:
                            {str(k): v for k, v in sorted(safe_hist.items())},
                        "entries_by_threshold": {str(k): v for k, v in entries_by_T.items()},
                        "size_curve": size_rows,
+                       "component_level_curve": comp_rows,
                        "cost_rows": cost_rows,
                        "unions": unions, "seconds_analyze": t_an}, f, indent=2)
         print(f"\n读数已写 {args.json}")
