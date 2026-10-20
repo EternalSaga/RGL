@@ -312,7 +312,10 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     # 该 prim 的簇按级分组（L0 = refined == -1，与 group.depth==0 口径的一致性在 main 里对账）
     groups = [g for g in prod.by_prim[p]]
     per_level: dict[int, list[tuple]] = defaultdict(list)
+    l0_spans: list[tuple] = []          # (clusterOffset, clusterCount) —— L0 段的 group 区间
     for _depth, _prim, off, cnt in groups:
+        if _depth == 0:
+            l0_spans.append((off, cnt))
         for k, c in enumerate(prod.clusters(off, off + cnt)):
             per_level[_depth].append((off + k, c))
     l0 = [c for _gi, c in per_level[0]] if 0 in per_level else []
@@ -367,6 +370,27 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     for c, ps in comp_cluster_pos.items():
         ps.sort()
         runs_of_comp[c] = 1 + sum(1 for a, b in zip(ps, ps[1:]) if b != a + 1)
+
+    # ---- 数 6 用：L0 段的 **group 结构**（排序粒度到底能多细）----
+    # 🔴 `DiskGroup.clusterOffset/clusterCount` 要求一个 group 的簇**连续**，所以"prim 内 L0 段
+    # 二分排序"实际能重排的是 **group 之间的顺序**，不是簇之间。于是排序粒度 = group，
+    # 而它够不够细只能实测：一个 L0 group 跨几个分量？
+    l0_groups_pure: Counter = Counter()
+    l0_group_cluster_hist: Counter = Counter()
+    l0_group_info: list[tuple] = []      # (簇数, L0 三角合计, 该 group 涉及的分量集合)
+    for off, cnt in l0_spans:
+        if not cnt:
+            continue
+        l0_group_cluster_hist[cnt] += 1
+        cs, tri = set(), 0
+        for gi in range(off, off + cnt):
+            cs |= comp_of_cluster.get(gi, set())
+            tri += sum(1 for _ in range(0, 0))
+        # 三角合计：该 group 区间内每簇的 triCount 之和
+        for k in range(cnt):
+            tri += prod.clusters(off + k, off + k + 1)[0][2]
+        l0_groups_pure[len(cs)] += 1
+        l0_group_info.append((cnt, tri, cs))
 
     # ---- 每分量包围盒对角线（源 glb 单位，未乘 scene.lua 的 scale）----
     # 门槛的正确形态是**空间尺寸**（"在阴影图里占不占得下一枚纹素"），不是三角数；这里两个都算，
@@ -434,7 +458,12 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
             "levels_present": sorted(per_level),
             "comp_sizes": sorted(comp_l0.values(), reverse=True),
             "purity": {lv: dict(cnt) for lv, cnt in purity.items()},
-            "runs": {c: (runs_of_comp.get(c, 1), alive_level[c], diag(c)) for c in comp_l0}}
+            "runs": {c: (runs_of_comp.get(c, 1), alive_level[c], diag(c)) for c in comp_l0},
+            "l0_groups": len(l0_group_info),
+            "l0_group_purity": dict(l0_groups_pure),
+            "l0_group_clusters": dict(l0_group_cluster_hist),
+            "l0_spans": l0_spans,
+            "l0_group_info": l0_group_info}
 
 
 def main() -> int:
@@ -728,6 +757,44 @@ def main() -> int:
           f"  ｜ >5 段 {sum(v for k, v in rh.items() if k > 5)}")
     print(f"    段数中位 = {sorted(rh.elements())[len(prot) // 2] if prot else 0}"
           f"，最大 = {max(rh) if rh else 0}")
+
+    # ---- 数 6：排序粒度 = group（不是簇、不是分量），它够不够细？----
+    print(f"\n== 数 6：**排序粒度**——`DiskGroup.clusterOffset/clusterCount` 要求一个 group 的簇"
+          f"连续 ⟹ 实际能重排的是 group 之间的顺序 ==")
+    g_hist = Counter()
+    g_pure = Counter()
+    g_per_prim = Counter()
+    for r in res:
+        g_per_prim[r["l0_groups"]] += 1
+        for k, v in r["l0_group_purity"].items():
+            g_pure[k] += v
+        for k, v in r["l0_group_clusters"].items():
+            g_hist[k] += v
+    tg = sum(g_pure.values())
+    print(f"  L0 group 总数 = {tg:,}；每 prim 的 L0 group 数：" +
+          "  ".join(f"{k}:{v}" for k, v in sorted(g_per_prim.items()) if k <= 4) +
+          f"  ｜ >4 的 prim {sum(v for k, v in g_per_prim.items() if k > 4)}")
+    print(f"  每 group 的簇数：p50={sorted(g_hist.elements())[sum(g_hist.values()) // 2]} "
+          f"p90={sorted(g_hist.elements())[int(sum(g_hist.values()) * .9)]} "
+          f"max={max(g_hist)}（共 {sum(g_hist.values()):,} group）")
+    print(f"  **一个 L0 group 跨几个分量**：" +
+          "  ".join(f"{k}分量:{g_pure[k]:,}({g_pure[k] / tg * 100:.1f}%)"
+                    for k in sorted(g_pure) if k <= 4) +
+          f"  ｜ ≥5 分量 {sum(v for k, v in g_pure.items() if k >= 5):,}"
+          f"（{sum(v for k, v in g_pure.items() if k >= 5) / tg * 100:.1f}%）")
+    print(f"  按 group 粒度做 must_L0（含必须 L0 分量的 group **整组**钉 L0）的代价：")
+    print(f"    {'门槛':>7} {'要钉的 group':>12} {'draws 增量':>11} {'额外 L0 三角':>13}"
+          f"{'相对现状 D=5':>13}")
+    for m in SIZE_BINS_M:
+        dm = m / args.glb_scale
+        must = [(r, gi) for r in res for gi in r["l0_group_info"]
+                if any(d >= dm and lv == 1 for c in gi[2]
+                       for _n, lv, d in [r["comps_info"][c]] for _ in (0,))]
+        n_g = len(must)
+        extra = sum(gi[1] for _r, gi in must)
+        now5 = sum(tris_at(r, 5) for r in res)
+        print(f"    {m:>6.2f}m {n_g:>12,} {n_g * prod.level_count:>11,} {extra:>13,}"
+              f"{extra / max(now5, 1):>12.2f}×")
 
     # ---- 门槛的"看内容"对账：拒绝让门槛只由代价曲线决定 ----
     if args.list_affected > 0:
