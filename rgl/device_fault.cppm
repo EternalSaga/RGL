@@ -53,6 +53,18 @@ export std::string_view describeDeviceFaultBackend(DeviceFaultBackend backend);
 export struct DeviceFaultSupport {
 	DeviceFaultBackend backend = DeviceFaultBackend::none;
 	bool reportMasked = false;
+	/**
+	 * `deviceFaultVendorBinary` 的两层事实，🔴 **必须分开存**（本机第一次实跑就是被混起来
+	 * 才把"驱动没 advertise"报成了"我们没启用"）：
+	 *  · `vendorBinaryAvailable` = 驱动 advertise 了该位（vulkaninfo 同源读数）；
+	 *  · `vendorBinary`          = 本 device **实际启用**了它。
+	 * 本引擎的策略是"支持即请求"（它只允许驱动多吐一份二进制 dump，不改任何提交语义），
+	 * 所以两者当前恒等；但"advertise 了却没启用"是**接线 bug**，只有分开存才点得出名。
+	 * spec：未启用该 feature 时 `vkGetDeviceFaultDebugInfoKHR` **必须**把 vendorBinarySize
+	 * 置 0 且不碰缓冲区 ⟹ 不启用就没数据。
+	 */
+	bool vendorBinaryAvailable = false;
+	bool vendorBinary = false;
 	uint32_t maxFaultCount = 0;
 	/** 通路是否可用（false = 两个调用点都直接返回，零 Vulkan 调用）。 */
 	[[nodiscard]] bool active() const { return backend != DeviceFaultBackend::none; }
@@ -81,9 +93,14 @@ export DeviceFaultBackend chooseDeviceFaultBackend(bool khrAvailable, bool extAv
  * @param khrEnabled KHR 扩展可用且 `deviceFault` 位为真
  * @param extEnabled EXT 回落路径可用（KHR 未命中时才生效）
  * @param maskedEnabled 已按门控决定要启用 masked 上报
+ * @param vendorBinaryKhr KHR 侧 `deviceFaultVendorBinary` 驱动支持（本模块自己按 backend 取用，
+ *        🔴 **不经门控**：它只是"允许驱动多吐一份二进制 dump"，不改变任何提交语义，
+ *        所以支持就请求——与 `maskedEnabled` 需要门控的理由相反，见 `deriveDeviceFaultSupport` 定义）
+ * @param vendorBinaryExt EXT 侧同上
  */
 export DeviceFaultSupport deriveDeviceFaultSupport(const vk::raii::PhysicalDevice& physicalDevice,
-	bool khrEnabled, bool extEnabled, bool maskedEnabled);
+	bool khrEnabled, bool extEnabled, bool maskedEnabled, bool vendorBinaryKhr,
+	bool vendorBinaryExt);
 
 /**
  * `addressType` 归一分类（翻译表的输入侧）。
@@ -176,9 +193,10 @@ export ExtFaultCapacity planExtFaultCapacity(uint32_t addressInfoCount, uint32_t
  * @param device 已 lost 的 device（EXT 路径要求 device 已 lost；KHR 路径任意时刻可调用）
  * @param support `DeviceContext::getDeviceFaultSupport()`
  * @param context 调用点定位串（例如 "VK_ERROR_DEVICE_LOST on submit"），进日志正文
+ * @param frameTag vendor dump 落盘文件名里的定位串（一般是帧号，如 "frame185"）；空 = `noframe`
  */
 export void reportDeviceFaultOnLost(const vk::raii::Device& device,
-	const DeviceFaultSupport& support, std::string_view context);
+	const DeviceFaultSupport& support, std::string_view context, std::string_view frameTag = {});
 
 /**
  * 轮询一次 masked fault（`diagnostics.fault_poll` 门内调用；timeout=0 = 不阻塞）。
@@ -192,5 +210,53 @@ export uint32_t pollDeviceFaults(const vk::raii::Device& device, const DeviceFau
 
 /** 退出时打一行轮询账（抓到过多少条、调用过多少次）；从未启用 = 不出声。 */
 export void reportDeviceFaultPollSummary();
+
+/**
+ * `vkGetDeviceFaultDebugInfoKHR` 两段式第一段的**下一步决策**（纯函数 = 可单测）。
+ *
+ * 🔴 三种负读数**互不相同**，各指一个不同的责任方，混任何一种都会把人送错方向
+ * （本机第一次实跑就把"驱动根本没 advertise"读成了"我们没启用"，据此加的第四态）：
+ *  · `unsupported` 驱动没 advertise 该 feature ⟹ 我们**无法**启用，与我们的代码无关；
+ *  · `featureOff`  驱动 advertise 了而我们没启用 ⟹ **我们的接线 bug**（本引擎按"支持即请求"，
+ *                  所以这一态按构造不可达；它出现就说明探测位没接进 feature 链）；
+ *  · `empty`       已启用而驱动报 0 字节 ⟹ 驱动的覆盖面（它支持但这次没给 dump）。
+ */
+export enum class VendorBinaryOutcome : uint8_t {
+	unsupported,  ///< 驱动没 advertise `deviceFaultVendorBinary`（本机 RADV 实测形态）
+	featureOff,   ///< 驱动支持而我们没启用 = 接线 bug（按构造不可达）
+	empty,        ///< 已启用而驱动报 0 字节
+	dump,         ///< size > 0，取回并落盘
+};
+
+/**
+ * 由"驱动是否 advertise + 我们是否启用 + 第一段报的 size"决定下一步。
+ * 🔴 判序：先 unsupported（责任在驱动）→ 再 featureOff（责任在我们）→ 再按 size 分。
+ */
+export VendorBinaryOutcome classifyVendorBinary(bool vendorBinaryAvailable,
+	bool vendorBinaryEnabled, uint64_t reportedSize);
+
+/** 结论 → 白话（INFO/ERROR 正文；三条负读数各自点名责任方与下一步）。 */
+export std::string describeVendorBinaryOutcome(VendorBinaryOutcome outcome, uint64_t reportedSize);
+
+/**
+ * 落盘文件名（`rgl-fault-<tag>.bin`）。
+ * `tag` = 帧号等定位串；空则退化成 `rgl-fault-noframe.bin`——🔴 不许退化成固定名，
+ * 那会让第二次崩溃**覆盖**第一次的现场（本模块存在的意义就是留住现场）。
+ */
+export std::string vendorBinaryFileName(std::string_view tag);
+
+/** 落盘目录（相对 CWD = `build/rgl/`，与截图同侧；不存在则创建）。 */
+export std::string_view vendorBinaryDumpDir();
+
+/**
+ * device lost 后取 vendor crash dump（`vkGetDeviceFaultDebugInfoKHR`）并落盘。
+ *
+ * 三条出口都出声（`featureOff` / `empty` 走 INFO，`dump` 走 INFO 带路径与字节数）。
+ * 由 `reportDeviceFaultOnLost` 内部调用，也可单独调。
+ * @param tag 落盘文件名里的定位串（一般是帧号）
+ * @return 实际写出的字节数（0 = 没落盘）
+ */
+export uint64_t dumpVendorBinaryOnLost(const vk::raii::Device& device,
+	const DeviceFaultSupport& support, std::string_view tag);
 
 }  // namespace RGL

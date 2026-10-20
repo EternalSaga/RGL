@@ -147,6 +147,23 @@ ARMS["fault-poll"] = (
     [("diagnostics.lua", "fault_poll", "true")],
 )
 
+# 债-140 第三击①：描述符堆槽内容对账的成本。两条一起用（差值才是审计的成本）：
+# `mdi-base` = 只开 MDI（审计的**对照**，因为审计只在行表载体存在时才有对象——出厂默认
+# mdi_shadow=false 时开审计是零调用，拿 default 当对照会量出 0 而那是"没跑"不是"便宜"）；
+# `heap-audit` = 同一配置再加审计。🔴 判据同 fault-poll：**别拿 frame_p50 量**（同臂 run-to-run
+# 带 ~1ms，而被测量是每帧一次 ≤64B memcmp），读 profiler 的 cpu:heapSlotAudit 列。
+# ⚠ 这两臂都开着 mdi_shadow = 债-140 会挂的配置，单轮失败属正常，取跑通的那些轮。
+ARMS["mdi-base"] = (
+    "meshlet.mdi_shadow=true（heap 槽审计的对照臂：审计要有行表载体才有对象，出厂默认下零调用）",
+    [("runtime.lua", "meshlet.mdi_shadow", "true")],
+)
+ARMS["heap-audit"] = (
+    "mdi_shadow + heap_slot_audit：每帧在 MDI upload 前把行表 heap 槽读回与构造期快照对账"
+    "（读的是 host 可见映射，不进命令流）。与 mdi-base 之差 = 这条审计的 CPU 成本",
+    [("runtime.lua", "meshlet.mdi_shadow", "true"),
+     ("diagnostics.lua", "heap_slot_audit", "true")],
+)
+
 # ─── N10 P3 shadow proxy 四臂（整条线的生死判据）────────────────────────────────
 # 判据 = **arm2 vs arm0 的阴影逐 pass GPU 合计**（`gpu:shadow1..4`，p50）；arm1/arm3 只做
 # 归因，不许拿差值凑净账（任务书红线）。口径三条写在这里而不是抄进文档：

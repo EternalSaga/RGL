@@ -139,7 +139,8 @@ export class DeviceContext {
 	   *  门控后的 masked 决定只写在这一处，见 deriveDeviceFaultSupport）。 */
 	  deviceFaultSupport(RGL::deriveDeviceFaultSupport(*physicalDevice, optionalFeatures.deviceFaultKhr,
 	      optionalFeatures.deviceFaultExt,
-	      faultPollWanted && optionalFeatures.deviceFaultReportMaskedKhr)),
+	      faultPollWanted && optionalFeatures.deviceFaultReportMaskedKhr,
+	      optionalFeatures.deviceFaultVendorBinaryKhr, optionalFeatures.deviceFaultVendorBinaryExt)),
 	  deviceFaultKhrFeature(initDeviceFaultKhrFeature(deviceFaultSupport)),
 	  deviceFaultExtFeature(initDeviceFaultExtFeature(deviceFaultSupport)),
 	  /** 校验前移：必须在 raii::Device 构造（device 成员）之前——feature/extension
@@ -156,10 +157,11 @@ export class DeviceContext {
 				dgcSupport.graphicsIndirect, dgcSupport.computeIndirect, dgcSupport.staticGraphicsIndirect);
 			// device fault 探测结果**恒打一行**（含 no-op 那两种）：诊断通路"没启用"这件事
 			// 必须在日志里看得见，否则"日志里没有 fault 段"会被读成"启用了但没抓到"。
-			logger->info("Device device_fault: backend={} reportMasked={} maxFaultCount={} ({})",
+			logger->info("Device device_fault: backend={} reportMasked={} vendorBinary={} maxFaultCount={} ({})",
 				deviceFaultSupport.backend == RGL::DeviceFaultBackend::none ? "none"
 				           : deviceFaultSupport.backend == RGL::DeviceFaultBackend::khr ? "khr" : "ext",
-				deviceFaultSupport.reportMasked, deviceFaultSupport.maxFaultCount,
+				deviceFaultSupport.reportMasked, deviceFaultSupport.vendorBinary,
+				deviceFaultSupport.maxFaultCount,
 				RGL::describeDeviceFaultBackend(deviceFaultSupport.backend));
 		}
 	}
@@ -341,16 +343,18 @@ export class DeviceContext {
 	/**
 	 * device fault 的 KHR feature 结构初始化（读**已派生好**的探测结论，不重算门控）。
 	 *
-	 * 三个不请求的位各有理由：`deviceFaultVendorBinary` 本机 RADV 实测 false（请求 TRUE =
-	 * 启用一个驱动不支持的位）；`deviceFaultDeviceLostOnMasked` 会把 masked fault **升级**成
-	 * device lost——那是"让故障更响"，而本批要的是"让故障可见"，升级会改变提交语义（红线）。
-	 * @param support deriveDeviceFaultSupport 的结果（backend / reportMasked 已含门控）
+	 * 两个不请求的位各有理由：`deviceFaultDeviceLostOnMasked` 会把 masked fault **升级**成
+	 * device lost——那是"让故障更响"，而本批要的是"让故障可见"，升级会改变提交语义（红线）；
+	 * `deviceFaultVendorBinary` 则是**按驱动支持请求**（support.vendorBinary 已从探测位算好，
+	 * 驱动没报支持就是 false）——它只允许驱动多吐一份二进制 crash dump，不改任何提交语义，
+	 * 所以不需要门控。不启用它，`vkGetDeviceFaultDebugInfoKHR` 按 spec 恒返 size 0。
+	 * @param support deriveDeviceFaultSupport 的结果（backend / reportMasked / vendorBinary）
 	 */
 	static vk::PhysicalDeviceFaultFeaturesKHR initDeviceFaultKhrFeature(const RGL::DeviceFaultSupport& support) {
 		vk::PhysicalDeviceFaultFeaturesKHR f{};
 		f.sType = vk::StructureType::ePhysicalDeviceFaultFeaturesKHR;
 		f.deviceFault = support.backend == RGL::DeviceFaultBackend::khr ? VK_TRUE : VK_FALSE;
-		f.deviceFaultVendorBinary = VK_FALSE;
+		f.deviceFaultVendorBinary = support.vendorBinary ? VK_TRUE : VK_FALSE;
 		f.deviceFaultReportMasked = support.reportMasked ? VK_TRUE : VK_FALSE;
 		f.deviceFaultDeviceLostOnMasked = VK_FALSE;
 		return f;
@@ -361,7 +365,7 @@ export class DeviceContext {
 		vk::PhysicalDeviceFaultFeaturesEXT f{};
 		f.sType = vk::StructureType::ePhysicalDeviceFaultFeaturesEXT;
 		f.deviceFault = support.backend == RGL::DeviceFaultBackend::ext ? VK_TRUE : VK_FALSE;
-		f.deviceFaultVendorBinary = VK_FALSE;
+		f.deviceFaultVendorBinary = support.vendorBinary ? VK_TRUE : VK_FALSE;
 		return f;
 	}
 

@@ -431,6 +431,14 @@ void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlo
 		throw std::runtime_error(fmt::format(
 			"mdi shadow: shadowCalls 内 drawCount>1 条目 {} ≠ mdiSegments {}（行表与 draw 分家）",
 			mdiCalls, list.mdiSegments.size()));
+	// 🔴 债-140 第三击 ①：描述符堆**槽内容**对账（门 = diagnostics.heap_slot_audit，默认关）。
+	// 为什么在 upload 之前：要判的是"本帧录制时这个槽里还是不是构造期写进去的那份字节"。放在
+	// upload 之后读，会把"槽被改写"与"行内容写错"两类现场混在一起（虽然它们是不同的内存）。
+	// zone = 开销量具（沿用上批教训：帧墙钟的 run-to-run 带比被测量大几个数量级，量不动它）。
+	if (diagnostics().heapSlotAudit) {
+		auto z = zone("heapSlotAudit");
+		mdiShadowArgs->auditAndLog(frameSlot, list.mdiSegments.size());
+	}
 	uint32_t tasks = 0;  // 债-113：本帧 MDI task 数（= Σ 段锚）。上界 = 总行数（不变量 4 逐行守
 	                     // gcX ≤ 1 ⟹ tasks ≤ rows ≤ ring 容量），uint32_t 内不会回卷
 	for (const auto& seg : list.mdiSegments) {

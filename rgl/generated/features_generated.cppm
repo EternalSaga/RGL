@@ -34,6 +34,8 @@ export struct OptionalFeatureSupport {
     bool presentId2 = false;
     bool deviceFaultKhr = false;
     bool deviceFaultReportMaskedKhr = false;
+    bool deviceFaultVendorBinaryKhr = false;
+    bool deviceFaultVendorBinaryExt = false;
     bool deviceFaultExt = false;
     bool calibratedTimestamps = false;
     bool calibratedTimestampsKhr = false;
@@ -91,6 +93,14 @@ export OptionalFeatureSupport queryOptionalFeatures(const vk::raii::PhysicalDevi
     if (extensionAvailable(device, VK_KHR_DEVICE_FAULT_EXTENSION_NAME)) {
         auto f_deviceFaultReportMaskedKhr = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceFaultFeaturesKHR>();
         s.deviceFaultReportMaskedKhr = f_deviceFaultReportMaskedKhr.get<vk::PhysicalDeviceFaultFeaturesKHR>().deviceFaultReportMasked != 0;
+    }
+    if (extensionAvailable(device, VK_KHR_DEVICE_FAULT_EXTENSION_NAME)) {
+        auto f_deviceFaultVendorBinaryKhr = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceFaultFeaturesKHR>();
+        s.deviceFaultVendorBinaryKhr = f_deviceFaultVendorBinaryKhr.get<vk::PhysicalDeviceFaultFeaturesKHR>().deviceFaultVendorBinary != 0;
+    }
+    if (extensionAvailable(device, VK_EXT_DEVICE_FAULT_EXTENSION_NAME)) {
+        auto f_deviceFaultVendorBinaryExt = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceFaultFeaturesEXT>();
+        s.deviceFaultVendorBinaryExt = f_deviceFaultVendorBinaryExt.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFaultVendorBinary != 0;
     }
     if (extensionAvailable(device, VK_EXT_DEVICE_FAULT_EXTENSION_NAME)) {
         auto f_deviceFaultExt = device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceFaultFeaturesEXT>();

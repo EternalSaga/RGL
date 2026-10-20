@@ -1,5 +1,6 @@
 module;
 #include <vulkan/vulkan.h>  // VK_DEVICE_FAULT_* 宏（宏不随模块导出；vkerror/features 先例）
+#include <filesystem>       // vendor dump 落盘目录（GMF 三例外之一，llm_debug_impl 先例）
 #include <fmt/format.h>     // 地址/码的十六进制拼装（GMF 只放第三方头；先例 = render_list:mdi）
 module device_fault:impl;
 
@@ -33,6 +34,7 @@ std::string describeSpan(uint64_t bytes) {
 struct PollStats {
 	uint64_t calls = 0;   ///< 轮询调用次数（门开才计数，门关时连这里都不动）
 	uint64_t masked = 0;  ///< 抓到的 masked fault 条数
+	bool printed = false;  ///< 汇总是否已出声（崩溃路径到不了 main 的退出收口，见 summary）
 };
 /** 轮询账的可变单例（函数内 static = 无静态初始化顺序问题；退出时由 reportDeviceFaultPollSummary 读）。 */
 PollStats& pollStats() {
@@ -65,12 +67,21 @@ DeviceFaultBackend chooseDeviceFaultBackend(bool khrAvailable, bool extAvailable
 }
 
 DeviceFaultSupport deriveDeviceFaultSupport(const vk::raii::PhysicalDevice& physicalDevice,
-	bool khrEnabled, bool extEnabled, bool maskedEnabled) {
+	bool khrEnabled, bool extEnabled, bool maskedEnabled, bool vendorBinaryKhr,
+	bool vendorBinaryExt) {
 	DeviceFaultSupport support;
 	support.backend = chooseDeviceFaultBackend(khrEnabled, extEnabled);
 	if (support.backend == DeviceFaultBackend::none)
 		return support;  // none：后面一次 Vulkan 调用都不发
 	support.reportMasked = maskedEnabled && support.backend == DeviceFaultBackend::khr;
+	// vendor binary 按**已选后端**取对应那一位（两后端的同名 feature 是两个不同的结构字段，
+	// 取错那条 = 请求一个未启用扩展的 feature）。🔴 不经门控：它只允许驱动多吐一份二进制
+	// dump，不改变任何提交语义（与 reportMasked 必须门控的理由相反——那个会让驱动内部恢复
+	// 而不再报 device lost）。available/enabled 分开存，理由见结构体注释。
+	const bool vbAvail = support.backend == DeviceFaultBackend::khr ? vendorBinaryKhr
+	                                                                : vendorBinaryExt;
+	support.vendorBinaryAvailable = vbAvail;
+	support.vendorBinary = vbAvail;  // 支持即请求（无门控）；两者分叉 = 接线 bug，由 featureOff 点名
 	if (support.backend == DeviceFaultBackend::khr) {
 		// 只在 KHR 已启用时挂这个属性结构：挂未启用扩展的结构进 pNext 链时驱动可忽略，
 		// 忽略后读到的是零值，会被当成"设备说最多 0 条"⟹ 轮询永不取数据且不出声。
@@ -294,8 +305,108 @@ std::expected<std::vector<FaultReportView>, std::string> collectExt(const vk::ra
 
 }  // namespace
 
+VendorBinaryOutcome classifyVendorBinary(bool vendorBinaryAvailable, bool vendorBinaryEnabled,
+	uint64_t reportedSize) {
+	// 🔴 判序 = 责任归属的判序。先判"驱动有没有 advertise"（责任在驱动），再判"我们有没有
+	// 启用"（责任在我们），最后才按 size 分。写反了就会把"驱动不支持"说成"我们的 bug"——
+	// 本机第一次实跑正是这样错的（RADV 该位 = false，日志却让人去查自己的探测接线）。
+	if (!vendorBinaryAvailable)
+		return VendorBinaryOutcome::unsupported;
+	if (!vendorBinaryEnabled)
+		return VendorBinaryOutcome::featureOff;
+	return reportedSize > 0ull ? VendorBinaryOutcome::dump : VendorBinaryOutcome::empty;
+}
+
+std::string describeVendorBinaryOutcome(VendorBinaryOutcome outcome, uint64_t reportedSize) {
+	switch (outcome) {
+	case VendorBinaryOutcome::unsupported:
+		return "vendor crash dump 取不到：驱动**没 advertise** deviceFaultVendorBinary feature"
+		       "（我们无从请求）。这是驱动的覆盖面，不是本引擎的接线问题——要这份数据得换驱动"
+		       "/换卡（NVIDIA 侧对应 Aftermath）";
+	case VendorBinaryOutcome::featureOff:
+		return "vendor crash dump 未取：驱动 advertise 了 deviceFaultVendorBinary 而本 device "
+		       "**没启用**它 = 我们的接线 bug（本引擎的策略是「支持即请求」，正常路径到不了这里）。"
+		       "查 deriveDeviceFaultSupport → initDeviceFault*Feature 那条链";
+	case VendorBinaryOutcome::empty:
+		return fmt::format(
+		    "vendor crash dump 为空：feature **已启用**而驱动报 {} 字节（驱动这次没给 dump）",
+		    reportedSize);
+	case VendorBinaryOutcome::dump:
+		return fmt::format("vendor crash dump {} 字节", reportedSize);
+	}
+	return "未识别的 vendor binary 结论枚举值";
+}
+
+std::string vendorBinaryFileName(std::string_view tag) {
+	// 🔴 不许退化成固定名：第二次崩溃覆盖第一次的现场，而本模块存在的全部意义就是留住现场。
+	return fmt::format("rgl-fault-{}.bin", tag.empty() ? std::string_view("noframe") : tag);
+}
+
+std::string_view vendorBinaryDumpDir() {
+	return "faultdumps";  // 相对 CWD（= build/rgl/，与 screenshots/ 同侧）
+}
+
+uint64_t dumpVendorBinaryOnLost(const vk::raii::Device& device, const DeviceFaultSupport& support,
+	std::string_view tag) {
+	auto* logger = RLLogger::getInstance();
+	// 通路未启用 = 零 Vulkan 调用；"没这能力"由 reportDeviceFaultOnLost 的出口 ① 统一点名，
+	// 这里不再重复一行（同一条事实出两遍声，读者会以为是两件事）。
+	if (!support.active())
+		return 0;
+	// 第一段：pVendorBinaryData = nullptr → 只取 size（spec 的两段式）。
+	vk::DeviceFaultDebugInfoKHR info {};
+	info.sType = vk::StructureType::eDeviceFaultDebugInfoKHR;
+	info.pVendorBinaryData = nullptr;
+	info.vendorBinarySize = 0;
+	if (auto r = device.getFaultDebugInfoKHR(&info); r != vk::Result::eSuccess) {
+		if (logger)
+			logger->error("device fault: vendor dump 第一段（取 size）返回 {} —— 本次 vendor 侧"
+			              "**无读数**，不可读成『驱动没给 dump』: {}",
+			    vk::to_string(r), static_cast<uint64_t>(info.vendorBinarySize));
+		return 0;
+	}
+	const auto outcome = classifyVendorBinary(support.vendorBinaryAvailable,
+	    support.vendorBinary, info.vendorBinarySize);
+	if (outcome != VendorBinaryOutcome::dump) {
+		// 🔴 两条负读数都**出声**（INFO 级：不是错误，但静默就等于没做过这次取证）。
+		if (logger)
+			logger->info("device fault: {}",
+			    describeVendorBinaryOutcome(outcome, static_cast<uint64_t>(info.vendorBinarySize)));
+		return 0;
+	}
+	// 第二段：按第一段给的 size 分配后取回。
+	std::vector<uint8_t> blob(info.vendorBinarySize);
+	info.pVendorBinaryData = blob.data();
+	if (auto r = device.getFaultDebugInfoKHR(&info); r != vk::Result::eSuccess) {
+		if (logger)
+			logger->error("device fault: vendor dump 第二段（取数据）返回 {} —— 第一段报了 {} 字节"
+			              "而这次没取回",
+			    vk::to_string(r), blob.size());
+		return 0;
+	}
+	// 回写值 = 实际写入字节数（可能小于请求值，按它落盘）。
+	const uint64_t written = info.vendorBinarySize;
+	std::error_code ec;
+	std::filesystem::create_directories(std::filesystem::path(vendorBinaryDumpDir()), ec);
+	const auto path = std::filesystem::path(vendorBinaryDumpDir()) / vendorBinaryFileName(tag);
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	if (!out) {
+		if (logger)
+			logger->error("device fault: vendor dump 取回了 {} 字节但**落盘失败**（{}）—— "
+			              "数据只活在本进程退出前，这是本次取证唯一一次机会",
+			    written, path.string());
+		return 0;
+	}
+	out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(written));
+	out.close();
+	if (logger)
+		logger->info("device fault: {} 已落盘 → {}（用 crashdiag / 厂商工具读）",
+		    describeVendorBinaryOutcome(VendorBinaryOutcome::dump, written), path.string());
+	return written;
+}
+
 void reportDeviceFaultOnLost(const vk::raii::Device& device, const DeviceFaultSupport& support,
-	std::string_view context) {
+	std::string_view context, std::string_view frameTag) {
 	auto* logger = RLLogger::getInstance();
 	if (!support.active()) {
 		// 出口 ①：通路未启用。INFO 不出 ERROR——没这个能力不是错误，但必须留一行，
@@ -306,6 +417,11 @@ void reportDeviceFaultOnLost(const vk::raii::Device& device, const DeviceFaultSu
 			    describeDeviceFaultBackend(support.backend), context);
 		return;
 	}
+	// vendor crash dump（VK_KHR 独有；EXT 回落路径没这条命令）——先取它再取报告：两条是
+	// 不同的命令、互不消费（报告那条才是"每条只返回一次"），顺序只为让日志里"现场留档"
+	// 出现在"报告为空"之前，读的人先知道有没有 blob 可查。
+	if (support.backend == DeviceFaultBackend::khr)
+		dumpVendorBinaryOnLost(device, support, frameTag);
 	auto collected =
 	    support.backend == DeviceFaultBackend::khr ? collectKhr(device, 0) : collectExt(device);
 	if (!collected) {
@@ -352,9 +468,13 @@ uint32_t pollDeviceFaults(const vk::raii::Device& device, const DeviceFaultSuppo
 }
 
 void reportDeviceFaultPollSummary() {
-	const auto stats = pollStats();
-	if (stats.calls == 0u)
+	auto& stats = pollStats();
+	// 🔴 **只出声一次**，且 device-lost 之路上也要出：原先只挂在 main 的退出收口里，而那条路
+	// 在 device lost 时执行不到（收尾 waitIdle 抛 vk::SystemError，异常展开跳过 exitDiagnostics）
+	// ⟹ 挂的那几轮根本报不出"轮了多少次"。现在抓取点与退出收口两处都调，打出去重。
+	if (stats.calls == 0u || stats.printed)
 		return;  // 从未启用 = 不出声（启用与否由启动期那行 INFO 承担，不在这里重复一遍）
+	stats.printed = true;
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("device fault 轮询账: 调用 {} 次，抓到 masked fault {} 次", stats.calls, stats.masked);
 }

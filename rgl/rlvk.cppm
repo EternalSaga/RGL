@@ -86,6 +86,7 @@ using vk::DeviceDiagnosticsConfigFlagsNV;       // RGL_AFTERMATH 诊断
 using vk::DeviceFaultAddressInfoKHR;      // device_fault：fault 地址（KHR/EXT 共用同一 struct）
 using vk::DeviceFaultAddressTypeKHR;      // device_fault：读/写/取指枚举（翻译表的输入域）
 using vk::DeviceFaultCountsEXT;           // device_fault：EXT 两段式第一段
+using vk::DeviceFaultDebugInfoKHR;        // device_fault：vendor crash dump 两段式（VK_KHR）
 using vk::DeviceFaultFlagBitsKHR;         // device_fault：KHR flags 逐位翻译
 using vk::DeviceFaultFlagsKHR;            // device_fault：KHR flags 位集
 using vk::DeviceFaultInfoEXT;             // device_fault：EXT 两段式第二段

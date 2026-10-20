@@ -155,6 +155,72 @@ export [[nodiscard]] std::expected<MeshletShadowArgsRing, Error> createMeshletSh
 	uint32_t slices);
 
 /**
+ * 审计执行账的一行汇总（`diagnostics.heap_slot_audit` 开过才出声；调用点 = main 退出收口）。
+ *
+ * 为什么需要：审计**通过时不逐帧出声**，于是"日志里零 ERROR"分不清是"审了 N 帧都没问题"
+ * 还是"一次都没审"——两者对归因的含义相反。构造期那行证明**装上了**，这本账证明**跑过**。
+ */
+export void reportHeapSlotAuditSummary();
+
+/**
+ * 描述符堆**槽内容**对账的结论（债-140 第三击；纯数据 = 无设备可单测）。
+ *
+ * ## 为什么需要它（而两网都不够）
+ * `writeSlotDescriptor()` 只在构造期写一次，之后**无人复核**。devcoredump 实测 fault 地址恰 =
+ * 0x0（空指针签名），而它的直接对应形态就是"**这个槽里现在是 0**"——task shader 经 binding 34
+ * 读行表时基址为 0，`Load(0)` 落在 VA 0。ASan 看不见（描述符堆是 mmap 的设备可见内存，不在
+ * 它的 CPU 侧插桩面里），GPU-AV 也看不见（它查描述符**索引**越界，不查槽里存的**地址值**）。
+ * 所以只能自己读回来对账。
+ *
+ * ## 为什么主判据是"与启动快照逐字节相同"而不是"等于 deviceAddress"
+ * 描述符的内存布局是**驱动私有**的（RADV 的 storage buffer 描述符里除了 8B 地址还有 size/
+ * 控制位，NVIDIA 又是另一套）。拿"槽前 8 字节 == BDA"当判据 = 造一条"换台机器就红"的假判据。
+ * 快照对账与布局无关：**我们写进去的那 32/64 个字节，现在还是不是那些字节**。
+ * `containsExpectedAddress` 只作**附带信息**报出（"我们写的那个地址还在不在槽里"），
+ * 不参与 `ok()` 的判定——布局不含裸地址的驱动上它恒 false，那是对的，不是错误。
+ */
+export struct HeapSlotAudit {
+	bool sizeMismatch = false;          ///< 两次读数长度不同 = 调用方 bug（不是驱动问题）
+	bool matchesSnapshot = true;        ///< 与启动快照逐字节相同
+	bool allZero = false;               ///< 🔴 当前全零 = fault@0 的直接对应形态
+	bool containsExpectedAddress = false;  ///< 期望 BDA 以 8B 小端出现在槽内（仅信息，不判红）
+	uint32_t slot = 0;                  ///< 被审的 heap 槽号
+	uint64_t expectedAddress = 0;       ///< 我们写进描述符的那个 BDA
+	bool hasDiff = false;               ///< 与快照有差异（长度相同时才有意义）
+	uint32_t firstDiffByte = 0;         ///< 首个差异所在字节下标
+	uint32_t snapshotSize = 0;          ///< 快照长度（长度不符时用来点名两边各多大）
+	std::string currentHex;             ///< 当前槽内容 hex；🔴 **只在判负时填**（拼 hex 比整条对账还贵，见 impl）
+	/**
+	 * 对账是否通过。
+	 *
+	 * 🔴 `allZero` 单独把结果判负，**即使它与快照相同**：我们写进去的是一个真实 BDA，槽里
+	 * 因此不可能全零。"快照全零且当前也全零"不是"稳定"，而是"**构造期那次描述符写入根本没
+	 * 生效**"——那正是 fault@0 最直接的成因，绝不能被"与基准相同"洗成通过。
+	 */
+	[[nodiscard]] bool ok() const { return !sizeMismatch && matchesSnapshot && !allZero; }
+};
+
+/**
+ * 对账本体（**纯函数**：两段字节 + 期望地址进，结论出）。
+ * @param current  当前从 heap 槽读回的字节
+ * @param snapshot 构造期写完描述符后立刻拍的快照（判据基准）
+ * @param expectedDeviceAddress 写进描述符的 BDA（0 = 载体未创建，此时不查"地址在不在"）
+ * @param slot 槽号（只为让结论能点名）
+ */
+export HeapSlotAudit auditHeapSlot(std::span<const std::byte> current,
+	std::span<const std::byte> snapshot, uint64_t expectedDeviceAddress, uint32_t slot);
+
+/**
+ * 结论 → 一行可读文本（ERROR 正文：槽号 / 期望 BDA / 当前 16 字节十六进制 / 判定）。
+ *
+ * 🔴 三种失败形态的措辞**必须两两可分**，它们指向不同的下一步：
+ *  ① 全零 → "槽内容全零（fault@0 的直接对应形态）"，下一步查谁把 0 写进了这个槽；
+ *  ② 非零但与快照不同 → "与启动快照不符 = 有人改写了这个槽"，下一步查谁复用了这个槽号；
+ *  ③ 长度不同 → 调用方 bug（本模块自己算错了 descriptorSize）。
+ */
+export std::string describeHeapSlotAudit(const HeapSlotAudit& audit);
+
+/**
  * 装配层持有的**行表载体 + 一个 heap 槽**（★M-1a 的对外服务；ring×2 只在这一个对象里）。
  *
  * 构造做三件事（顺序 = 先领号后建 buffer 都行，但描述符必须在 buffer 地址已知之后写）：
@@ -242,6 +308,34 @@ export class MeshletShadowArgsService {
 	 */
 	[[nodiscard]] const std::byte* mappedData() const { return ring.mapped; }
 
+	/**
+	 * 读回本服务那个 heap 槽的当前内容并与构造期快照对账（债-140 第三击 ①）。
+	 *
+	 * 只在 `diagnostics.heap_slot_audit=true` 时被调用（调用点 = `Renderer::prepareMdiShadowRows`，
+	 * 每帧一次，在 upload 之前）。返回 nullopt = 快照未拍（构造未完成或 descriptorSize 读不到），
+	 * 此时**调用方必须出声**——"审计没跑"与"审计说没问题"是两件事。
+	 *
+	 * 成本：一次 `getSlotCpuAddress` + 一次 ≤ descriptorSize 的 memcmp（本机 32B）。描述符堆是
+	 * host-visible 映射，读它不碰总线、不进命令流（开销实测 → `docs/还债实测数据.md` §4.11）。
+	 */
+	[[nodiscard]] std::optional<HeapSlotAudit> auditSlot() const;
+
+	/** 构造期拍的槽内容快照（审计的判据基准；空 = 未拍）。 */
+	[[nodiscard]] std::span<const std::byte> slotSnapshot() const { return slotSnapshotBytes; }
+
+	/**
+	 * 审计 + 出声的一等入口（债-140 第三击 ①；调用条件 = `diagnostics.heap_slot_audit`）。
+	 *
+	 * 三条出口，措辞两两不同：① 无基准（快照为空）→ warn「无读数，不可读成对账通过」；
+	 * ② 对账通过 → **不逐帧出声**（每帧一行"没问题"会冲掉日志），改由**首次调用打一行**
+	 *    装桩证据（含基准快照 hex）——上批刚踩过"审计/校验其实没跑而日志零 ERROR"的坑，
+	 *    没有这行，"零 ERROR"就分不清是"零调用"还是"全部通过"，两者对归因的含义相反；
+	 * ③ 不符 → ERROR 全文（槽号 / 期望 BDA / 当前 hex / 首个差异字节）。
+	 * @param frameSlot 本帧录制槽（进正文，把现场对到某一帧）
+	 * @param segments 本帧 MDI 段数（同上）
+	 */
+	void auditAndLog(uint32_t frameSlot, uint32_t segments) const;
+
    private:
 	/** 构造期：领 Runtime 段的一枚 heap 槽（ring×2 一张 buffer ⟹ 一槽，见类注释③）。 */
 	void allocArgSlot();
@@ -264,6 +358,11 @@ export class MeshletShadowArgsService {
 	Resources& resources;     ///< 资源层（分配器 / allocSlot / heap 槽地址与步长）
 	MeshletShadowArgsRing ring;  ///< 整张 ring×2 行表（本类唯一 GPU 资源，析构即销毁）
 	uint32_t argHeapSlot = 0; ///< 行表 heap 槽号（★M-1b 的 binding 22 取它）
+	/**
+	 * 写完描述符后**立刻**从 host 映射读回的槽内容快照（`auditSlot()` 的判据基准）。
+	 * 恒拍（不看诊断门）：成本 = 构造期一次 ≤64B 拷贝，换来"审计随时可开而基准不依赖门"。
+	 */
+	std::vector<std::byte> slotSnapshotBytes;
 };
 
 /**

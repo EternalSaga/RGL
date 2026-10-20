@@ -12,6 +12,7 @@ import vk_device;
 import vk_resources;
 import VmaRaii;
 import mdi_rows;
+import diagnostics;  // heap_slot_audit 门（构造期装桩证据是否出声）
 
 namespace RGL {
 namespace {
@@ -24,6 +25,59 @@ constexpr const char* kErrFrameSlot = "meshlet shadow args: frame slot out of ra
 constexpr const char* kErrRowsOverSlice = "meshlet shadow args: rows exceed the slice";
 constexpr const char* kErrBufferBounds = "meshlet shadow args: indirect range exceeds buffer";
 constexpr const char* kErrNoMapping = "meshlet shadow args: mapped pointer is null";
+
+/**
+ * 描述符槽字节 → 空格分隔 hex（审计的两处日志共用：`auditHeapSlot` 的现场 hex 与
+ * `auditAndLog` 的基准快照 hex。分两处写就会漂，而这两段是要**对读**的）。
+ *
+ * 🔴 上限必须盖得住整个描述符（本机 descriptorSize = 32）：截断的话，差异落在截断点之后时
+ * ERROR 会报"不符"而附带的 hex 与基准长得一模一样 = 把现场拍糊了。
+ */
+std::string formatSlotBytes(std::span<const std::byte> bytes, size_t cap = 64) {
+	std::string out;
+	for (size_t i = 0; i < bytes.size() && i < cap; ++i)
+		out += fmt::format("{}{:02x}", i == 0 ? "" : " ", static_cast<unsigned>(bytes[i]));
+	return out;
+}
+
+/** 8 字节小端形态是否出现在 span 内**任意**字节偏移（`auditHeapSlot` 的附带信息专用）。 */
+bool containsAddressLE(std::span<const std::byte> bytes, uint64_t form) {
+	if (form == 0ull || bytes.size() < 8)
+		return false;
+	std::byte want[8] {};
+	for (int i = 0; i < 8; ++i)
+		want[i] = static_cast<std::byte>((form >> (8 * i)) & 0xFFull);
+	for (size_t o = 0; o + 8 <= bytes.size(); ++o) {
+		bool hit = true;
+		for (int i = 0; i < 8; ++i)
+			if (bytes[o + static_cast<size_t>(i)] != want[i]) {
+				hit = false;
+				break;
+			}
+		if (hit)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * heap 槽审计的执行账（进程级；只有主线程的录制路径会写它，无并发）。
+ *
+ * 为什么需要单独一本账：审计**通过时不逐帧出声**（每帧一行"没问题"会把日志冲干净），
+ * 于是"日志里零 ERROR"分不清是"审计跑了 N 帧都没问题"还是"审计一次都没跑"——
+ * 两者对归因的含义相反。构造期那行证明**装上了**，这本账证明**跑了多少帧**。
+ */
+struct AuditStats {
+	uint64_t frames = 0;      ///< 实际执行过对账的帧数
+	uint64_t mismatch = 0;    ///< 判负次数（含三种现场）
+	uint64_t noBaseline = 0;  ///< 无基准（快照为空）次数
+	bool printed = false;     ///< 汇总是否已出声（见 reportHeapSlotAuditSummary）
+};
+/** 审计执行账的可变单例（函数内 static = 无静态初始化顺序问题；只在主线程的录制路径上写）。 */
+AuditStats& auditStats() {
+	static AuditStats stats;
+	return stats;
+}
 
 }  // namespace
 
@@ -173,6 +227,94 @@ MeshletShadowArgsService::MeshletShadowArgsService(DeviceContext& device, Resour
 			"BDA={:#x}",
 			anchors.rows, anchors.slices, anchors.stride, anchors.capacity, anchors.tail,
 			anchors.tail, anchors.capacity, argHeapSlot, ring.deviceAddress);
+	// 🔴 装桩证据（**构造期**打，不在每帧的审计路径里打：它是一条启动期事实，放进被
+	// profiler zone 计时的函数里会把一次性的日志 I/O 摊成"每帧 0.027ms"的假成本——实测踩过，
+	// 见 `docs/还债实测数据.md` §4.11）。这行同时留下**基准快照的 hex**，将来报不符时可直接
+	// 与 ERROR 里的现场 hex 对读。门开着才打（默认关 = 交付日志不多一行）。
+	if (diagnostics().heapSlotAudit) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("heap slot audit: 已启用 —— 槽 {}，基准快照 {} 字节 [{}]，期望 BDA={:#x}"
+			             "（通过时逐帧不出声，不符才 ERROR；执行账见退出汇总）",
+			    argHeapSlot, slotSnapshotBytes.size(), formatSlotBytes(slotSnapshotBytes),
+			    ring.deviceAddress);
+	}
+}
+
+HeapSlotAudit auditHeapSlot(std::span<const std::byte> current,
+	std::span<const std::byte> snapshot, uint64_t expectedDeviceAddress, uint32_t slot) {
+	HeapSlotAudit a;
+	a.slot = slot;
+	a.expectedAddress = expectedDeviceAddress;
+	a.snapshotSize = static_cast<uint32_t>(snapshot.size());
+	// 长度不同 = 本模块自己算错了 descriptorSize（调用方 bug），后面几项没有意义，早退。
+	if (current.size() != snapshot.size()) {
+		a.sizeMismatch = true;
+		a.matchesSnapshot = false;
+		a.currentHex = formatSlotBytes(current);  // 🔴 冷路径才拼 hex（见函数尾的说明）
+		return a;
+	}
+	// 逐字节对账（手写循环而不是 std::ranges::equal：本文件是模块 impl unit，ranges 算法要
+	// 真 STL 头才可见——modules 坑，见 tests/ 里同款注释）。
+	bool same = true;
+	bool zero = true;
+	for (size_t i = 0; i < current.size(); ++i) {
+		if (current[i] != snapshot[i]) {
+			if (!a.hasDiff) {
+				a.hasDiff = true;
+				a.firstDiffByte = static_cast<uint32_t>(i);
+			}
+			same = false;
+		}
+		if (current[i] != std::byte{0})
+			zero = false;
+	}
+	a.matchesSnapshot = same;
+	a.allZero = zero;
+	// 🔴 下面两样**只在判负时**才算（实测教训：本函数每帧都跑，无条件做 → 审计自身成本
+	// 0.027 ms/帧，比它要保护的对账贵三个数量级；"读一次 host 映射应该几乎免费"的直觉
+	// 是错的，实测说话 → `docs/还债实测数据.md` §4.11）。
+	//  · hex：32 次 fmt::format；
+	//  · 地址扫描：2 形态 × 最多 25 个偏移 × 8 字节的**分支密集**比较（预测失败的代价）。
+	// 两者都只在解释一次失败时才用得上——通过时现场由构造期那行基准快照承担。
+	if (!a.ok()) {
+		// 附带信息（不判红）：期望 BDA 以 8B 小端出现在槽内**任意**字节偏移。
+		// 🔴 不参与 ok()：描述符布局是驱动私有的，某些布局不放裸地址（放的是 buffer table
+		// 索引），那时本项恒 false 而槽完全正确——拿它判红就是造一条"换驱动就红"的假判据。
+		// 实测本机 RADV：槽前 8 字节 = `30 23 53 03 01 80 00 00`，而 BDA = `0xffff800103532330`
+		// ⟹ **高 16 位被驱动掩掉了**（AMD GPU VA 是 48 位规范形式）。所以除了原值，还要拿
+		// 掩掉高 16 位的形态去比，否则本项在唯一实测过的驱动上恒 false = 一条永远不亮的灯。
+		a.containsExpectedAddress = containsAddressLE(current, expectedDeviceAddress)
+		    || containsAddressLE(current, expectedDeviceAddress & 0x0000'FFFF'FFFF'FFFFull);
+		a.currentHex = formatSlotBytes(current);
+	}
+	return a;
+}
+
+std::string describeHeapSlotAudit(const HeapSlotAudit& audit) {
+	const std::string head = fmt::format(
+		"heap 槽 {} 内容对账：期望 BDA={:#x}（槽内{}找到该地址）当前 [{}]", audit.slot,
+		audit.expectedAddress, audit.containsExpectedAddress ? "" : "未", audit.currentHex);
+	if (audit.sizeMismatch)
+		return head + " —— 🔴 快照与当前读数**长度不同** = 本模块自己算错了 descriptorSize"
+		              "（调用方 bug，不是驱动改写）";
+	// 🔴 判序：全零必须判在"与快照相同"**之前**。"快照全零 + 当前也全零"不是稳定，而是构造期
+	// 那次描述符写入没生效（我们写的是真实 BDA，槽里不可能全零）——把它洗成"通过"就放过了
+	// fault@0 最直接的成因。
+	if (audit.allZero)
+		return head + " —— 🔴🔴 槽内容**全零** = fault@0 的直接对应形态（task 经 binding 34 读"
+		              "行表时基址为 0，Load(0) 落在 VA 0）。"
+		              + (audit.matchesSnapshot
+		                     ? std::string("且**构造期快照本身就是零** ⟹ 那次 writeResource"
+		                                   "DescriptorsEXT 没生效，不是后来被改写的")
+		                     : std::string("下一步 = 查谁把这个槽清零 / 描述符写入是否根本没生效"));
+	if (audit.matchesSnapshot)
+		return head + " —— 与启动快照逐字节相同";
+	// 非零但与快照不同 = 第三种现场：有人改写了这个槽。
+	return head + fmt::format(
+	    " —— 🔴 与启动快照不符但非零 = **有人改写了这个槽**（首个差异在第 {} 字节；槽号被复用？"
+	    "别的 writeResourceDescriptorsEXT 越界写进来？）。下一步 = 把本帧前后的行表内容与"
+	    "录制参数（argsOffset/rowCount）一起 dump",
+	    audit.firstDiffByte);
 }
 
 void MeshletShadowArgsService::allocArgSlot() {
@@ -205,6 +347,66 @@ void MeshletShadowArgsService::writeSlotDescriptor() {
 		                         + slotAddr.error().describe());
 	device.getDevice().writeResourceDescriptorsEXT(desc,
 	    vk::HostAddressRangeEXT { *slotAddr, resources.getDescriptorHeap().getDescriptorSize() });
+
+	// 🔴 债-140 第三击 ①：写完**立刻**从 host 映射读回槽内容当快照（审计的判据基准）。
+	// 恒拍，不看诊断门——成本是构造期一次 ≤64B 拷贝，换来"审计随时可开而基准与门无关"
+	// （门控快照 = 门开的那一帧才开始有基准，之前几帧的改写它看不见）。
+	// ⚠ 这里读的是**自己刚写的那块内存**，不是设备状态；host 可见映射上这是合法读。
+	const auto size = resources.getDescriptorHeap().getDescriptorSize();
+	const auto* base = static_cast<const std::byte*>(*slotAddr);
+	slotSnapshotBytes.assign(base, base + size);
+}
+
+std::optional<HeapSlotAudit> MeshletShadowArgsService::auditSlot() const {
+	// 快照为空 = 构造未完成或 descriptorSize 读不到。返回 nullopt 让调用方**出声**，
+	// 不在这里编一个"通过"的结论（"审计没跑"被读成"审计说没问题"是假绿的标准形态）。
+	if (slotSnapshotBytes.empty())
+		return std::nullopt;
+	const auto slotAddr = resources.getDescriptorHeap().getSlotCpuAddress(argHeapSlot);
+	if (!slotAddr)
+		return std::nullopt;
+	const std::span<const std::byte> current {
+		static_cast<const std::byte*>(*slotAddr), slotSnapshotBytes.size() };
+	return auditHeapSlot(current, slotSnapshotBytes, ring.deviceAddress, argHeapSlot);
+}
+
+void MeshletShadowArgsService::auditAndLog(uint32_t frameSlot, uint32_t segments) const {
+	// 计数走函数内 static（本函数只在主线程的录制路径上跑，无并发）。
+	// 🔴 "审计跑了多少帧"必须有出处：审计通过时不逐帧出声（否则每帧一行"没问题"冲掉日志），
+	// 于是"零 ERROR"分不清是"零调用"还是"全部通过"——两者对归因的含义相反。上批刚在
+	// GPU-AV 上踩过同一个坑。装桩证据 = 构造期那行基准快照，执行账 = 退出时那一行。
+	auto& stats = auditStats();
+	++stats.frames;
+	const auto audit = auditSlot();
+	if (!audit) {
+		++stats.noBaseline;
+		if (auto* logger = RLLogger::getInstance())
+			logger->warn("heap slot audit: 审计无法执行（构造期快照为空或槽地址解析失败）——"
+			             "本帧槽内容**无读数**，不可读成『对账通过』（帧槽 {}）",
+			    frameSlot);
+		return;
+	}
+	if (audit->ok())
+		return;
+	++stats.mismatch;
+	if (auto* logger = RLLogger::getInstance())
+		logger->error("heap slot audit: {}（帧槽 {}，本帧 MDI 段 {} 条）",
+		    describeHeapSlotAudit(*audit), frameSlot, segments);
+}
+
+void reportHeapSlotAuditSummary() {
+	auto& stats = auditStats();
+	// 🔴 **只出声一次**，且必须在 device-lost 之路上也出：本汇总是"审计跑了多少帧"的唯一
+	// 出处，而它原先只挂在 main 的退出收口里——那条路在 device lost 时**执行不到**（收尾的
+	// waitIdle 抛 vk::SystemError，异常展开跳过 exitDiagnostics）。后果是挂的那几轮报
+	// "审了 0 帧"，于是"审了 2005 帧零不符"这个数**系统性地排除了正在调查的那些轮**。
+	// 现在两个点都调它 + 打出去重 = 正常退出与崩溃退出各出一次，不多不少。
+	if (stats.frames == 0u || stats.printed)
+		return;
+	stats.printed = true;
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("heap slot audit 执行账: 审了 {} 帧，不符 {} 次，无基准 {} 次", stats.frames,
+		    stats.mismatch, stats.noBaseline);
 }
 
 MdiShadowRowLocation MeshletShadowArgsService::location(uint32_t frameSlot, uint32_t firstRow) const {

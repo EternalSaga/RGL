@@ -23,6 +23,7 @@ import vulkan_window;
 import vk_instance;
 import vk_device;
 import device_fault;  // GPU fault 诊断通路（device lost 出口抓一次；纯旁路）
+import meshlet_shadow_args;  // heap 槽审计执行账（退出收口那行；门开过才出声）
 import vk_swapchain;
 import vk_resources;
 import scene_data;  // SceneDataService（架构债务续账步骤 1）
@@ -313,6 +314,7 @@ void exitDiagnostics() {
 	RGL::profilerDump();       // Phase 9：trace/stats/摘要收口（profiler=0 = 静默 no-op）
 	bindGpuProfiler(nullptr);  // Phase 9.2：gpuProfiler 析构前解绑（帧循环已结束）
 	RGL::reportDeviceFaultPollSummary();
+	RGL::reportHeapSlotAuditSummary();  // heap 槽审计执行账（门开过才出声）
 }
 
 /** Phase 5.5 IBL 风格契约检查（validateEnvironmentContract）已随刀②.2 删除，理由见

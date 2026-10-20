@@ -236,6 +236,11 @@ const GateRule kGateRules[]{
 		"破一条硬 VU。要测 GPU-AV 就先把 dgc_static 关掉；反过来，本门只要开着，**像素与性能读数就"
 		"都不代表交付形态**（shader object 的创建标志变了）",
 		[](const Ctx& c) { return c.cfg.gpuavCompat && c.cfg.dgcStatic; }},
+	{"heap_slot_audit", GateSeverity::warn,
+		"heap_slot_audit 审的是 **MDI 行表载体**那个 heap 槽，而 meshlet.mdi_shadow 关着 ⟹ 载体"
+		"根本不建、一个槽都没得审（零调用、零读数）。要抓 fault@0 就把 meshlet.mdi_shadow 打开——"
+		"注意那正是债-140 会挂的配置，本门是给挂了之后能归因而设的",
+		[](const Ctx& c) { return c.cfg.heapSlotAudit && !c.runtime.meshletMdiShadow; }},
 	{"cull_replay", GateSeverity::warn,
 		"cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay=\"gpu_sync\"，见 docs/cpu_perf_plan.md §4）",
 		[](const Ctx& c) { return c.cfg.dgcStatic && c.cfg.cullReplay != CullReplayMode::gpuSync; }},

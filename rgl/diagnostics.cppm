@@ -100,6 +100,20 @@ export struct DiagnosticsConfig {
 	 * 都不代表交付形态**，只用于抓 GPU 侧的越界与空描述符。
 	 */
 	bool gpuavCompat = false;
+	/**
+	 * **描述符堆槽内容对账**（债-140 第三击 ①；默认关）。
+	 *
+	 * 开 = 每帧在 MDI 行表 upload 之前，把行表绑定的那个 heap 槽**读回来**与构造期快照逐字节
+	 * 对账（`MeshletShadowArgsService::auditSlot`）。抓的是"槽里现在是 0 / 是陈旧值"——
+	 * devcoredump 实测 fault 地址恰 = 0x0 的直接对应形态。
+	 *
+	 * 为什么两网都替代不了它：ASan 不插桩描述符堆（mmap 的设备可见内存，不在它的 CPU 侧
+	 * 插桩面里）；GPU-AV 查描述符**索引**越界，不查槽里存的**地址值**。
+	 *
+	 * 成本 = 每帧一次 ≤64B 的 host 映射 memcmp（实测 → `docs/还债实测数据.md` §4.11）。
+	 * 只在 MDI 行表载体存在时才有对象（`meshlet.mdi_shadow=false` 时零调用，gate_lint 出 warn）。
+	 */
+	bool heapSlotAudit = false;
 };
 
 /**

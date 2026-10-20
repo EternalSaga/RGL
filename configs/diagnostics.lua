@@ -78,6 +78,14 @@ return {
     --   VK_KHRONOS_VALIDATION_GPUAV_ENABLE=1 just smoke --set gpuav_compat=true
     gpuav_compat = false,
 
+    -- 描述符堆**槽内容**对账（rgl/meshlet_shadow_args.cppm 的 auditSlot；默认关，债-140 第三击 ①）：
+    -- true = 每帧在 MDI 行表 upload 之前，把行表绑定的那个 heap 槽读回来与构造期快照逐字节对账。
+    -- 抓的是"槽里现在是 0 / 是陈旧值"——devcoredump 实测 fault 地址恰 = 0x0 的直接对应形态。
+    -- 为什么两网都替代不了：ASan 不插桩描述符堆（mmap 的设备可见内存），GPU-AV 只查描述符
+    -- **索引**越界、不查槽里存的**地址值**。成本 = 每帧一次 ≤64B host 映射 memcmp（实测报数）。
+    -- 🔴 生效前置 = MDI 行表载体存在（`meshlet.mdi_shadow=true`）；关着时零调用，gate_lint 会 warn。
+    heap_slot_audit = false,
+
     -- 批 11.3 HFTS/FTIZB 硬阴影（docs/hfts_izb_plan.md）：izb_shadow / izb_grid / izb_dump_frame
     -- 已迁出 → configs/shadow.lua 的 izb = { on, grid, dump_frame }（N6a，见上方迁出注释）。
 

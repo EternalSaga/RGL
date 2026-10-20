@@ -281,4 +281,52 @@ TEST_CASE("planExtFaultCapacity：counts 原样当容量，未启用 vendorBinar
 	CHECK(zero.vendorBinarySize == 0ull);
 }
 
+// ─── vendor crash dump（vkGetDeviceFaultDebugInfoKHR，本批补全的通路）────────────
+
+TEST_CASE("classifyVendorBinary：三种负读数各指一个责任方，互不可混") {
+	// 🔴 本条用例的**四条**断言顺序就是责任顺序，而这条判据是实测逼出来的：第一版只有
+	// featureOff/empty 两态，本机第一次实跑就把"RADV 根本没 advertise 该 feature"报成了
+	// "我们没启用"——让人去查自己的接线，而问题在驱动。加 `unsupported` 第四态才归得对因。
+	// ① 驱动没 advertise → 责任在驱动，且**不看** enabled（无从启用）
+	CHECK(classifyVendorBinary(false, false, 0ull) == VendorBinaryOutcome::unsupported);
+	CHECK(classifyVendorBinary(false, true, 0ull) == VendorBinaryOutcome::unsupported);
+	CHECK(classifyVendorBinary(false, true, 4096ull) == VendorBinaryOutcome::unsupported);
+	// ② 驱动 advertise 了而我们没启用 → 责任在我们（本引擎按构造到不了，到得了就是接线 bug）
+	CHECK(classifyVendorBinary(true, false, 0ull) == VendorBinaryOutcome::featureOff);
+	// ③ 已启用而 size=0 → 驱动这次没给
+	CHECK(classifyVendorBinary(true, true, 0ull) == VendorBinaryOutcome::empty);
+	// ④ 有数据
+	CHECK(classifyVendorBinary(true, true, 1ull) == VendorBinaryOutcome::dump);
+	CHECK(classifyVendorBinary(true, true, 4096ull) == VendorBinaryOutcome::dump);
+
+	const auto unsup = describeVendorBinaryOutcome(VendorBinaryOutcome::unsupported, 0ull);
+	const auto off = describeVendorBinaryOutcome(VendorBinaryOutcome::featureOff, 0ull);
+	const auto empty = describeVendorBinaryOutcome(VendorBinaryOutcome::empty, 0ull);
+	const auto dump = describeVendorBinaryOutcome(VendorBinaryOutcome::dump, 4096ull);
+	// 四条两两不同（同一段 hex 四种下一步，读日志的人靠措辞分责任方）
+	const std::string all[] = {unsup, off, empty, dump};
+	for (size_t i = 0; i < 4; ++i)
+		for (size_t j = i + 1; j < 4; ++j)
+			CHECK_MESSAGE(all[i] != all[j], "第 ", i, " 与第 ", j, " 条措辞相同");
+	// ① 必须把责任指向驱动，且**不许**让人去查我们的接线（第一版就是错在这里）
+	CHECK(unsup.find("没 advertise") != std::string::npos);
+	CHECK(unsup.find("不是本引擎的接线问题") != std::string::npos);
+	CHECK(unsup.find("查 deriveDeviceFaultSupport") == std::string::npos);
+	// ② 才是指向我们自己，并给出查哪条链
+	CHECK(off.find("接线 bug") != std::string::npos);
+	CHECK(off.find("deriveDeviceFaultSupport") != std::string::npos);
+	// ③ 点名"已启用"，并带上 size 读数（本机换到有 vendorBinary 的驱动上会走这条或 ④）
+	CHECK(empty.find("已启用") != std::string::npos);
+	CHECK(dump.find("4096") != std::string::npos);
+}
+
+TEST_CASE("vendorBinaryFileName：空 tag 不许退化成固定名（第二次崩溃会覆盖第一次的现场）") {
+	CHECK(vendorBinaryFileName("frame185") == "rgl-fault-frame185.bin");
+	CHECK(vendorBinaryFileName("frame32") != vendorBinaryFileName("frame33"));
+	// 空 tag 的退化名必须是**显式可辨**的 noframe，而不是悄悄复用某个真实帧的名字
+	CHECK(vendorBinaryFileName("") == "rgl-fault-noframe.bin");
+	CHECK(vendorBinaryFileName("").find("noframe") != std::string::npos);
+	CHECK_FALSE(vendorBinaryDumpDir().empty());
+}
+
 }  // namespace RGL
