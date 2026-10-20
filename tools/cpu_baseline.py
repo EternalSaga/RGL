@@ -137,6 +137,28 @@ ARMS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
 }
 DEFAULT_ARMS = "default,no-vvl,shadow-off,izb-off,scale-half"
 
+# ─── N10 P3 shadow proxy 四臂（整条线的生死判据）────────────────────────────────
+# 判据 = **arm2 vs arm0 的阴影逐 pass GPU 合计**（`gpu:shadow1..4`，p50）；arm1/arm3 只做
+# 归因，不许拿差值凑净账（任务书红线）。口径三条写在这里而不是抄进文档：
+#  · 单实例串行（本工具逐臂串行跑，跑期间别起别的 rgl）；主口径 p50；
+#  · 🔴 每臂跑 **VVL 开与关两档**。VVL 只吃 CPU，但它改变 CPU/GPU 的相对位置：两档的
+#    `gpu:shadow*` 读数若明显不一致，说明测到的不是阴影 pass 自身的工作（GPU 被 CPU 侧卡住），
+#    那就要停下来查量具，不下结论 —— 这条对照本身就是判据（skill rgl-verify：CPU 读数必须带
+#    VVL 档；本批把同一条纪律用到 GPU 读数上）。
+#  · 目标形态 = 门开 D=7（数 6 的代价账以 D=7 为基准）。D=5 + 钉段是**归因臂**不是目标形态。
+for _name, _desc, _proxy, _lod in [
+    ("arm0", "门关 D=5（出厂态）= 四臂基线", "false", "5"),
+    ("arm1", "门开 D=5 = 钉段边际成本归因（+39 draws、+11% 三角）", "true", "5"),
+    ("arm2", "门开 D=7 = **目标形态**（几何账 0.76× + ≤39 draws）", "true", "7"),
+    ("arm3", "门关 D=7 = D=7 省量的裸参照（arm2−arm3 = 钉段在 D=7 下的真实边际）", "false", "7"),
+]:
+    _patches = [("runtime.lua", "meshlet.shadow_proxy", _proxy),
+                ("runtime.lua", "meshlet.shadow_lod", _lod)]
+    ARMS[f"proxy-{_name}"] = (_desc + "；VVL 开（与 default 同档）", list(_patches))
+    ARMS[f"proxy-{_name}-novvl"] = (
+        _desc + "；VVL 关（交付路径档，与同臂 VVL 开档互为量具自检）",
+        [("diagnostics.lua", "no_vvl", "true"), *_patches])
+
 # 报告里固定点名的段（缺位 = 报 "—"，不写 0：0 与"没有这个测点"是两件事）。
 CULL_STEPS = ("cull.record", "cull.submit", "cull.fenceWait", "cull.readback")
 # 归因表里的非 pass 段（pass 段不用点名：CPU/GPU 两侧同名即 pass，由 pass_names 自动识别）。

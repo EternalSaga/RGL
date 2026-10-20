@@ -15,6 +15,7 @@ import scene_context;
 import scene_data;    // kActiveShadowCascades（阴影段清单的级数；阴影 draw 构造接缝入参）
 import meshlet_lod;   // MeshletShadowLodTable（★18-B2 阴影远级联 LOD 选级表，collectShadowCasters 入参）
 import meshlet_ranges;  // ClusterRangeTable（债-105 起 collectMeshletOverlay 抬为接缝，接口侧要这个入参类型）
+import shadow_proxy_types;  // ShadowProxyTable（N10 P3 钉段：collectShadowCasters 入参，rlbase 纯 CPU）
 import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2A 湿面参数：系数唯一默认值载体，fill*Params 入参）
 import camera;
 
@@ -64,6 +65,10 @@ export struct RenderListState {
 	// shadowArgs 同一条 **resize-before-loop** 红线——实体循环内 realloc 会让先前存入
 	// DrawCall 的 span 悬空（帧 0 确定性 UAF，见 renderListSystem 里那条原话注释）。
 	std::vector<RGL::ShadowMeshletDrawArgs> shadowMeshletArgs;
+	// N10 P3 钉段 draw 的 12B push（🔴 与上面**分开两块**：同一 (级联, objectSlot) 可能有
+	// 「常规选级段」+「钉段」两条 draw，共用 idx 会互相覆盖 clusterStart）。分块公式与
+	// shadowArgs 同一条，同样受 resize-before-loop 红线约束（→ resizeFrameStorage）。
+	std::vector<RGL::ShadowMeshletDrawArgs> shadowMeshletPinnedArgs;
 	// ── ★M-1b 真 MDI 阴影段（三件，全部帧局部，span 生命周期规则同 pushData）──
 	// MDI 级联的 push 存储（**每级联 1 槽**，下标 = 分块号；内容是 {rowBase, cascade, 0}，
 	// rowBase = 载体同源 pair 的 rowBase）。resize-before-loop：循环前固定 kActiveShadowCascades
@@ -190,6 +195,14 @@ export struct ShadowCandidate {
 	 *  render_list_impl 的 meshletTaskCount（emitShadowCasters 消费点执行）。 */
 	uint32_t meshletGroups = 0;
 	uint32_t clusterStart = 0;  ///< 相对 ObjectClusterRange::base 的偏移（原样进 12B push）
+	// ── N10 P3 阴影代理**钉段**（`ShadowProxyTable` 的搬运，四字段全 0 = 本候选没有钉段）──
+	// 🔴 表不存在（门关）= 装配层根本不建 = 这里全 0 = **一条 draw 都不多发**（"存在即生效"，
+	// 与上面 meshletPipeline 的 kInvalid 同构）。判据本体不在这里（`pinActive`，rlbase 纯函数），
+	// 本结构只搬**事实**：产物局部半径 + 世界换算，不搬"该不该钉"的结论（结论逐级联变）。
+	uint32_t pinnedStart = 0;      ///< 相对 ObjectClusterRange::base（与 clusterStart 同口径）
+	uint32_t pinnedCount = 0;      ///< 被钉簇数（0 = 无钉段；≥1 才可能多发一条 c1..c3 的 draw）
+	float pinnedRadius = 0.0f;     ///< 被钉簇段的包围球半径（**产物局部单位**，未乘 worldScale）
+	float pinnedWorldScale = 0.0f;  ///< 产物局部单位 → 世界米（实体矩阵基向量长度，见 collect 侧）
 };
 
 /**
@@ -198,10 +211,29 @@ export struct ShadowCandidate {
  * （形态决策表 drawAtlas）仍在实现内读 shadowConfig() 单例（测试经 setShadowConfig 两态直打，
  * 先例 = tests/test_render_list_shadow 的按档分立用例）。
  * @param lodTable 阴影远级联 LOD 选级表（registry ctx；nullptr = 门关 = 候选全部不可切）
+ * @param proxyTable N10 P3 阴影代理钉段表（registry ctx；nullptr = 门关 = 钉段四字段全 0）。
+ *        🔴 **不新建收集函数**（二值形态候选集不变：谁投影不变，变的只是每个投影发几条），
+ *        本函数是 ShadowCandidate 的唯一产地，钉段字段在这里填。
+ * @param worldScale 实体矩阵的世界换算（产物局部单位 → 米）。🔴 调用点传的是它**已经算好的**
+ *        那个 scale（同一个值也在算候选的世界包围半径），不在这里重算一遍（第二处公式迟早漂，
+ *        口径 → scene_context 的 worldScaleOf）。
  */
 export void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
 	const glm::vec3& worldCenter, float worldRadius, uint32_t objectSlot,
-	const MeshletShadowLodTable* lodTable, std::vector<ShadowCandidate>& out);
+	const MeshletShadowLodTable* lodTable, const ShadowProxyTable* proxyTable, float worldScale,
+	std::vector<ShadowCandidate>& out);
+
+/**
+ * 一枚级联的纹素尺寸（世界米）= `2·光空间体 XY 半宽 / 图集单块边长`。定义在 render_list_impl
+ * （partition impl unit，实现侧不写 export）。
+ *
+ * 导出为**接缝**（N10 P3 收口 P2 遗留）：这条式子原本写了两遍（`fillShadowData` 写进 scene data
+ * 的 `shadowTexelSizes` 与 P2 启动期读数表），P3 的 emit 门是第三个消费者——三处各写一遍 =
+ * 「采样端看到的纹素」与「CPU 判钉段用的纹素」可以静默分家，而分家的表现是"影子该钉的没钉"，
+ * 画面上看不出来。分母取**单块边长**而不是图集整幅（5a-6 那条：按 2048 网格 = 吸到半纹素位置）。
+ * 🔴 三处消费者：`fillShadowData` / `emitShadowCasters`（钉段 texel 门）/ `main:shadow_proxy`。
+ */
+export float shadowTexelSize(float xyRadius);
 
 /**
  * ★M-1b 真 MDI 采集上下文（docs/mdi_plan.md §19.2 D4 / §19.5）。非空 = 生效档事实
@@ -244,6 +276,9 @@ export struct MeshletMdiShadowActivation {
  * c0 恒旧路径（8B push）；c1..c3 且候选可切 → 簇管线 + meshletTaskCount(簇数) + 12B push。
  * @param shadowMeshletArgs 出参：填 ShadowMeshletDrawArgs（帧局部存储，生命周期同 pushData；
  *        调用方**必须在实体循环之前** resize 到位——循环内 realloc = 先前 span 悬空）
+ * @param shadowMeshletPinnedArgs 出参：N10 P3 钉段 draw 的 12B push（🔴 **必须是另一块存储**：
+ *        同一 (级联, objectSlot) 现在可能有两条 draw，共用 `idx` 会让第二条把第一条的
+ *        clusterStart 覆盖掉 = 常规段静默画成钉段。分块公式与上面同一条，同样循环前 resize）
  * 🔴 ★M-1b `mdi` 非空时的形态（生效档，§19.2 D4 孔洞流）：c1..c3 每级联的行表 =
  * **全部可切候选**（含本级不可见的，行照发、`gcX = 0`）按候选序喂
  * `buildMdiShadowRows`（不许自己拼行），产出一条 `MdiShadowSegment` + 一条
@@ -260,6 +295,7 @@ export void emitShadowCasters(std::span<const ShadowCandidate> cands,
 	std::span<const ShadowVolume> volumes, uint32_t objectSlotCount,
 	std::vector<ShadowDrawArgs>& shadowArgs,
 	std::vector<ShadowMeshletDrawArgs>& shadowMeshletArgs,
+	std::vector<ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
 	std::array<std::vector<DrawCall>, kActiveShadowCascades>& out,
 	const MdiShadowEmitContext* mdi = nullptr);
 

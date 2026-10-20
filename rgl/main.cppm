@@ -527,8 +527,11 @@ export void wireClusterRangeTable(entt::registry& registry, const UploadedAssets
  * + emplace 进 registry ctx + INFO 读数（条目数 / Σ 被钉簇数 / texel 门在 8 档 × 4 级联下的
  * 活跃条目数表）。门关 = 调用方（`wireClusterRangeTable` 第六步）**根本不调** = 连表都不建。
  *
- * 🔴 **本批零消费者**：表放进 ctx 后没有任何 draw 由它发出（接消费点 = P3）⟹ 门开态截图必须
- * 与出厂态逐位相同，那张截图就是「P2 真的没接画面」的自证。
+ * 🔴 **P3 起有消费者**（画面会变）：`collectShadowCasters` 读本表填 `ShadowCandidate` 的钉段四
+ * 字段，`emitShadowCasters` 对过 texel 门的候选在 c1..c3 各多发一条选级恒 0 的 draw。
+ * ⟹ 门关态截图与出厂态逐位相同（两枚锚），门开态**没有锚**、判据 = imgqa + 四臂 GPU 实测。
+ * 出厂 `shadow_proxy = false` 的理由不是"没接画面"，而是 P3 实测**画质收益为 0**（找回量 ≈
+ * 钉住份额，一比一）→ `shadow_proxy_plan.md` §4 的数 8 段。
  *
  * @param registry 已注册实体的 registry（读 MeshRef / Transform / NextObjectSlot / Camera /
  *        RenderExtent，写 ctx）

@@ -24,6 +24,7 @@ import frame_draw_list;          // DrawCall / MdiShadowSegment / ShadowMeshletD
 import asset_table;              // kInvalidPipelineIndex + numeric_limits 先例（rlstd 已带）
 import scene_data;               // kActiveShadowCascades
 import mdi_rows;                 // MdiShadowRow/RowLocation/buildMdiShadowRows + 容量算式（★M-0/M-1a）
+import shadow_proxy_types;       // pinActive / ShadowProxyTable::Entry（N10 P3 钉段行与逐条支路同一个门）
 
 namespace RGL {
 namespace {
@@ -86,6 +87,11 @@ MdiGateFail mdiScanGate(std::span<const ShadowCandidate> cands,
 		if (cd.meshletPipeline == kInvalidPipelineIndex || cd.meshletMdiPipeline == kInvalidPipelineIndex)
 			continue;  // 不可切 / 无 MDI 宿主 = 不进表（混合形态的另一半，继续逐条旧 draw）
 		++gate.rowsPerCascade;
+		// N10 P3：钉段行**恒占一行**（只要这候选有钉段），texel 门只决定它的 gcX ——
+		// 行表布局按"每级联行数相同"算（`firstRow += rowsPerCascade` + 载体 sliceRows 闭式），
+		// 而门是逐级联的，按门加减行数会让每段不等。与载体容量那侧的锚**同一条口径**
+		// （`wireMeshletShadowArgs`：选级表 count>0 的槽数 + 钉段表 count>0 的槽数）。
+		gate.rowsPerCascade += cd.pinnedCount > 0u ? 1u : 0u;
 		if (gate.pipeline == kInvalidPipelineIndex)
 			gate.pipeline = cd.meshletMdiPipeline;
 		else if (gate.pipeline != cd.meshletMdiPipeline)
@@ -116,8 +122,9 @@ std::optional<std::string> mdiGateMessage(MdiGateFail fail, const MdiShadowGate&
 	case MdiGateFail::entrySplit:
 		return std::string("可切候选的 MDI 条目下标不一致（全场景 1 条目的不变式破了 = 烘焙分家）");
 	case MdiGateFail::capacity:
-		return fmt::format("行表容量不足：可切候选 {} × 级联段 {} > 载体 sliceRows {}（容量上界口径 = "
-		                   "选级表 count>0 的 objectSlot 数 × 段数，见 wireMeshletShadowArgs）",
+		return fmt::format("行表容量不足：每段行数 {} × 级联段 {} > 载体 sliceRows {}（容量上界口径 = "
+		                   "选级表 count>0 的 objectSlot 数 + N10 P3 钉段表 count>0 的槽数，再乘段数，"
+		                   "见 wireMeshletShadowArgs）",
 			gate.rowsPerCascade, mdiShadowCascades(), mdi.sliceRows);
 	case MdiGateFail::slotDrift:
 		return fmt::format("frameSlot {} ≥ slices {}（ring×2 的写安全前提 = 只写本帧槽；"
@@ -136,19 +143,39 @@ std::optional<std::string> mdiGateMessage(MdiGateFail fail, const MdiShadowGate&
 /**
  * 一个级联的行表输入打包（候选序；🔴 判据与逐条形态同一条 `casterInShadowVolume`，
  * 不可见 = `gcX=0` 而**行照发**——孔洞流，§19.2 D4）。
+ * N10 P3：有钉段的候选**贡献两行**（主行 + 钉段行，见函数体内注释）；钉段行的可见性额外过
+ * `pinActive`（与逐条形态 `emitPinnedShadowDraw` **同一个门、同一个 texel 口径**）。
+ * @param texel 本级联纹素尺寸（世界米，`shadowTexelSize` 接缝的第三个消费者）
  */
 std::vector<MdiShadowCandidate> mdiCascadeInputs(std::span<const ShadowCandidate> cands,
-	const ShadowVolume& volume) {
+	const ShadowVolume& volume, float texel) {
 	std::vector<MdiShadowCandidate> inputs;
 	for (const auto& cd : cands) {
 		if (cd.meshletPipeline == kInvalidPipelineIndex || cd.meshletMdiPipeline == kInvalidPipelineIndex)
 			continue;
+		const bool visible = casterInShadowVolume(volume, cd.center, cd.radius);
 		MdiShadowCandidate in;
 		in.objectSlot = cd.objectSlot;
 		in.meshGroupCount = meshletTaskCount(cd.meshletGroups);  // ×2 唯一真相源（喂 word5，非 gcX）
 		in.clusterStart = cd.clusterStart;
-		in.visible = casterInShadowVolume(volume, cd.center, cd.radius);
+		in.visible = visible;
 		inputs.push_back(in);
+		// N10 P3 钉段行（🔴 **行照发，不管本级 texel 门过不过**）：行表布局假设"每级联行数相同"
+		// （`firstRow += rowsPerCascade` 与载体 `sliceRows` 的闭式都按它算），texel 门是**逐级联**
+		// 的，若按门决定发不发行，每级联行数就不等了。所以门只决定这一行的 `gcX`：过门 = 可见
+		// 行（gcX=1），不过门 = 与"本级联看不见"同一形态（gcX=0 = 空转，§19.2 D4 的孔洞流）。
+		// 行序 = 候选序**展开**序（钉段行紧跟其主行）；图集 depth-only + eLess ⟹ 行序不进判据。
+		if (cd.pinnedCount == 0u)
+			continue;
+		MdiShadowCandidate pin;
+		pin.objectSlot = cd.objectSlot;
+		pin.meshGroupCount = meshletTaskCount(cd.pinnedCount);  // 同一个 ×2 真相源
+		pin.clusterStart = cd.pinnedStart;
+		pin.visible = visible && pinActive(
+			ShadowProxyTable::Entry { .start = cd.pinnedStart, .count = cd.pinnedCount,
+				.radius = cd.pinnedRadius },
+			cd.pinnedWorldScale, texel);
+		inputs.push_back(pin);
 	}
 	return inputs;
 }
@@ -203,7 +230,8 @@ bool mdiBuildShadowSegments(std::span<const ShadowCandidate> cands,
 	mdi.segments->reserve(mdiShadowCascades());
 	uint32_t firstRow = 0;
 	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c) {
-		auto table = buildMdiShadowRows(mdiCascadeInputs(cands, volumes[c]));
+		auto table = buildMdiShadowRows(
+		    mdiCascadeInputs(cands, volumes[c], shadowTexelSize(volumes[c].xyRadius)));
 		if (!table) {
 			if (logger)
 				logger->warn("meshlet: mdi 行表构建失败（c{}）—— 本帧回落逐条 draw：{}", c, table.error());
@@ -270,15 +298,47 @@ RGL::DrawCall makeMdiShadowDrawCall(const RGL::MdiShadowSegment& seg,
 }
 
 /**
+ * N10 P3：钉段的那条 draw（c1..c3，**选级恒 0** —— 钉段簇区间本身就是 L0 前缀，
+ * 所以 shader 零改动：12B push 里换掉的只有 clusterStart，task 数换成钉段簇数的）。
+ *
+ * 判据只有一条：`pinActive`（rlbase 纯函数，K=1 写死）。它自带 `count > 0`，所以"没有钉段"
+ * 与"有钉段但本级纹素太粗"从同一个门出去 = 不发。宿主（本候选可切 = 有簇管线条目）由调用方
+ * 保证 —— 钉段 draw 是**簇** draw，没有条目就无处可发（嵌套理由 → collectShadowCasters，
+ * 同一条判据不在这里重述第二遍）。
+ * 🔴 task 数走 `meshletTaskCount`（唯一真相源），不在这里乘槽数。
+ * @param texel 本级联纹素尺寸（世界米 = `shadowTexelSize(volumes[c].xyRadius)`）
+ */
+void emitPinnedShadowDraw(const ShadowCandidate& cd, uint32_t c, float texel,
+	uint32_t objectSlotCount, std::vector<RGL::ShadowMeshletDrawArgs>& pinnedArgs,
+	std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out) {
+	const ShadowProxyTable::Entry pin {
+		.start = cd.pinnedStart, .count = cd.pinnedCount, .radius = cd.pinnedRadius };
+	if (!pinActive(pin, cd.pinnedWorldScale, texel))
+		return;
+	auto& pargs = pinnedArgs[static_cast<size_t>(c) * objectSlotCount + cd.objectSlot];
+	pargs.objectIndex = cd.objectSlot;
+	pargs.cascadeIndex = c;
+	pargs.clusterStart = cd.pinnedStart;
+	out[c].push_back(RGL::DrawCall{cd.meshletPipeline,
+		std::as_bytes(std::span<const RGL::ShadowMeshletDrawArgs>{&pargs, 1}),
+		meshletTaskCount(cd.pinnedCount)});
+}
+
+/**
  * 旧形态的一条阴影 draw（c0 恒此路；★M-1b 生效档里 = 不可切候选的原样逐条支路）。
  * 🔴 **c0 恒旧路径**（§18.6 第一刀形态零改动；IZB mask 重放 replayIzbMaskSegment
  * 只重放 c0 段且按 8B ShadowDrawArgs 读 push，靠的就是这条）。c1..c3 且候选可切
- * → 簇管线 + meshletTaskCount(簇数) + 12B push；**只换 draw 内容，条数逐条不变**
- * （「原位换管线」的形状，也是候选序对账不受影响的理由）。
+ * → 簇管线 + meshletTaskCount(簇数) + 12B push。
+ * ⚠ N10 P3 起「**条数逐条不变**」这句只对**无钉段**的候选成立：含钉段且过 texel 门的候选
+ * 在 c1..c3 各多一条 draw（上限 = 被钉 prim 数 × 3 段，bistro = 13×3 = 39 条）。
+ * 钉段那条排在常规条**之后**：depth-only 图集 + eLess 下先后无关（同 P1 重排不换锚的理由），
+ * 放在后面是为了让"门关 = 那一行根本不执行 = 逐位不变"在 diff 里一眼可见。
  */
-void emitLegacyShadowDraw(const ShadowCandidate& cd, uint32_t c, uint32_t objectSlotCount,
+void emitLegacyShadowDraw(const ShadowCandidate& cd, uint32_t c, float texel,
+	uint32_t objectSlotCount,
 	std::vector<RGL::ShadowDrawArgs>& shadowArgs,
 	std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
+	std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
 	std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out) {
 	const size_t idx = static_cast<size_t>(c) * objectSlotCount + cd.objectSlot;
 	if (c >= 1u && cd.meshletPipeline != kInvalidPipelineIndex) {
@@ -289,6 +349,7 @@ void emitLegacyShadowDraw(const ShadowCandidate& cd, uint32_t c, uint32_t object
 		out[c].push_back(RGL::DrawCall{cd.meshletPipeline,
 			std::as_bytes(std::span<const RGL::ShadowMeshletDrawArgs>{&margs, 1}),
 			meshletTaskCount(cd.meshletGroups)});
+		emitPinnedShadowDraw(cd, c, texel, objectSlotCount, shadowMeshletPinnedArgs, out);
 		return;
 	}
 	auto& sargs = shadowArgs[idx];
@@ -345,8 +406,16 @@ void emitShadowCasters(std::span<const ShadowCandidate> cands,
 	std::span<const ShadowVolume> volumes, uint32_t objectSlotCount,
 	std::vector<RGL::ShadowDrawArgs>& shadowArgs,
 	std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
+	std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
 	std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out,
 	const MdiShadowEmitContext* mdi) {
+	// N10 P3：逐级联的纹素尺寸（钉段 texel 门的输入）。🔴 与写进 scene data 的
+	// `shadowTexelSizes` **同一条式子**（`shadowTexelSize` 接缝，本函数是第三个消费者）——
+	// 分两遍写 = 「采样端认为一个纹素多大」与「CPU 决定钉不钉」分家，表现是"该钉的没钉"，
+	// 画面上读不出来。4 次/帧，不在候选循环里算。
+	std::array<float, kActiveShadowCascades> texels{};
+	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
+		texels[c] = shadowTexelSize(volumes[c].xyRadius);
 	std::array<MdiCascadePlan, kActiveShadowCascades> plans{};
 	const bool mdiForm = mdi != nullptr && mdi->rows != nullptr && mdi->segments != nullptr
 		&& mdi->pushArgs != nullptr && buildMdiShadowPlans(cands, volumes, *mdi, plans);
@@ -354,10 +423,11 @@ void emitShadowCasters(std::span<const ShadowCandidate> cands,
 		for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
 			const bool visible = casterInShadowVolume(volumes[c], cd.center, cd.radius);
 			if (mdiForm && absorbMdiCandidate(cd, c, visible, plans, *mdi, out))
-				continue;
+				continue;  // 钉段也一起被行表吸收（mdiCascadeInputs 那侧多一行），不走逐条支路
 			if (!visible)
 				continue;
-			emitLegacyShadowDraw(cd, c, objectSlotCount, shadowArgs, shadowMeshletArgs, out);
+			emitLegacyShadowDraw(cd, c, texels[c], objectSlotCount, shadowArgs, shadowMeshletArgs,
+				shadowMeshletPinnedArgs, out);
 		}
 	if (!mdiForm)
 		return;

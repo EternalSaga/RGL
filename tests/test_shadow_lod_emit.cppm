@@ -186,11 +186,11 @@ TEST_CASE("collectShadowCasters：阴影总开关两态（门关零候选 = 逐�
 	ShadowConfig off;
 	off.mode = ShadowMode::none;  // → drawAtlas = false
 	setShadowConfig(off);
-	collectShadowCasters(asset, mat, glm::vec3{0.0f}, 0.5f, /*objectSlot=*/0, nullptr, out);
+	collectShadowCasters(asset, mat, glm::vec3{0.0f}, 0.5f, /*objectSlot=*/0, nullptr, nullptr, 0.0f, out);
 	CHECK(out.empty());  // 反向用例：关态必须零候选（否则阴影 pass 关不掉）
 
 	enableShadowAtlas();
-	collectShadowCasters(asset, mat, glm::vec3{1.5f, 2.0f, 3.0f}, 0.5f, /*objectSlot=*/4, nullptr,
+	collectShadowCasters(asset, mat, glm::vec3{1.5f, 2.0f, 3.0f}, 0.5f, /*objectSlot=*/4, nullptr, nullptr, 0.0f,
 		out);
 	REQUIRE(out.size() == 1);
 	// 门开 = 五个标量**原样**搬运（错位/漏字段在这里红，不在像素上红）。
@@ -217,17 +217,19 @@ TEST_CASE("collectShadowCasters：两条既有守卫（无效阴影管线 / blen
 
 	// ① 无阴影管线的资产 → 不攒
 	collectShadowCasters(makeAsset(kInvalidPipelineIndex, 3u, 99u), mat, glm::vec3{0.0f}, 0.5f, 0u,
-		nullptr, out);
+		nullptr, nullptr, 0.0f, out);
 	CHECK(out.empty());
 
 	// ② blend 材质 → 不攒（透明体不投影；blend 守卫在簇判据**之前**，簇路径同样不切）
 	MaterialAsset blend;
 	blend.alphaModeBlend = true;
-	collectShadowCasters(makeAsset(7u, 3u, 99u), blend, glm::vec3{0.0f}, 0.5f, 0u, nullptr, out);
+	collectShadowCasters(makeAsset(7u, 3u, 99u), blend, glm::vec3{0.0f}, 0.5f, 0u, nullptr,
+		nullptr, 0.0f, out);
 	CHECK(out.empty());
 
 	// 阳性对照：同一资产换回不透明材质就攒（挡住「反向用例其实是被恒假判据喂绿的」）
-	collectShadowCasters(makeAsset(7u, 3u, 99u), mat, glm::vec3{0.0f}, 0.5f, 0u, nullptr, out);
+	collectShadowCasters(makeAsset(7u, 3u, 99u), mat, glm::vec3{0.0f}, 0.5f, 0u, nullptr,
+		nullptr, 0.0f, out);
 	CHECK(out.size() == 1);
 
 	setShadowConfig(ShadowConfig{});
@@ -250,7 +252,7 @@ TEST_CASE("collectShadowCasters：可切四条判据逐条反向 + 正例钉「�
 	auto collectOne = [&](const MeshAsset& a, const MaterialAsset& m, uint32_t slot,
 							const MeshletShadowLodTable* t) {
 		std::vector<ShadowCandidate> out;
-		collectShadowCasters(a, m, glm::vec3{0.0f}, 0.5f, slot, t, out);
+		collectShadowCasters(a, m, glm::vec3{0.0f}, 0.5f, slot, t, nullptr, 0.0f, out);
 		REQUIRE(out.size() == 1);  // 前置：候选必须产出，否则「不可切」是空表给的假绿
 		return out[0];
 	};
@@ -306,9 +308,11 @@ TEST_CASE("emitShadowCasters：c0 恒旧路径 + c1..c3 簇路径 + 逐级条数
 		sentinelOld());
 	std::vector<ShadowMeshletDrawArgs> newArgs(static_cast<size_t>(kActiveShadowCascades) * slots,
 		sentinelNew());
+	std::vector<ShadowMeshletDrawArgs> pinnedArgs(static_cast<size_t>(kActiveShadowCascades) * slots,
+		sentinelNew());  // N10 P3：钉段 push 独立一块（共用会让两条 draw 互相覆盖 clusterStart）
 	std::array<std::vector<DrawCall>, kActiveShadowCascades> out;
 	emitShadowCasters(cands, std::span<const ShadowVolume>{vols.data(), vols.size()}, slots, oldArgs,
-		newArgs, out);
+		newArgs, pinnedArgs, out);
 
 	// ① 逐级条数 = 闭式（1/2/2/3，合计 8）。变异红线 ⑨（簇路径之外**也**写一条旧 draw）在此红。
 	const std::array<uint32_t, kActiveShadowCascades> kExpectCounts{1u, 2u, 2u, 3u};
@@ -391,14 +395,15 @@ TEST_CASE("emitShadowCasters：切与不切的 draw 条数逐条相等（原位�
 
 	std::vector<ShadowDrawArgs> oldArgs(static_cast<size_t>(kActiveShadowCascades) * slots);
 	std::vector<ShadowMeshletDrawArgs> newArgs(static_cast<size_t>(kActiveShadowCascades) * slots);
+	std::vector<ShadowMeshletDrawArgs> pinnedArgs(static_cast<size_t>(kActiveShadowCascades) * slots);
 	std::array<std::vector<DrawCall>, kActiveShadowCascades> off{};
 	std::array<std::vector<DrawCall>, kActiveShadowCascades> on2{};
 	const auto candsOff = makeCands(build(false), xs);
 	const auto candsOn = makeCands(build(true), xs);
 	emitShadowCasters(candsOff, std::span<const ShadowVolume>{vols.data(), vols.size()}, slots,
-		oldArgs, newArgs, off);
+		oldArgs, newArgs, pinnedArgs, off);
 	emitShadowCasters(candsOn, std::span<const ShadowVolume>{vols.data(), vols.size()}, slots,
-		oldArgs, newArgs, on2);
+		oldArgs, newArgs, pinnedArgs, on2);
 
 	uint32_t total = 0;
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
@@ -482,9 +487,11 @@ TEST_CASE("collect+emit 属性（Lcg 写死种子）：随机槽位/簇数/可�
 		sentinelOld());
 	std::vector<ShadowMeshletDrawArgs> newArgs(static_cast<size_t>(kActiveShadowCascades) * slots,
 		sentinelNew());
+	std::vector<ShadowMeshletDrawArgs> pinnedArgs(static_cast<size_t>(kActiveShadowCascades) * slots,
+		sentinelNew());  // N10 P3：钉段 push 独立一块（共用会让两条 draw 互相覆盖 clusterStart）
 	std::array<std::vector<DrawCall>, kActiveShadowCascades> out{};
 	emitShadowCasters(cands, std::span<const ShadowVolume>{vols.data(), vols.size()}, slots, oldArgs,
-		newArgs, out);
+		newArgs, pinnedArgs, out);
 
 	uint32_t total = 0;
 	uint32_t newDraws = 0;

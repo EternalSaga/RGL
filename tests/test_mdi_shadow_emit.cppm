@@ -135,6 +135,8 @@ std::vector<ShadowCandidate> makeCands() {
 struct MdiFixture {
 	std::vector<RGL::ShadowDrawArgs> old8;
 	std::vector<RGL::ShadowMeshletDrawArgs> meshlet12;
+	/// N10 P3 钉段 draw 的 push（🔴 与 meshlet12 **分开两块**，同 resize-before-loop 契约）
+	std::vector<RGL::ShadowMeshletDrawArgs> pinned12;
 	std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades> out{};
 	std::vector<RGL::ShadowMeshletDrawArgs> mdiPush;
 	std::vector<RGL::MdiShadowRow> rows;
@@ -147,10 +149,11 @@ struct MdiFixture {
 	void prepare(uint32_t objectSlotCount) {
 		old8.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
 		meshlet12.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
+		pinned12.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
 		mdiPush.resize(kActiveShadowCascades);
 	}
 	void emit(std::span<const ShadowCandidate> cands, bool withCtx = true) {
-		emitShadowCasters(cands, makeVolumes(), 10u, old8, meshlet12, out,
+		emitShadowCasters(cands, makeVolumes(), 10u, old8, meshlet12, pinned12, out,
 			withCtx ? &ctx : nullptr);
 	}
 };
@@ -474,6 +477,114 @@ TEST_CASE("两帧轮转：frameSlot 0 的第二帧 pair 数字 = 闭式另一半
 		// 段的 pair 与 draw 的字段**同一次产出**：两处必须一字不差
 		CHECK(f.out[c][*idx].argsOffset
 			== static_cast<uint32_t>(f.segments[c - 1u].loc.argsOffset));
+	}
+}
+
+// ─── N10 P3 钉段行（行照发、texel 门只决定它的 gcX）─────────────────────────────
+
+/** 给一条候选挂上钉段（其余字段原样）。 */
+ShadowCandidate withPin(ShadowCandidate cd, uint32_t start, uint32_t count, float radius,
+	float worldScale) {
+	cd.pinnedStart = start;
+	cd.pinnedCount = count;
+	cd.pinnedRadius = radius;
+	cd.pinnedWorldScale = worldScale;
+	return cd;
+}
+
+/** 标准候选集 + 给 A（slot 2）挂钉段。 */
+std::vector<ShadowCandidate> makePinnedCands(float pinRadius, float worldScale,
+	uint32_t pinCount = 2u, uint32_t pinStart = 17u) {
+	auto cands = makeCands();
+	for (auto& cd : cands)
+		if (cd.objectSlot == 2u)
+			cd = withPin(cd, pinStart, pinCount, pinRadius, worldScale);
+	return cands;
+}
+
+TEST_CASE("N10 P3 生效档：钉段**多占一行**（行序 = 候选序展开序），字段与逐条形态同式") {
+	// 直径 = 2·1.0·1.0 = 2 世界米，最粗一级纹素 = 2·4/1024 ≈ 7.8e-3 ⟹ 三级联全过门。
+	MdiFixture f;
+	f.ctx.sliceRows = 12u;  // 3 主行 + 1 钉段行 = 4 × 3 段 = 12（恰好容得下，见容量那条）
+	f.prepare(10u);
+	const auto cands = makePinnedCands(1.0f, 1.0f);
+	f.emit(std::span<const ShadowCandidate> { cands });
+
+	REQUIRE(f.rows.size() == 12u);  // 变异红线 P1：scanGate 漏加钉段行 → 行数与段落点全乱
+	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c) {
+		INFO("c" << c);
+		const auto base = (c - 1u) * 4u;
+		// 行序：A 主、A 钉、B 主、C 主（钉段行**紧跟其主行**，不排到段尾）
+		CHECK(f.rows[base + 0u].objectIndex == 2u);
+		CHECK(f.rows[base + 1u].objectIndex == 2u);
+		CHECK(f.rows[base + 2u].objectIndex == 5u);
+		CHECK(f.rows[base + 3u].objectIndex == 9u);
+		// 钉段行的两个字段：clusterStart 换成钉段的、mesh 组数换成钉段簇数的 ×2
+		CHECK(f.rows[base + 0u].clusterStart == 3u);   // A 主条
+		CHECK(f.rows[base + 1u].clusterStart == 17u);  // A 钉段（与主条刻意不同值）
+		CHECK(f.rows[base + 1u].meshGroupCount == 2u * 2u);
+		// 可见性：A 在三级联都可见（x=0），钉段行同判据同结果
+		CHECK(f.rows[base + 1u].groupCountX == 1u);
+		CHECK(f.segments[c - 1u].rowCount == 4u);
+		CHECK(f.segments[c - 1u].firstRow == (c - 1u) * 4u);  // 每段等长（布局假设的前提）
+		// task 数锚 = ΣgcX：A 主 + A 钉 + B 主 = 3；C(x=4.5) 在 c1/c2 不可见、c3 可见 → 4
+		// （期望值出处 = 文件头的闭式 visClosed，不读被测锚）
+		CHECK(f.segments[c - 1u].taskCount == (c <= 2u ? 3u : 4u));
+	}
+}
+
+TEST_CASE("N10 P3 生效档：texel 门不过 → 钉段行**照发**但 gcX=0（行表布局不随门变）") {
+	// 为什么行不删：`firstRow += rowsPerCascade` 与载体 sliceRows 的闭式都假设每段等长，
+	// 而 texel 门是**逐级联**的 —— 按门加减行数会让每段不等（→ mdiScanGate 注释）。
+	MdiFixture f;
+	f.ctx.sliceRows = 12u;
+	f.prepare(10u);
+	const auto cands = makePinnedCands(1e-4f, 1.0f);  // 直径 2e-4 < 最细一级纹素 3.9e-3
+	f.emit(std::span<const ShadowCandidate> { cands });
+	REQUIRE(f.rows.size() == 12u);
+	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c) {
+		const auto base = (c - 1u) * 4u;
+		CHECK(f.rows[base + 1u].groupCountX == 0u);      // 空转行（身份字段照写）
+		CHECK(f.rows[base + 1u].clusterStart == 17u);    // 内容仍是钉段的（只是不 dispatch）
+		CHECK(f.rows[base + 1u].meshGroupCount == 4u);   // word[5] 与可见性无关照写（M-3T-c 口径）
+		CHECK(f.rows[base + 0u].groupCountX == 1u);      // 主行不受影响
+		// ΣgcX 少掉钉段那一枚；C(x=4.5) 在 c1/c2 本就不可见（闭式见文件头 visClosed）
+		CHECK(f.segments[c - 1u].taskCount == (c <= 2u ? 2u : 3u));
+	}
+}
+
+TEST_CASE("N10 P3 生效档：容量闸门把钉段行**算进去**（少算 = 静默越界写进下一帧槽）") {
+	// 载体容量锚（wireMeshletShadowArgs）与本处 rowsPerCascade 必须同式：这条钉的是
+	// "scanGate 侧算上了钉段行"。若 scanGate 漏加，3 主行 × 3 = 9 ≤ 11 → 不回落 → 实际写
+	// 12 行越界踩进下一帧槽（录制期 upload 会拒，但 DrawCall 已发出 = 雷 3 的形态）。
+	MdiFixture f;
+	f.ctx.sliceRows = 11u;  // 4 × 3 = 12 > 11 ⟹ 必须回落
+	f.prepare(10u);
+	const auto cands = makePinnedCands(1.0f, 1.0f);
+	f.emit(std::span<const ShadowCandidate> { cands });
+	CHECK(f.segments.empty());
+	CHECK(f.rows.empty());
+	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c)
+		CHECK(countMdi(f.out[c]) == 0u);  // 回落 = 逐条形态原样画（不静默半切）
+	// 阳性对照：同一批候选，容量给够 12 就不回落（区分"回落了"与"根本没生效"）
+	MdiFixture ok;
+	ok.ctx.sliceRows = 12u;
+	ok.prepare(10u);
+	ok.emit(std::span<const ShadowCandidate> { cands });
+	CHECK(ok.segments.size() == 3u);
+}
+
+TEST_CASE("N10 P3 生效档：无钉段候选的形态与 P2 逐条同（行数/落点/同源 pair 一字不动）") {
+	// 门关逐位不变在 MDI 侧的形状证据：钉段四字段全 0 时，行表与 ★M-1b 的闭式完全一致。
+	MdiFixture f;
+	f.prepare(10u);
+	const auto cands = makeCands();  // 全部无钉段
+	f.emit(std::span<const ShadowCandidate> { cands });
+	REQUIRE(f.rows.size() == 9u);
+	const uint32_t expRow[3] = { 0u, 3u, 6u };
+	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c) {
+		CHECK(f.segments[c - 1u].firstRow == expRow[c - 1u]);
+		CHECK(f.segments[c - 1u].rowCount == 3u);
 	}
 }
 

@@ -172,7 +172,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
 			meshletKeys.push_back(k);
-	CHECK(rules.size() == 40u);       // 独立行（18 行 nullptr 挂号 + 22 行谓词；债-129 S2：
+	CHECK(rules.size() == 41u);       // 独立行（18 行 nullptr 挂号 + 23 行谓词；债-129 S2：
 	                                  // meshlet.debug/tint 三条 → meshlet.instrument 一条，
 	                                  // meshlet.switch 两条 → meshlet.mode 一条（互斥行整删）；
 	                                  // csm.slope_bias 批：预留空块的 `{"csm",…,nullptr}` 挂号行

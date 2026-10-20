@@ -136,14 +136,14 @@ constexpr std::string_view kMsgMeshletMdiShadow{
 	"还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）"};
 
 /**
- * shadow_proxy（N10 P2 钉段表）的宿主 = assets（MustL0 段住在簇产物 v2 尾部），消息里必须
- * 与「本批零消费者」分开写清 —— 后者**不是**孤立组合（门开且 assets 开时它照样建表打日志），
- * 混进本条会让「P2 只建表不接画面」这条被读成「这键没生效」。
+ * shadow_proxy（N10 P2 钉段表）的宿主 = assets（MustL0 段住在簇产物 v2 尾部）。
+ * P3 接上消费点后补第二脚：钉段 draw 是一条**簇** draw（12B push + mesh shader 条目），
+ * 宿主 = 阴影簇路径生效 ⟹ 还需 `shadow_lod ≥ 0`。两脚写全等式 = 与 mdi_shadow 同形态。
  */
 constexpr std::string_view kMsgMeshletShadowProxy{
-	"shadow_proxy 读的是簇产物 v2 尾部的 MustL0 段（宿主 = meshlet.assets）⟹ 本组合下产物根本没加载，"
-	"钉段表必然建不出来。⚠ 另注：P2 本批**零消费者**（只建表 + 打 INFO 读数，接消费点 = P3），"
-	"所以宿主成立时它也不改变任何一帧画面 —— 那是本批的交付形态，不是孤立组合"};
+	"shadow_proxy 的宿主两脚 = meshlet.assets（MustL0 段住在簇产物 v2 尾部）+ shadow_lod ≥ 0"
+	"（钉段 draw 是一条**簇** draw，用的就是阴影簇管线条目；shadow_lod = -1 时全场景走旧管线，"
+	"钉段无处可发）⟹ 本组合下一条钉段 draw 都不会发，画面与门关逐位相同"};
 
 /**
  * 独立申报行（按来源分三段：diagnostics / shadow / runtime.lua **meshlet 块**）。
@@ -309,6 +309,11 @@ const GateRule kGateRules[]{
 		// 残留行只报 shadow_lod < 0 那条；assets 关由 meshlet 块出声（谓词已删 owner 项；
 		// 消息留原文等式「= meshlet.assets + shadow_lod ≥ 0」——宿主两脚写全才不误导读者）
 		[](const Ctx& c) { return c.runtime.meshletMdiShadow
+			&& c.runtime.meshletAssets && c.runtime.meshletShadowLod < 0; }},
+	{"meshlet.shadow_proxy", GateSeverity::warn, kMsgMeshletShadowProxy,
+		// N10 P3 第二脚（同 mdi_shadow 形态）：assets 关由 meshlet 块出声，本行只报
+		// 「assets 开着而 shadow_lod = -1」——钉段 draw 是簇 draw，旧管线没有能画它的条目。
+		[](const Ctx& c) { return c.runtime.meshletShadowProxy
 			&& c.runtime.meshletAssets && c.runtime.meshletShadowLod < 0; }},
 };
 

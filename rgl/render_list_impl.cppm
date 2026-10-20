@@ -25,6 +25,7 @@ import runtime_config;  // SsrTuning / WetTuning（批 15.1 参数面 + 批 15.2
 import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 13.5 起 fillTaaData 要用）
 import meshlet_ranges;  // ClusterRangeTable（★1-a1i 簇区间表的 registry ctx，装配层写、本层只搬 span）
 import meshlet_lod;     // MeshletShadowLodTable（★18-B2 阴影远级联 LOD 选级表，同为 registry ctx）
+import shadow_proxy_types;  // ShadowProxyTable / pinActive（N10 P3 钉段：ctx 读表 + texel 门判据）
 import meshlet_cull_types_generated;  // kSlotsPerCluster（★1-a2-i 规格常量，反射生成）
 
 namespace RGL {
@@ -122,6 +123,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
     std::span<const ShadowCandidate> cands, uint32_t objectSlotCount,
     std::vector<RGL::ShadowDrawArgs>& shadowArgs,
     std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
+    std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
     std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out,
 	const MdiShadowEmitContext* mdi = nullptr) {
 	glm::vec3 casterMin{0.0f}, casterMax{0.0f};
@@ -135,7 +137,8 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	const uint32_t snapGrid = shadowTileSize(shadowAtlasColumns(kActiveShadowCascades));
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
 		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, snapGrid);
-	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, shadowMeshletArgs, out, mdi);
+	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, shadowMeshletArgs,
+		shadowMeshletPinnedArgs, out, mdi);
 	return volumes;
 }
 
@@ -228,7 +231,8 @@ void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::MaterialAsset
  */
 void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset& mat,
     const glm::vec3& worldCenter, float worldRadius, uint32_t objectSlot,
-    const MeshletShadowLodTable* lodTable, std::vector<ShadowCandidate>& out) {
+    const MeshletShadowLodTable* lodTable, const ShadowProxyTable* proxyTable, float worldScale,
+    std::vector<ShadowCandidate>& out) {
     if (!shadowFormPlan(shadowConfig()).drawAtlas
         || asset.shadowPipelineIndex == kInvalidPipelineIndex || mat.alphaModeBlend)
         return;
@@ -258,6 +262,19 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
         cand.meshletMdiPipeline = asset.shadowMeshletMdiPipelineIndex;
         cand.meshletGroups = lod.count;  // 簇数；×2 换算在 emitShadowCasters（唯一真相源）
         cand.clusterStart = lod.start;
+        // N10 P3 钉段（🔴 嵌在本 `if` **内部**是结构性的，不是省事）：钉段 draw 是一条**簇**
+        // draw，宿主 = 上面四条判据成立后的 `meshletPipeline`。可切不成立（门关 / doubleSided /
+        // 无产物）时根本没有能画簇的条目，钉段无处可发 —— 与其发一条画不出来的 draw，
+        // 不如让四字段保持全 0（= 现行为）。
+        // ⚠ 由此得出一条**生效前置**：`meshlet.shadow_proxy` 需要 `meshlet.shadow_lod ≥ 0`。
+        // 申报在 gate_lint（meshlet.shadow_proxy 规则），不在这里重述配置组合。
+        if (proxyTable != nullptr && objectSlot < proxyTable->bySlot.size()) {
+            const auto& pin = proxyTable->bySlot[objectSlot];
+            cand.pinnedStart = pin.start;
+            cand.pinnedCount = pin.count;
+            cand.pinnedRadius = pin.radius;
+            cand.pinnedWorldScale = worldScale;
+        }
     }
     out.push_back(cand);
 }
@@ -267,6 +284,19 @@ void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::MaterialAsset&
 // partition render_list:mdi（文件代码行红线 500；判据与回落规则的权威注释在那份里，本单元
 // 只留 system 管道：makeMdiShadowContext 组 ctx、buildShadowVolumes 经接口声明调用导出接缝
 // emitShadowCasters）。拆出为纯结构搬运，无行为改动。
+
+/**
+ * 定义（接口声明与「为什么收成一条接缝」→ render_list.cppm）。
+ *
+ * 表达式**逐字**保持 `fillShadowData` 原来那一份（`r * 2.0f / tile`，不是 `2.0f * r / tile`）：
+ * 两者对同一组操作数按 IEEE754 恒等，但"逐字同"让「收口没改数值」可以一眼核对，
+ * 而不需要读者去论证乘法可交换。
+ */
+float shadowTexelSize(float xyRadius) {
+	return xyRadius * 2.0f / static_cast<float>(
+		shadowTileSize(shadowAtlasColumns(kActiveShadowCascades)));
+}
+
 /**
  * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 接缝 = shadowPassEnabled
  * 显式入参取代内部单例读取，调用点传形态决策表的 `drawAtlas`；forceCascade 同走入参，
@@ -300,7 +330,7 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
         splits[c] = c + 1u < kActiveShadowCascades
             ? cascadeSplitDistance(shadowNear, shadowFar, c, kActiveShadowCascades)
             : kNoFar;
-        texels[c] = volumes[c].xyRadius * 2.0f / static_cast<float>(shadowTileSize(cols));
+        texels[c] = shadowTexelSize(volumes[c].xyRadius);
     }
     // 🔴 诊断键（csm.force_cascade）只覆写**写进 scene data 的那一份** splits：上面整个循环
     // 与 volumes / shadowNear / shadowFar 照常执行 ⟹ 级联几何仍是真实几何，钉级换的只是
@@ -575,6 +605,9 @@ void resizeFrameStorage(RenderListState& state, uint32_t objectSlotCount) {
 	state.shadowArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
 	// 簇化轴 ★18-B2：阴影簇路径 push 数组（ShadowMeshletDrawArgs 12B，同一分块公式）
 	state.shadowMeshletArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
+	// N10 P3 钉段 draw 的 push 数组（🔴 **独立一块**，与上面同分块公式：同一 (级联, objectSlot)
+	// 现在可能有两条 draw，共用槽位会让钉段那条把常规那条的 clusterStart 覆盖掉）
+	state.shadowMeshletPinnedArgs.resize(static_cast<size_t>(kActiveShadowCascades) * objectSlotCount);
 	// ★M-1b：MDI push 存储（**每级联 1 槽**，下标 = 分块号，非 objectSlot 分块——一级联一条
 	// MDI draw，push 只装 {rowBase, cascade, 0}）
 	state.shadowMeshletMdiArgs.resize(kActiveShadowCascades);
@@ -637,6 +670,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 簇化轴 ★18-B2：阴影远级联 LOD 选级表（装配层 wireClusterRangeTable 判定后 emplace，
 	// 本层只读；不 emplace = 门关 = 候选全部不可切 = 逐位不变，「存在即生效」同 MeshletSwitchOn）
 	const auto* shadowLodTable = rg.ctx().find<MeshletShadowLodTable>();
+	// N10 P3 阴影代理钉段表（同为 registry ctx，存在即生效）：门关 = 装配层根本不建 = nullptr
+	// = 候选的钉段四字段全 0 = **一条 draw 都不多发**（逐位不变的构造性保证，不靠"读了但结果一样"）。
+	const auto* shadowProxyTable = rg.ctx().find<ShadowProxyTable>();
 
 	// 循环前一次性 resize（objectSlot 稠密 [0, NextObjectSlot.next)，Phase 6 instancing）：
 	// 循环内 resize 触发 realloc 会使先前存入 DrawCall 的 span 悬空（帧 0 确定性 UAF——
@@ -715,11 +751,10 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 				cullArgs.push_back(args);
 			// 剔除（groupCount 守卫后：只统计真图元）——node-local 球 × modelMatrix → 世界球测 6 面
 			const glm::vec3 wc = glm::vec3(modelMatrix * glm::vec4(cull.center, 1.0f));
-			const float scale = std::max({glm::length(glm::vec3(modelMatrix[0])),
-				glm::length(glm::vec3(modelMatrix[1])), glm::length(glm::vec3(modelMatrix[2]))});
+			const float scale = worldScaleOf(modelMatrix);  // 口径与启动期读数表同源（scene_context）
 			const float worldRadius = cull.radius * scale;
 			collectShadowCasters(asset, mat, wc, worldRadius, meshRef.objectSlot,
-				shadowLodTable, shadowCandidates);
+				shadowLodTable, shadowProxyTable, scale, shadowCandidates);
 			if (!sphereInFrustum(frustum, wc, worldRadius))
 				return;
 			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 走 opaque（shader 内 discard，Phase 8 C1）
@@ -749,7 +784,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	const auto mdiCtx = makeMdiShadowContext(rg, state, frameSlot);
 	const std::array<ShadowVolume, kActiveShadowCascades> shadowVolumes = buildShadowVolumes(
 		primary, cascadeSpheres, shadowCandidates, objectSlotCount, state.shadowArgs,
-		state.shadowMeshletArgs, shadowCasters, mdiCtx ? &*mdiCtx : nullptr);
+		state.shadowMeshletArgs, state.shadowMeshletPinnedArgs, shadowCasters,
+		mdiCtx ? &*mdiCtx : nullptr);
 	// 批 10.7 高亮通道：把 SelectedObject ctx 的选中材质 + 过滤表搬进 draw list（执行器
 	// 据此过滤）。entity==null（未选中/已取消）→ hasSelection=false，pass 零 draw。
 	if (const auto* sel = rg.ctx().find<SelectedObject>();

@@ -28,6 +28,7 @@ import vk_renderer;  // Renderer（★0.5-b2 setMeshletOverlayDepthCompareOp 目
 import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同值）+ SceneDataService（★1-a2-i 剔除服务入参）
                       // + kActiveShadowCascades（★M-1a：MDI 级联段数 = 本值 − 1，c0 恒旧路径）
 import meshlet_lod;   // MeshletShadowLodTable（★M-1a：载体的生效事实与「每段行数上界」的来源）
+import shadow_proxy_types;  // ShadowProxyTable（N10 P3：钉段行也占 sliceRows 上界的一行）
 import meshlet_shadow_args;  // MeshletShadowArgsService（★M-1a：真 MDI 行表的 GPU 载体，装配层持有）
 import render_list;          // MeshletMdiShadowActivation（★M-1b：第⑤步 emplace 的生效标记，采集侧读它）
 import frame_session;        // FrameSession::kFramesInFlight（★M-1a：ring×2 的轮转节奏唯一真相源）
@@ -464,10 +465,12 @@ void bakeShadowMeshletEntries(const UploadedAssets& uploaded, ShaderRegistry& pi
  * `MDI 级联段数 × 每段行数上界`，两个因子各有出处：
  *  · **段数 = `kActiveShadowCascades − 1`**（🔴 c0 恒旧路径，§18.6 第一刀零改动；IZB mask 重放
  *    按 8B push 读 c0 段靠的就是这条）⟹ c1..c3 = 3 段；
- *  · **每段行数上界 = 选级表里 `count > 0` 的 objectSlot 数**：每个可切候选占**自己**一个
- *    objectSlot（下标 = `MeshRef.objectSlot` = shader 的 objectIndex），所以它是「一段能有多少
- *    行」的**上界**而不是精确值——差的那几行正是 doubleSided / blend 这些「有选级条目但不进
- *    MDI」的实体（本机真产物 = 1591 上界 vs §19.5 的 1530 可切）。按上界建 ⟹ 结构上不可能
+ *  · **每段行数上界 = 选级表里 `count > 0` 的 objectSlot 数 + N10 P3 钉段表里 `count > 0` 的
+ *    objectSlot 数**：每个可切候选占**自己**一个 objectSlot（下标 = `MeshRef.objectSlot` = shader
+ *    的 objectIndex），钉段候选再多占**一行**（行照发、texel 门只决定它的 gcX，口径必须与
+ *    `mdiScanGate` 同式），所以它是「一段能有多少行」的**上界**而不是精确值——差的那几行正是
+ *    doubleSided / blend 这些「有选级条目但不进 MDI」的实体（本机真产物 = 1591 上界 vs
+ *    §19.5 的 1530 可切）。按上界建 ⟹ 结构上不可能
  *    越界写，而多出来的行恒 0（`gcX = 0` = 空转，§19.2 D4 的孔洞流本来就是合法形态）。
  *    🔴 不在这里重述 `collectShadowCasters` 的四条判据（那是第三处真相源）。
  * @param registry 场景 registry（读 `MeshletShadowLodTable` = 生效事实；🔴 必须注册之后）
@@ -486,6 +489,12 @@ std::unique_ptr<MeshletShadowArgsService> wireMeshletShadowArgs(entt::registry& 
 	uint32_t rowsPerCascade = 0;
 	for (const auto& entry : lod->bySlot)
 		rowsPerCascade += entry.count > 0u ? 1u : 0u;
+	// N10 P3 钉段行：有钉段的 objectSlot 每个**多占一行**（行照发、texel 门只决定 gcX，口径 →
+	// render_list:mdi 的 mdiScanGate/mdiCascadeInputs，两处必须同式否则容量闸门会误回落）。
+	// 门关 = ctx 没这张表 = 加 0 = sliceRows 逐位不变（载体容量本身不进锚，但少算会静默回落）。
+	if (const auto* proxy = registry.ctx().find<ShadowProxyTable>(); proxy != nullptr)
+		for (const auto& pin : proxy->bySlot)
+			rowsPerCascade += pin.count > 0u ? 1u : 0u;
 	// 级联段数：c1..cN（🔴 c0 恒旧路径，不进表）。写成减法而不是字面 3 = 切级联时不漏校验
 	// （同 frame_draw_list 对 `kActiveShadowCascades` 的那条纪律）。
 	const uint32_t mdiCascades = kActiveShadowCascades - 1u;

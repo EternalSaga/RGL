@@ -30,6 +30,25 @@ export struct Transform {
 };
 
 /**
+ * 对象矩阵的**世界换算**（资产局部单位 → 世界米）= 三列基向量长度的最大值。
+ *
+ * 为什么取 max 而不是取 X 列：scene.lua 的 scale 是均匀的（配置注释："scale(均匀) 全可选"），
+ * 均匀下三列等长、取哪列都一样；非均匀时取 max 让所有"由尺寸推结论"的判据**只会偏保守**
+ * （包围半径偏大 → 少剔；钉段直径偏大 → 多钉），失效方向落在安全侧。
+ *
+ * 收成一条式子的理由（N10 P3）：同一个量原本写了两遍（`renderListSystem` 算候选世界包围半径
+ * 那三行，与 `main:shadow_proxy` 启动期读数表那三行）。两处各写一遍 = 「启动期读数表算出的
+ * 活跃条目数」与「运行期真正钉不钉」可以静默分家。
+ * ⚠ 两处喂的矩阵**本来就不同**（运行期 = `spin.matrix * tf.world`，启动期 = `tf.world`）：
+ * spin 是纯旋转、不改基向量长度，所以同一个函数喂两个矩阵给出同一个数——这是"共用式子"
+ * 而不是"共用输入"，别说反了。
+ */
+export inline float worldScaleOf(const glm::mat4& m) {
+	return std::max({glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])),
+	    glm::length(glm::vec3(m[2]))});
+}
+
+/**
  * 父子关系：与 legacy 同款手写组件（legacy/render_core/gl/EnTTRelationship.hpp，
  * entt 3.16 无内置 Relationship 头）。parent = entt::null 表示根。
  * 单向（E5.2）：children 不存储，由 rg.view<Relationship> 按 parent 过滤派生

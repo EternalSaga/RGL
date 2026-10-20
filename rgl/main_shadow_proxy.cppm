@@ -1,7 +1,7 @@
 module;
 #include <entt/entt.hpp>
 #include <fmt/format.h>
-#include <glm/glm.hpp>                  // glm::length / max（worldScaleOf）
+#include <glm/glm.hpp>                  // glm::mat4（entityWorldScale 的入参类型）
 #include <glm/gtc/matrix_transform.hpp>  // glm::perspective（texel 读数表的规范投影，同 projectionSystem）
 
 // 入口模块 main 的分区实现单元（module main:shadow_proxy;）——N10 P2 阴影代理**钉段表**的装配半区。
@@ -40,21 +40,18 @@ namespace {
 constexpr std::array<float, 8> kShadowFarBands { 0.5f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f, 64.0f };
 
 /**
- * 一个实体的世界换算（产物局部单位 → 米）= 实体 world 矩阵三列基向量长度的**最大值**。
+ * 一个实体的世界换算（产物局部单位 → 米）。🔴 式子本体在 `scene_context` 的 `worldScaleOf`
+ * （N10 P3 收口：运行期算候选世界包围半径那三行原本与本函数各写一遍）。
  *
- * scene.lua 的 scale 是均匀的（配置注释："position/rotation/scale(均匀) 全可选"），取 max 而不
- * 是取 X 列是为了在非均匀缩放下也**只会把门判松**（半径偏大 ⟹ 多钉不漏钉），与
- * `ShadowProxyTable::Entry::radius` 的保守方向同侧。
- * 🔴 只在启动期读（texel 读数表的输入）；运行期真值归消费者（P3）从当帧矩阵取。
+ * 为什么取三列最大值而不是 X 列、以及它的保守方向 → 那份注释。
+ * 🔴 只在启动期读（texel 读数表的输入）；运行期真值由 `renderListSystem` 从当帧
+ * `spin.matrix * tf.world` 取（spin 是纯旋转，不改基向量长度 ⟹ 同一个数）。
  */
-float worldScaleOf(const entt::registry& registry, entt::entity entity) {
+float entityWorldScale(const entt::registry& registry, entt::entity entity) {
 	const auto* transform = registry.try_get<Transform>(entity);
 	if (!transform)
 		return 0.0f;  // 拿不到变换 = 不算门（pinActive 在 worldScale=0 下恒 false，偏保守）
-	const auto& m = transform->world;
-	const glm::vec3 scales { glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])),
-		glm::length(glm::vec3(m[2])) };
-	return glm::max(scales.x, glm::max(scales.y, scales.z));
+	return worldScaleOf(transform->world);
 }
 
 /**
@@ -93,7 +90,8 @@ void logShadowProxyTexelGate(entt::registry& registry, const ShadowProxyTable& t
 	const float nearQ = quantizeShadowDistance(camera.nearPlane);
 	logger->info("shadow proxy: texel 门读数表（§3.2 后果 3；判据 = 被钉段直径 2·radius·worldScale ≥ "
 	             "本级纹素，K=1 写死无旋钮）—— 级联几何 = computeCascadeSpheres（与运行期同一函数），"
-	             "纹素 = 2·球半径/单块边长（同 fillShadowData 的 shadowTexelSizes）；相机 = 配置机位 "
+	             "纹素 = shadowTexelSize 接缝（与 fillShadowData 写进 scene data 的、P3 emit 判钉段用的"
+	             "同一条式子）；相机 = 配置机位 "
 	             "fov={:.4f}rad aspect={:.4f} 量化near={}m tile={}px；🔴 运行期 near/far 随 SceneBounds "
 	             "自适应 ⟹ 本表是量级与跨档跳变点读数，不是某一帧的真值",
 		camera.fov, static_cast<double>(extent.width) / static_cast<double>(extent.height), nearQ,
@@ -103,7 +101,7 @@ void logShadowProxyTexelGate(entt::registry& registry, const ShadowProxyTable& t
 		std::string line = fmt::format("shadow proxy:   far 档 {:>6.2f} m ⟹ texel", farBand);
 		std::string counts = "活跃 objectSlot";
 		for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-			const float texel = 2.0f * spheres[c].radius / tile;
+			const float texel = shadowTexelSize(spheres[c].radius);
 			uint32_t active = 0;
 			for (size_t s = 0; s < table.bySlot.size(); ++s)
 				active += pinActive(table.bySlot[s], worldScaleOfSlot[s], texel) ? 1u : 0u;
@@ -149,7 +147,7 @@ ShadowProxyLookups buildShadowProxyLookups(entt::registry& registry, const Uploa
 		if (primOfSlot.empty())
 			primOfSlot.assign(slotCount, kShadowProxyNoPrim);
 		primOfSlot[meshRef.objectSlot] = hit->second.second;
-		lookups.worldScaleOfSlot[meshRef.objectSlot] = worldScaleOf(registry, entity);
+		lookups.worldScaleOfSlot[meshRef.objectSlot] = entityWorldScale(registry, entity);
 	});
 	return lookups;
 }
@@ -253,7 +251,8 @@ void wireShadowProxyTable(entt::registry& registry, const UploadedAssets& assets
 		return;  // 已 error 出声：不 emplace = 与门关逐位相同
 	auto& stored = registry.ctx().emplace<ShadowProxyTable>(std::move(built->table));
 	if (logger)
-		logger->info("shadow proxy: 钉段表已装配（N10 P2，🔴 **本批零消费者**，接消费点 = P3）—— "
+		logger->info("shadow proxy: 钉段表已装配（消费点 = P3 已接：c1..c3 对过 texel 门的候选"
+		             "**多发一条选级恒 0 的 draw**，门开态画面会变）—— "
 		             "MustL0 条目={}（对账打包侧 --stats 的受影响 prim 数） 被钉 objectSlot={} "
 		             "Σ被钉簇数={} 表体积={}B（{} 槽 × 12B）",
 		    built->productEntries, built->pinnedSlots, built->sumPinnedClusters,
