@@ -206,7 +206,13 @@ std::vector<std::byte> buildProduct(const ProductSpec& spec) {
 		clusters[i].vertCount = static_cast<uint32_t>(c.remap.size());
 		clusters[i].triOffset = triOff;
 		clusters[i].remapOffset = remapOff;
-		std::memcpy(tris + triOff, c.locals.data(), c.locals.size());
+		// 🔴 空簇必须跳过这次 memcpy：`c.locals` 为空时 `data()` 是 nullptr，而
+		// `memcpy(dst, nullptr, 0)` 按 C 标准是 UB（两个指针实参即使在 n=0 时也必须是
+		// 可解引用的地址）。UBSan 实测点名本行（2026-10-20，本文件「triCount = 0 的簇」
+		// 用例）；今天不出事只因为 glibc 的 memcpy 对 n=0 直接返回，换 libc 或换优化档
+		// 就是未定义行为——本用例造的正是空簇，绕不开。
+		if (!c.locals.empty())
+			std::memcpy(tris + triOff, c.locals.data(), c.locals.size());
 		for (size_t r = 0; r < c.remap.size(); ++r)
 			remap[remapOff + r] = c.remap[r];
 		triOff += static_cast<uint32_t>(c.locals.size());

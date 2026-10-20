@@ -10,10 +10,13 @@ import rlvk;
  * = CP 超时，不给"GPU 当时在访问哪个地址 / 执行哪条指令"。本模块把 `VK_KHR_device_fault`
  * （回落 `VK_EXT_device_fault`）接进来，在 device lost 之后抓一次报告并逐条打日志。
  *
- * ## 🔴 空报告是**结论**，不是失败
- * 纯 hang（CP 超时、没有任何页故障）本来就没有 fault 可报。所以"报告为空"必须**明打**成
- * 「本次是纯 hang 无 fault」——这条负读数用来排除"驱动有 fault 但我们没读到"这个分支。
- * 把空报告打成静默或打成"查询失败"，就等于把这次归因白做。
+ * ## 🔴 空报告是**有范围的负读数**，不是"无 fault"
+ * "报告为空"必须**明打**（静默 = 把"查了没有"读成"没查"），但它只说明**驱动可见面**没有
+ * fault，**不**说明没有 fault。本项目的实测就是这条区分的学费：device_fault 八次报空，
+ * 而内核 devcoredump 照样抓到 `[gfxhub] Page fault observed` + fault 地址恰 = 0x0（债-140）
+ * ——fault 存在，只是没进驱动的 fault ring。⟹ 这条读数的正确用法是把嫌疑**收窄**（从"驱动
+ * 可见的 GPUVM 越界"收到"驱动不报的那类"），**不是**"排除越界"。
+ * 三种打法都把这次归因做废：静默、打成"查询失败"、打成"无 fault"。
  *
  * ## 两后端的差别（决定为什么 KHR 优先）
  *  · `VK_EXT_device_fault`（rev 2）：`vkGetDeviceFaultInfoEXT` **只能在 device 已 lost 后**查，
@@ -137,12 +140,14 @@ export struct FaultReportView {
 export std::string formatFaultReport(const FaultReportView& report);
 
 /**
- * 空批次的读数（🔴 本模块最重要的一条**负读数**）。
+ * 空批次的读数（🔴 本模块最重要的一条**负读数**，措辞口径 2026-10-20 被实测改过一次）。
  *
- * 纯 hang（CP 超时、没有任何页故障）本来就没有 fault 可报，所以"报告为空"必须打成
- * 「本次是纯 hang 无 fault，不是没查到」——它排除的是"驱动有 fault 但我们没读到"这个分支。
- * 与"查询失败"那条出口（措辞含『无读数，不能据此判定没有 fault』）严格分开：两者对
- * 归因的含义相反。
+ * 它说的是"**驱动可见面**无 fault"，并且必须自带一句"这不等于「无 fault」"——因为本项目的
+ * 八次 hang 里本模块恒报空，而内核 devcoredump 抓到了 `[gfxhub] Page fault observed`
+ * @ VA 0x0（债-140）。旧措辞「本次是纯 hang 无 fault」把这条读用成了"排除越界"，方向是错的。
+ *
+ * 与"查询失败"那条出口（措辞含『无读数』）严格分开：那条连驱动可见面都没读到，本条读到了、
+ * 是空的。两者对归因的含义不同，混同 = 把"驱动不报的那类"又读回"没 fault"。
  */
 export std::string describeEmptyFaultBatch(DeviceFaultBackend backend);
 
@@ -167,7 +172,7 @@ export ExtFaultCapacity planExtFaultCapacity(uint32_t addressInfoCount, uint32_t
  * device lost 之后抓一次 fault 报告并逐条打日志（**只在退出路径调用**）。
  *
  * 三条出口，每条都出声：① 通路未启用 → INFO 点名"没探测到扩展"；② 抓到 → 每条一版 ERROR
- * （`formatFaultReport`）；③ **报告为空** → ERROR 明打"本次是纯 hang 无 fault，不是没查到"。
+ * （`formatFaultReport`）；③ **报告为空** → ERROR 明打"驱动可见面无 fault（≠ 无 fault）"。
  * @param device 已 lost 的 device（EXT 路径要求 device 已 lost；KHR 路径任意时刻可调用）
  * @param support `DeviceContext::getDeviceFaultSupport()`
  * @param context 调用点定位串（例如 "VK_ERROR_DEVICE_LOST on submit"），进日志正文

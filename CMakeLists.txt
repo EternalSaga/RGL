@@ -24,6 +24,31 @@ if(RGL_WERROR)
         "$<$<CXX_COMPILER_ID:MSVC>:/WX>"
     )
 endif()
+# ─── ASan/UBSan 诊断构建（债-140 取证批首次引入；默认 OFF）─────────────────────
+# 为什么走 cache 选项、而不是每次手传三串 flags：sanitizer 必须**同时**进编译与链接，
+# 且对 C++20 modules 的 BMI 生成一致。手传最容易漏的两处 = 链接器（报缺 asan 符号，还算
+# 好发现）与 rlstd/logger 两个独立库（**编得过、链得过，但那两个 TU 根本没插桩**）——
+# 后者产出的是一份"看起来干净"的报告，而它什么都没测。半吊子 ASan 是假绿的标准形态，
+# 所以这里把开关做成全有或全无。
+# 用法：`just config` 之后 `just asan-on` / `just asan-off`（薄封装 cmake -DRGL_ASAN=…）。
+# 🔴 两条使用纪律（写在这里，因为它们的失效形态都是静默的）：
+#  ① **不要拿本构建做任何性能读数**——ASan 拖慢 2–5×，且它改变了时序（债-140 这种竞态
+#     问题的"没复现"因此不能读成"不存在"）；
+#  ② 运行期要 `ASAN_OPTIONS=detect_leaks=0`：vcpkg 依赖是非插桩预编译库，泄漏检测器
+#     看不见它们的分配器，会假红。
+option(RGL_ASAN "Instrument the WHOLE build with AddressSanitizer + UBSan (diagnostic only; never for timing)" OFF)
+if(RGL_ASAN)
+    if(MSVC)
+        # 显式拒绝而不是静默不生效：/fsanitize=address 的参数面与运行期配置完全不同，
+        # 没实测过的路线上跑出来的"干净"是最贵的一种假绿。
+        message(FATAL_ERROR "RGL_ASAN 只接 clang/GCC 路线（MSVC 的 /fsanitize=address 未验证过，勿开）")
+    endif()
+    # -fno-omit-frame-pointer + -g：ASan 报告的栈要能读到函数名与行号，否则等于没栈。
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+    message(STATUS "RGL_ASAN=ON：全构建插桩（address,undefined）——本构建的性能读数一律作废")
+endif()
+
 include(${PROJECT_SOURCE_DIR}/cmake/FindClangFormat.cmake)
 # Slang 编译器（slangc）：FetchContent 官方预构建，替代 vcpkg shader-slang port（见 cmake/SlangFetch.cmake）
 include(${PROJECT_SOURCE_DIR}/cmake/SlangFetch.cmake)

@@ -524,8 +524,8 @@ void faultPollTick(RGL::Renderer& renderer, bool faultPoll) {
  * ——设备都丢了，这是唯一一次问到"当时在访问哪个地址"的机会，没有理由再设门。
  * 通路未启用时它自己打一行 INFO 点名"没这能力"，不会静默。
  * 🔴 这里**不许**先调一次 pollDeviceFaults：KHR 规定每条报告只返回一次（"Each individual
- * fault report is returned exactly once"），先轮后抓 = 把报告吃掉，接着那条"报告为空 =
- * 纯 hang"就会打成**假负读数**。两条出口只能取其一。 */
+ * fault report is returned exactly once"），先轮后抓 = 把报告吃掉，接着出口 ③ 那条"驱动
+ * 可见面无 fault"就会打成**假负读数**（明明有报告，被上一次轮询消费掉了）。两条只能取其一。 */
 void faultCaptureOnLost(RGL::Renderer& renderer, std::string_view context) {
 	const auto& device = renderer.getDeviceContextRef();
 	reportDeviceFaultOnLost(device.getDevice(), device.getDeviceFaultSupport(), context);

@@ -309,7 +309,8 @@ void reportDeviceFaultOnLost(const vk::raii::Device& device, const DeviceFaultSu
 	auto collected =
 	    support.backend == DeviceFaultBackend::khr ? collectKhr(device, 0) : collectExt(device);
 	if (!collected) {
-		// 出口 ②：查询失败。措辞必须与"空报告"相反——这里**不能**得出"纯 hang"的结论。
+		// 出口 ②：查询失败。措辞必须与"空报告"那条相反——这里连驱动可见面都没读到，
+		// 既不能得出"有 fault"也不能得出"没有"。
 		if (logger)
 			logger->error("device fault: 查询失败（{}）—— fault 侧**无读数**，不可据此判定"
 			              "『没有 fault』: {}",
@@ -317,7 +318,8 @@ void reportDeviceFaultOnLost(const vk::raii::Device& device, const DeviceFaultSu
 		return;
 	}
 	if (collected->empty()) {
-		// 出口 ③：查到了，是空的 = 纯 hang。
+		// 出口 ③：查到了，是空的 = 驱动可见面无 fault（🔴 不等于"无 fault"，判据见
+		// describeEmptyFaultBatch 的注释——内核 devcoredump 抓到过本模块报空而 fault @ 0x0）。
 		if (logger)
 			logger->error("device fault: {} —— {}", context, describeEmptyFaultBatch(support.backend));
 		return;

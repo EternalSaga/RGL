@@ -10,6 +10,7 @@ import vkerror;
 import compute_access_log;  // B2-2：ComputeAccessLog（工厂在此追加访问记录；纯值模块，rlbase）
 import profiler;  // 批 9.5：applyDynamicState 的 vkcmd.count 计数（rlbase，只向下依赖）
 import rllogger;  // 批 M：RenderPipeline 构造期 SPV 解析失败退回全烘的 warn 出声
+import diagnostics;  // gpuav_compat（VVL GPU-AV 与本引擎 shader object 的兼容开关，默认关）
 
 namespace RGL {
 
@@ -860,8 +861,19 @@ export class RenderPipeline {
 
 		// DESCRIPTOR_HEAP + INDIRECT_BINDABLE 三段同值（后者：进 DGC execution set 的 shader
 		// 必须带，VUID-11032/11154；非 DGC 路无害，统一加免得管线表再分两类）
-		constexpr VkShaderCreateFlagsEXT kStageFlags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT
-			| VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT;
+		// 🔴 `diagnostics.gpuav_compat=true` 时**摘掉** INDIRECT_BINDABLE —— VVL 的 GPU-AV 装不了
+		// 带该 bit 的 shader object：实测 `vkCreateShadersEXT()` 报
+		//   "Unable to instrument shader using VkIndirectExecutionSetEXT validly … because of
+		//    GPU-AV's usage of VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC (If you don't need
+		//    VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT, turn it off)"
+		// 然后**自行关闭 GPU-AV**（"GPU-AV is being disabled"）⟹ 本引擎所有 shader object 静默
+		// 退回未校验，而 VVL 其余面照常干净 = 典型的"以为开了其实没开"。摘掉后 GPU-AV 正常装桩
+		// （实测 DescriptorHeapPass 计数 3–8、MeshShading 1）。
+		// 代价 = 走 DGC execution set 的管线会违 VUID-11032/11154 ⟹ 只在**不走 DGC** 的诊断跑里开
+		// （出厂默认 false；gate_lint 对 `gpuav_compat × dgc_static` 的组合出 warn）。
+		const VkShaderCreateFlagsEXT kStageFlags = VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT
+		    | (diagnostics().gpuavCompat ? VkShaderCreateFlagsEXT(0)
+		                                : VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT);
 		// 🔴 `NO_TASK_SHADER_BIT` **只在没有 task stage 时带**。该 bit 的语义是"本 mesh 不存在配对的
 		// task"，带上了还往 bindShaders 的 task 槽塞实句柄 = VUID-VkShaderCreateInfoEXT-flags-08695
 		// 的反向违例。**反过来漏带**的历史代价 = NVIDIA Xid 13 engine reset（mesh 不带该 bit 而 task

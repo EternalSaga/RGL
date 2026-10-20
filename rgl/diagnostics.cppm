@@ -85,6 +85,21 @@ export struct DiagnosticsConfig {
 	 * 关 = 零 Vulkan 调用（device lost 后的那次抓取不受本门影响，恒尝试）。
 	 */
 	bool faultPoll = false;
+	/**
+	 * VVL **GPU-AV 兼容模式**（默认关；只在诊断跑里开）。
+	 *
+	 * 做的事只有一件：创建 shader object 时**不带** `VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT`。
+	 * 为什么需要：GPU-AV 装不了带该 bit 的 shader object（它内部要用
+	 * `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC` 塞进 `VkIndirectExecutionSetEXT`），会打一条
+	 * Internal Error 然后**自行关闭 GPU-AV** —— 于是"开了 GPU-AV"与"没开"在日志上几乎同形，
+	 * 是典型的静默假绿。摘掉后 GPU-AV 正常装桩（实测 DescriptorHeapPass / MeshShading 都有计数）。
+	 *
+	 * 🔴 语义代价：该 bit 是进 DGC execution set 的 shader 的硬要求（VUID-11032/11154）。
+	 * 本引擎默认配置不走 DGC execution set，所以开了它 errors=0；但**与 `dgc_static` 同开 = 违例**
+	 * （gate_lint 出 warn）。它改变 shader object 的创建标志 ⟹ **本构建下的任何像素/性能读数
+	 * 都不代表交付形态**，只用于抓 GPU 侧的越界与空描述符。
+	 */
+	bool gpuavCompat = false;
 };
 
 /**

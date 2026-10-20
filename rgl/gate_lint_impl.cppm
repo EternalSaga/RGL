@@ -230,6 +230,12 @@ const GateRule kGateRules[]{
 		"零 Vulkan 调用、一条读数也不会出。看启动日志 \"Device device_fault: backend=… reportMasked=…\" "
 		"那行确认；device lost 之后那一次抓取不受本门影响，恒尝试",
 		[](const Ctx& c) { return c.cfg.faultPoll && !c.env.deviceFaultMasked; }},
+	{"gpuav_compat", GateSeverity::warn,
+		"gpuav_compat 摘掉了 VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT，而 dgc_static 要的正是它"
+		"（进 DGC execution set 的 shader 必须带，VUID-11032/11154）——两个同开 = 拿一个诊断开关去"
+		"破一条硬 VU。要测 GPU-AV 就先把 dgc_static 关掉；反过来，本门只要开着，**像素与性能读数就"
+		"都不代表交付形态**（shader object 的创建标志变了）",
+		[](const Ctx& c) { return c.cfg.gpuavCompat && c.cfg.dgcStatic; }},
 	{"cull_replay", GateSeverity::warn,
 		"cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay=\"gpu_sync\"，见 docs/cpu_perf_plan.md §4）",
 		[](const Ctx& c) { return c.cfg.dgcStatic && c.cfg.cullReplay != CullReplayMode::gpuSync; }},

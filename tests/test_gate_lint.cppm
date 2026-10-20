@@ -172,7 +172,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
 			meshletKeys.push_back(k);
-	CHECK(rules.size() == 42u);       // 独立行（18 行 nullptr 挂号 + 24 行谓词；债-129 S2：
+	CHECK(rules.size() == 43u);       // 独立行（18 行 nullptr 挂号 + 25 行谓词；债-129 S2：
 	                                  // meshlet.debug/tint 三条 → meshlet.instrument 一条，
 	                                  // meshlet.switch 两条 → meshlet.mode 一条（互斥行整删）；
 	                                  // csm.slope_bias 批：预留空块的 `{"csm",…,nullptr}` 挂号行
@@ -180,7 +180,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	CHECK(blocks.size() == 7u);       // csm / pcss / evssm / 三探针 / meshlet
 	CHECK(blockKeys.size() == 22u);   // 2 + 3 + 4 + 2 + 2 + 2 + 7（csm 两块键：slope_bias + force_cascade；
 	                                  // meshlet 块 7 枚 = N10 P2 加 shadow_proxy）
-	CHECK(echo.size() == 31u);
+	CHECK(echo.size() == 32u);
 	CHECK(shadowEcho.size() == 14u);
 	CHECK(meshletKeys.size() == 9u);  // 整块 9 枚（债-106 红线：接管整块 = 一枚都不能少；
 	                                  // 债-129 S2 起 debug+tint 合并为 instrument、
@@ -198,7 +198,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 去重门数钉在「独立行 ∪ 块条目」的并集上（= 三方来源键数之和）。
 	std::vector<std::string> unionGates = rules;
 	unionGates.insert(unionGates.end(), blockKeys.begin(), blockKeys.end());
-	CHECK(distinctGateCount(unionGates) == 54u);
+	CHECK(distinctGateCount(unionGates) == 55u);
 	// 反向：独立行与块条目吃的都必须是已知来源键（陈旧/拼错门名）。
 	auto known = [&](std::string_view k) {
 		return hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);
@@ -1241,6 +1241,31 @@ TEST_CASE("gate_lint warn 组：fault_poll 开了但 masked 上报没启用（�
 	{  // ③ 门关（出厂默认）+ 能力缺失 → 不喊（没人在等这份数据）
 		DiagnosticsConfig c;
 		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "fault_poll") == nullptr);
+	}
+}
+
+TEST_CASE("gate_lint warn 组：gpuav_compat × dgc_static（诊断开关去破硬 VU 的组合）") {
+	// gpuav_compat 摘掉 INDIRECT_BINDABLE，而 dgc_static 恰好需要它（VUID-11032/11154）。
+	// 三条用例堵三个方向：同开必须喊（这是唯一会真产 VU 违例的形态）、单开任一都不该喊
+	// （lint 的失败模式是常喊，见一条不该喊的就把人训练成忽略 warn）。
+	const auto noLight = passesOfNoLightGraph();
+	{  // ① 同开 → warn
+		DiagnosticsConfig c;
+		c.gpuavCompat = true;
+		c.dgcStatic = true;
+		const auto fs = lint(c, noLight, kHappyEnv, kShadowNoLight);
+		REQUIRE(find(fs, "gpuav_compat") != nullptr);
+		CHECK(find(fs, "gpuav_compat")->severity == GateSeverity::warn);
+	}
+	{  // ② 只开 gpuav_compat（本引擎默认形态：不走 DGC execution set）→ 不喊
+		DiagnosticsConfig c;
+		c.gpuavCompat = true;
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "gpuav_compat") == nullptr);
+	}
+	{  // ③ 只开 dgc_static（出厂默认 gpuav_compat=false）→ 不喊
+		DiagnosticsConfig c;
+		c.dgcStatic = true;
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "gpuav_compat") == nullptr);
 	}
 }
 

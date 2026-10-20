@@ -105,6 +105,18 @@ config COMPILER="default" BUILD_TYPE="Release":
     result = subprocess.run(cmake_cmd)
     sys.exit(result.returncode)
 
+# ASan/UBSan 诊断构建的开关（债-140 取证批；开关本体在根 CMakeLists 的 RGL_ASAN）。
+# 为什么单独成配方而不是文档里写一行 `cmake -B build -DRGL_ASAN=ON`：这条命令跑出来的
+# 报告是"抓到了"还是"没抓到"的唯一依据，而它只有在构建确实全量插桩时才成立——做成一门
+# 可复制的命令，比让每个人手拼 flags 少一种错法。
+# 🔴 跑引擎/测试要带运行期配置（vcpkg 依赖非插桩 ⟹ 必须关泄漏检测）：
+#   ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1:detect_stack_use_after_return=1 \
+#   UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1  just test
+asan-on:
+    @cmake -B {{ BUILD }} -DRGL_ASAN=ON
+asan-off:
+    @cmake -B {{ BUILD }} -DRGL_ASAN=OFF
+
 build:
     # ⚠ 退出码必须透传（`config` 一直是 `sys.exit(result.returncode)`，本配方此前漏了）：
     # 原先 `subprocess.call(...)` 的返回值没人接，**编译失败也返回 0**，于是任何

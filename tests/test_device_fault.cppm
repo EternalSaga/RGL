@@ -13,7 +13,8 @@ module;
  * ① 后端选错（启用了 EXT 却调 KHR 入口 = 在未启用的扩展上调入口点）；
  * ② 枚举翻译表漏一个值（新值静默落进"无地址信息"= 一条假负读数）；
  * ③ 地址区间算错（spec 的 lower/upper 闭式，算错就指错内存）；
- * ④ "空报告"与"查询失败"两条出口措辞混同（前者能得出"纯 hang"，后者**不能**）。
+ * ④ "空报告"与"查询失败"两条出口措辞混同（前者只能说**驱动可见面**没有，后者连可见面都
+ *    没读到；两者对归因的含义不同——而"可见面没有"本身**不**等于"无 fault"，见下）。
  * 这四件事全部落在纯函数上，本文件逐条钉。
  *
  * ## 🔴 已知不可达 / 缺口（写出来，别让「全绿」被读成「全验过」）
@@ -26,7 +27,8 @@ module;
  *   · `deriveDeviceFaultSupport` 要 PhysicalDevice（查 maxFaultCount），本文件只钉它不含
  *     设备的那半 —— `chooseDeviceFaultBackend`（优先级唯一落点）。
  *
- * ## 变异红线声明（每条"哪个变异让我红"；**八条全部实测** 2026-10-20，8/8 有红）
+ * ## 变异红线声明（每条"哪个变异让我红"；**九条全部实测**，最近一次 2026-10-20 本批重跑
+ * 9/9 有红——⑦ 因文案改口径拆成 a/b 两条，其余与上一批同）
  * 执行方式 = `/tmp/opencode/n10p4/mutate_df.py`（⚠ 该路径随重启即失，**留的是配方**：
  * `shutil.copyfile` 备份/还原不带 mtime 坑、禁 git checkout、每条显式
  * `cmake --build build --target rgl_tests` 并核对**构建自身**返回码、全部还原后重跑全量
@@ -38,7 +40,11 @@ module;
  *   ④ 同函数的 `precision <= 1` 改成 `< 1` → 红 precision=1 那条（边界，不是随便一个值）
  *   ⑤ `describeFaultFlags` 的表外位判据改成永不成立 → 红「位外点名」
  *   ⑥ `planExtFaultCapacity` 无视 `vendorBinaryEnabled` 直接透传 → 红「未启用必须传 0」
- *   ⑦ `describeEmptyFaultBatch` 文案改成与"查询失败"同义 → 红「两条出口必须可分」
+ *   ⑦a `describeEmptyFaultBatch` 去掉范围限定词（"**驱动可见面**无 fault"→"无 fault"）
+ *      → 红「『驱动可见面没有』须与『无 fault』可分」
+ *   ⑦b 同函数丢掉堵误读的那半句（"⚠ 这不等于「无 fault」"）→ 红同一条
+ *      （⑦ 原本是一条"文案改成与查询失败同义"，2026-10-20 devcoredump 推翻旧措辞后
+ *       拆成 a/b 两条：现在这条文案有**两个**不可删的半句，各钉各的）
  *   ⑧ `describeFaultAddressKind` 的 readInvalid 返回 writeInvalid 的串 → 红 2 条
  *      （两两不同 + formatFaultReport）
  * ⚠ 写变异的一条教训（本批一次通过，因为上一批踩过）：**弱化**判据而不是删掉它。
@@ -233,12 +239,22 @@ TEST_CASE("formatFaultReport：填了什么就出什么，没填的字段不编�
 	CHECK(formatFaultReport(readOne) != formatFaultReport(writeOne));
 }
 
-TEST_CASE("describeEmptyFaultBatch：『查了没有』必须与『没查成』在文本上可分") {
+TEST_CASE("describeEmptyFaultBatch：『驱动可见面没有』须与『无 fault』和『没查成』都可分") {
+	// 🔴 本用例的口径在 2026-10-20 被实测改过一次，改的理由比断言本身值钱：
+	// 旧文案写的是「本次是纯 hang 无 fault」，而 devcoredump 抓到内核层 `[gfxhub] Page fault
+	// observed` + fault 地址恰 = 0x0 ⟹ **驱动可见面报空 ≠ 无 fault**（fault 没进驱动的 fault
+	// ring）。旧措辞会把读者送到"排除 GPUVM 越界"那个错方向上，所以文案收窄成"驱动可见面"，
+	// 并显式堵一句"这不等于「无 fault」"。
+	// ⚠ 那次只改了实现没改本用例 ⟹ HEAD 红过一轮。教训：**改日志文案 = 改判据**，
+	// 断言这些串的测试必须同批改，否则"文案与判据分家"要等下一次换构建标志才现形。
 	const auto empty = describeEmptyFaultBatch(DeviceFaultBackend::khr);
-	// 这条负读数的两个半句都不可少：前半给结论（纯 hang），后半堵误读（不是没查到）
-	CHECK(empty.find("纯 hang") != std::string::npos);
-	CHECK(empty.find("不是没查到") != std::string::npos);
-	// 变异红线 ⑦：若把它改成与"查询失败"同义，本断言红（两条出口对归因的含义相反）
+	// 前半：范围限定词必须在（少了它就又变回"无 fault"那个过强结论）
+	CHECK(empty.find("驱动可见面") != std::string::npos);
+	// 后半：堵误读的那半句必须在，且要指到"无 fault"这个具体被堵掉的读法
+	CHECK(empty.find("不等于「无 fault」") != std::string::npos);
+	// 指向下一步取证（本模块自己不给结论兜底，把读者送去能给出答案的地方）
+	CHECK(empty.find("devcoredump") != std::string::npos);
+	// 变异红线 ⑦：与"查询失败"那条出口仍须可分（那条说的是调用本身失败、连"可见面"都没读到）
 	CHECK(empty.find("无读数") == std::string::npos);
 	CHECK(empty.find("VK_KHR_device_fault") != std::string::npos);  // 带后端，读数可归因
 	CHECK(describeEmptyFaultBatch(DeviceFaultBackend::ext).find("VK_EXT_device_fault")

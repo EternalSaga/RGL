@@ -64,6 +64,20 @@ return {
     -- 实测两者都有；探测结果看启动日志 "Device device_fault:" 那行）。
     fault_poll = false,
 
+    -- VVL GPU-AV 兼容模式（rgl/shader.cppm 的 shader object 创建标志；默认关）：
+    -- true = 创建 shader object 时**不带** VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT。
+    -- 为什么需要这一枚：GPU-AV 装不了带该 bit 的 shader object，会打一条 Internal Error 然后
+    -- **自行关闭 GPU-AV**（实测原文："Unable to instrument shader using
+    -- VkIndirectExecutionSetEXT validly … GPU-AV's usage of
+    -- VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC (If you don't need
+    -- VK_SHADER_CREATE_INDIRECT_BINDABLE_BIT_EXT, turn it off)"）——于是"开了 GPU-AV"与"没开"
+    -- 在日志上几乎同形。摘掉后 GPU-AV 才真的装桩（DescriptorHeapPass / MeshShading 有计数）。
+    -- 🔴 代价：该 bit 是进 DGC execution set 的 shader 的硬要求（VUID-11032/11154），所以
+    -- **不要与 dgc_static 同开**（gate_lint 会 warn）；且它改变 shader object 创建标志，
+    -- 本构建下的像素与性能读数都不代表交付形态。开它的正确姿势（GPU-AV 本体由 VVL 侧配置）：
+    --   VK_KHRONOS_VALIDATION_GPUAV_ENABLE=1 just smoke --set gpuav_compat=true
+    gpuav_compat = false,
+
     -- 批 11.3 HFTS/FTIZB 硬阴影（docs/hfts_izb_plan.md）：izb_shadow / izb_grid / izb_dump_frame
     -- 已迁出 → configs/shadow.lua 的 izb = { on, grid, dump_frame }（N6a，见上方迁出注释）。
 
