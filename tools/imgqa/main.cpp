@@ -1,8 +1,8 @@
 // imgqa CLI。子命令：selftest / check / refuse / args / attribution / faces / switch / izb / swim /
 // probe / temporal / temporal-residual / temporal-motion / temporal-feedback /
 // temporal-flicker / temporal-homography / aa-coverage / taa-swim / shadow-softness /
-// shadow-kernel-scale / shadow-grain / shadow-cascade-seam / blend-sort / diffstruct /
-// diffblock / note。
+// shadow-kernel-scale / shadow-grain / shadow-cascade-seam / shadow-caster-survival /
+// blend-sort / diffstruct / diffblock / note。
 // （权威清单 = `cli_table.cpp` 的注册表，本行只是路标。）
 //
 // ## 本文件 = **路由**，不是仪器
@@ -186,6 +186,8 @@ int dispatch(const std::string& cmd, const Args& P)
         // 本命令**零 flag**（机位/尺寸/帧号/带子/阈值都是量具的组成部分，能调 = 能调绿）
         // ⟹ 进这张表的前提成立。阈值**刻意不做成 flag**：可调 = 可被调绿。
         { "shadow-cascade-seam", cmdShadowCascadeSeam },
+        // 同上：零 flag；J1 阈值未定期只出 INFO（不进 rc），J2 是形状判据（无实测数字阈值）。
+        { "shadow-caster-survival", cmdShadowCasterSurvival },
         { "blend-sort", cmdBlendSort },
     };
     if (const auto meta = kMeta.find(cmd); meta != kMeta.end())

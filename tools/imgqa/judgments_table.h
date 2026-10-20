@@ -71,6 +71,13 @@ namespace RGL::imgqa {
 /// 📄 正文在 `judgments_table_seam.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& shadowCascadeSeamJudgments();
 
+/// 地基族 · **阴影遮挡体存活率（绝对量）**（`shadow-caster-survival`，2 条）：出厂档小块/近场
+/// 接触存活率两条下限（🔴 阈值未定 TODO(债-139)：运行期只出 INFO 不判）/ 本影面积存活率随 D
+/// 单调不增（形状判据）。与 shadow-cascade-seam 正交：那条量级间**差分**、本台量相对全量的
+/// **绝对量**（对「四级一起变差」结构失明的补位）。族仍是 Foundation，缝按**仪器**切。
+/// 📄 正文在 `judgments_table_survival.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& shadowCasterSurvivalJudgments();
+
 /// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
 /// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
 /// 📄 正文在 `judgments_table_ssr.cpp`。

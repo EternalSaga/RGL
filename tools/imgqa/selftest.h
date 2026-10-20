@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 52 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 54 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -26,6 +26,11 @@
 //                                    宽 33 斜坡 halfWidth=1=1/33）+ 翻转率精确分数与严格阈值 +
 //                                    线性域锚点 / eps / clip / band 是分母 + 四条守卫各一条抛，
 //                                    全部闭式不启引擎
+//     · `selftest_survival.cpp`    = **shadow-caster-survival 口径层**（阴影遮挡体存活率，债-139
+//                                    补位）：同图→四项恰 1.000 / 全 0→恰 0.000 / 🔴 立命断言
+//                                    「只丢小块总面积不变」合成对（面积存活率恰 1 而小块档恰 0）/
+//                                    消失-变淡各一条闭式 + 边界每半边 + 分档边界 + 8 邻接 +
+//                                    空档 NaN + 守卫各一条抛 + 闸门 C/D + 挂号，全部闭式不启引擎
 //     · `selftest_ao_residual.cpp` = `ao_metrics.cpp` 的度量层 + `temporal_residual.cpp` 的
 //                                    时域绝对残差（折叠 / 区域纪律 / τ 闭式 / 梯度能量）
 //     · `selftest_bands.cpp`       = **不读图、不启引擎的纯度量层**：bandTableOf 分带 /
@@ -52,7 +57,7 @@
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}                   # = 524
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}                   # = 561
 //   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。）
 //   🔴 改这个数字的仪式：只在**逐条可红**的断言进出时改。曾删掉 `topLevelValueOf` 的两条断言
 //   ——npos 分支经 findKeyHits 不可达 ⟹ 改前改后都绿，**买了信心不买覆盖**，那种断言不配进这个数。
@@ -140,7 +145,7 @@ std::string captureStdout(F fn)
     return out;
 }
 
-// ── 52 条测试的声明（定义按仪器族分散在十二个 TU；调用顺序只写在 `cmdSelftest`）──
+// ── 54 条测试的声明（定义按仪器族分散在十三个 TU；调用顺序只写在 `cmdSelftest`）──
 void testSrgb(Checker& c);
 void testObjectId(Checker& c);
 void testRegion(Checker& c);
@@ -174,6 +179,8 @@ void testShadowGrain(Checker& c);
 void testShadowSeam(Checker& c);
 void testShadowSeamGuards(Checker& c);
 void testShadowSeamSignalGates(Checker& c);
+void testShadowCasterSurvival(Checker& c);
+void testShadowCasterSurvivalGuards(Checker& c);
 void testDiffStructMetric(Checker& c);
 void testDiffStructDomainGuard(Checker& c);
 void testDiffBlockAnchors(Checker& c);

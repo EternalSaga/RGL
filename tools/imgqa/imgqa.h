@@ -1199,6 +1199,28 @@ int cmdShadowGrain();
  */
 int cmdShadowCascadeSeam();
 
+// ═══════════════════════════════ 阴影遮挡体存活率（shadow-caster-survival，债-139）
+//
+// 缺陷类 = **LOD 把细遮挡体的影子整个弄丢**（栏杆/窗棂/挂灯/牛腿/花箱），而级与级之间可以
+// 完全一致——`shadow-cascade-seam`（差分判据）对「四级一起变差」结构失明（主 agent 实测：改坏
+// 后 J1 = 0.000 满分绿而肉眼可见丢影子）。本命令量**绝对量**：参照 = `shadow_lod = -1`（四级
+// 全画原始几何 = 阴影的「应有样子」），对每个候选 D 出四类读数（本影面积存活率 / 分档小块
+// 存活率 / 消失 vs 变淡 / 近场带重算）。判据本体与全部口径理由 = `tools/imgqa/
+// shadow_caster_survival.cpp` 头注释；算子住 `shadow_survival_metric.{h,cpp}`，被 `just imgqa
+// selftest` 用闭式输入直接测。cov 与 shadow-grain / shadow-cascade-seam 同式同序。
+
+/**
+ * 阴影遮挡体存活率（18 臂 = 2 机位 × 9 臂：`none` 分母 + D ∈ {-1(参照),0,1,2,3,5,7,11}，
+ * **不钉级**）。**无 flag**：机位 / 尺寸 / 帧号 / 近场带 / 分档边界都是量具的组成部分。
+ * 四道闸门（全部抛 rc=3）：簇路径生效（与 seam 共用 `cluster_path_gate`）· 分母在场 +
+ * 覆盖度非零（复用 seam）· 🔴 参照臂自洽 = 恰 1.000（阳性锚点）· 🔴 参照臂与 test 臂不得
+ * 逐位相同（D=0 阳性对照跳过）。两条判决线：`shadow-caster-survival-factory`（🔴 阈值未定
+ * TODO(债-139)：只出 INFO 不判——本批交付物是扫描表 + 四道闸门）· `shadow-caster-survival-
+ * monotone`（本影面积存活率随 D 单调不增，逐机位；D 点 < 3 抛）。
+ * 🔴 跑在**交付配置**（仓库 `configs/`）上：合成 profile 无簇产物 ⟹ 不进簇路径 ⟹ 恒绿。
+ */
+int cmdShadowCasterSurvival();
+
 // ═══════════════════════════════════════════ 透明合成次序（blend-sort，债-132 结案）
 //
 // 缺陷本体不是某一处写错的代码，而是**透明没有深度排序**这件事本身：正确性全靠

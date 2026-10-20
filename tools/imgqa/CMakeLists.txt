@@ -26,6 +26,8 @@ add_executable(imgqa
     # `shadow-cascade-seam` 的 spec 段（同 grain 段的拆法：主表撞 500 行、specsSwimAndProbe
     # 撞 120 行，缝按仪器切）。
     cli_table_seam.cpp
+    # `shadow-caster-survival` 的 spec 段（同 seam 段的拆法，缝按仪器切）。
+    cli_table_survival.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -71,6 +73,10 @@ add_executable(imgqa
     # `shadow-cascade-seam` 判据段（3 条：LOD 归因增量 / 两 force 臂阳性锚点 / D 扫描形状），
     # 缝按仪器切（`judgments_table_grain.cpp` 把头注缝声明为「三条全部属于 shadow-grain」）。
     judgments_table_seam.cpp
+    # `shadow-caster-survival` 判据段（2 条：出厂档小块/近场存活率【阈值未定只报数】/ 面积存活率
+    # 随 D 单调不增），缝按仪器切（`judgments_table_seam.cpp` 把头注缝声明为「本段三条全部属于
+    # shadow-cascade-seam」）。
+    judgments_table_survival.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -109,6 +115,12 @@ add_executable(imgqa
     # 四条守卫各一条 throwsStd + 三条判决线挂号，全部闭式不启引擎（合成场直打
     # `shadow_seam_metric.cpp`）。
     selftest_seam.cpp
+    # `shadow-caster-survival` 口径层（阴影遮挡体存活率）的自检段 = **判据 4**：同图→四项恰
+    # 1.000 / 全 0→恰 0.000 / 🔴 立命断言「只丢小块、总面积不变」合成对（面积存活率恰 1.000 而
+    # 小块档恰 0.000——证明本判据不是 seam 差分判据的换皮）/ 消失-变淡各一条闭式 + 边界每半边 +
+    # 分档边界 + 8 邻接 + 空档 NaN + 守卫各一条 throwsStd + 闸门 C/D + 两条判决线挂号，全部闭式
+    # 不启引擎（合成场直打 `shadow_survival_metric.cpp`）。
+    selftest_survival.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -234,6 +246,19 @@ add_executable(imgqa
     shadow_seam_metric.cpp
     shadow_cascade_seam_judge.cpp
     shadow_cascade_seam.cpp
+    # `shadow-caster-survival`：阴影遮挡体存活率（**绝对量**判据，参照 = D=-1 全量几何；补
+    # shadow-cascade-seam 对「四级一起变差」的结构失明，债-139）。拆 TU 的缝 = **口径 vs 仪器内部**
+    # （四切法照 shadow-cascade-seam，同样**没有 target TU**——区域 = 全幅 + 固定近场带）：
+    # `shadow_survival_metric.cpp` = 口径层（面积存活率 / 连通块分档存活率 / 消失-变淡归因 /
+    # 闸门 C·D，被 selftest 闭式直测）；`shadow_caster_survival.cpp` = 臂表 + 双机位采集 +
+    # 引擎回显对账 + 四道闸门 + 扫描表；`shadow_caster_survival_judge.cpp` = J1（INFO 不判）+
+    # J2（单调性）。跨 TU 类型与量具常数唯一出处 = `shadow_caster_survival.h`（口径常数在
+    # `shadow_survival_metric.h`）。`cluster_path_gate.cpp` = 簇路径生效闸门（本仪器与
+    # shadow-cascade-seam **共用一份实现**——needle 名单抄两份 = 第二份真相，见其头注释）。
+    cluster_path_gate.cpp
+    shadow_survival_metric.cpp
+    shadow_caster_survival_judge.cpp
+    shadow_caster_survival.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器

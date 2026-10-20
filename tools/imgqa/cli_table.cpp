@@ -526,6 +526,9 @@ std::vector<SubcommandSpec> allSpecs()
     // 的理由：不插进 shadow-kernel-scale 与 blend-sort 之间，那会让那两条 append 注释里的
     // 位置声明失效；-h 顺序只是打印序。
     append(shadowCascadeSeamSpecs());
+    // `shadow-caster-survival` 排在 shadow-cascade-seam 之后（正文住 `cli_table_survival.cpp`）。
+    // 同上一条的理由：-h 顺序只是打印序，不挪既有条目、不让既有 append 注释的位置声明失效。
+    append(shadowCasterSurvivalSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

@@ -261,8 +261,11 @@ void testJudgmentFamilies(Checker& c)
     // 方向纠正：两条退役、三条新立（J1 存活率 / J2 接线锚点 / J3 出厂档对账），见 judgments_table_grain.cpp。
     // 72 → 75：`shadow-cascade-seam` 三条（债-110 把 ★18 的图像侧判据从一次性脚本入库）：
     // J1 LOD 归因的缝台阶增量 / J2 两 force 臂阳性锚点 / J3 D 扫描形状，见 judgments_table_seam.cpp。
+    // 75 → 77：`shadow-caster-survival` 两条（债-139 补位：差分判据对「四级一起变差」结构失明，
+    // 本台量**绝对量**存活率）：J1 出厂档小块/近场存活率（🔴 阈值未定 TODO：运行期只出 INFO）/
+    // J2 本影面积存活率随 D 单调不增，见 judgments_table_survival.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 75（族拆分最容易掉条目）", all.size() == 75, std::to_string(all.size()));
+    c.chk("判据总数 == 77（族拆分最容易掉条目）", all.size() == 77, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -548,6 +551,8 @@ int cmdSelftest()
     testShadowSeam(c);
     testShadowSeamGuards(c);
     testShadowSeamSignalGates(c);
+    testShadowCasterSurvival(c);
+    testShadowCasterSurvivalGuards(c);
     testDiffStructMetric(c);
     testDiffStructDomainGuard(c);
     testDiffBlockAnchors(c);

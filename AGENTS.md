@@ -1,7 +1,8 @@
 # RGL
 
-Vulkan 现代特性学习项目。Mesh shader 渲染管线，使用 ShaderObject + DescriptorHeap + DynamicState。
-核心代码位于 rgl 目录下。（旧 OpenGL 项目 legacy/ 已删，历史见 git history @ < 2026-09-08。）
+现代Vulkan渲染和游戏引擎探索项目。作为成品的目标是一个最小游戏引擎内核和必要的插拔模块（渲染内核，物理插拔模块，脚本插拔模块，RPC和资产管线用于对接编辑器，目标编辑器blender），当前还工作于渲染内核。  
+Mesh shader 渲染管线，使用 ShaderObject + DescriptorHeap + DynamicState。
+核心代码位于 rgl 目录下。
 
 ## 项目哲学（切分形态的裁决依据）
 

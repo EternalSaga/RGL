@@ -458,6 +458,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         append(blendSortJudgments());
         append(shadowGrainJudgments());
         append(shadowCascadeSeamJudgments());
+        append(shadowCasterSurvivalJudgments());
         return v;
     }();
     return kAll;

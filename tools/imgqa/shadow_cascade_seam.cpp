@@ -49,6 +49,7 @@
 //   拿裸串当负向证据会把每一臂都判死 = 一台永远红的仪器（与恒绿同罪）。**去读准确文案，
 //   别照抄文档里的关键词**——这条是本次实现时实测抓出来的。
 // 两道正向对账（`已加载` 之外还有 `min(D=<D>,` 与 `csm.force_cascade=<值>`）见 requireArmEcho。
+// 闸门本体已搬进 `cluster_path_gate.{h,cpp}`（与 shadow-caster-survival 共用一份，单份真相）。
 //
 // ── 🔴 参照臂有效性闸门（不是 Verdict，是**抛**，rc=3）——带子是 J1 的承重项，它裸奔过一次 ──
 // J1 的形状是「两臂台阶之差 ≤ 上限」，它**整个押在**「参照臂那一侧是常数（闭式 0，最多一个
@@ -159,6 +160,7 @@
 // 修法（债-139 定案 = 交界带内两级混合）落地后 J1 该转绿，届时**不许**顺手
 // 把上限从 0.1 往下调——那条上限的出处是纹素推导，不是今天的读数。
 #include "imgqa.h"
+#include "cluster_path_gate.h"  // 簇路径生效闸门 + readEngineLog（与 shadow-caster-survival 共用，单份真相）
 #include "shadow_cascade_seam.h"
 #include "shadow_seam_metric.h"
 
@@ -168,9 +170,7 @@
 #include <array>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -225,43 +225,9 @@ size_t armIndex(const std::string& name)
     throw std::runtime_error("内部错误：臂表里没有臂 `" + name + "`（判据取数取到了不存在的臂）");
 }
 
-std::string readEngineLog()
-{
-    const fs::path log = fs::path(projectRoot()) / "build/rgl/imgqa_run.log";
-    std::ifstream in(log, std::ios::binary);
-    if (!in)
-        throw std::runtime_error("读不到引擎日志: " + log.string());
-    return {std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
-}
-
-/// 🔴 簇路径生效闸门（抛 = rc 3，不是 Verdict）。理由见头注「这条比 J1 更重要」。
-/// 正向 + 负向**两道**都要过：只查负向，「日志被截断/引擎没打到那行」会被读成「没回落」；
-/// 只查正向，`main_scene.cppm:91` 那条「产物加载失败 → 回落现行路径」的 WARNING 会被漏掉。
-void requireClusterPathLive(const std::string& armName, const std::string& logText)
-{
-    static const char* kFallbackNeedles[] = {
-        "无簇产物（",   // main_scene.cppm:85 的 INFO（⚠ 裸的「无簇产物」在健康 INFO 里也有）
-        "走现行路径",   // 同一条 INFO 的收尾
-        "回落现行路径", // main_scene.cppm:91 的 WARNING（产物在但读失败/对账失败）
-    };
-    std::string hit;
-    for (const char* n : kFallbackNeedles)
-        if (logText.find(n) != std::string::npos)
-            hit += (hit.empty() ? "" : " / ") + std::string("「") + n + "」";
-    const bool loaded = logText.find("已加载: prims=") != std::string::npos;
-    if (hit.empty() && loaded)
-        return;
-    throw std::runtime_error(
-        "臂 " + armName + "：**簇路径没生效，全部读数作废**（"
-        + (hit.empty() ? "日志里没有 `已加载: prims=` 的正向证据" : "日志命中回落证据 " + hit)
-        + "）。\n"
-          "  这台仪器的全部读数都建立在「c1..c3 真的在画簇 LOD」上；产物缺席时引擎只打一条\n"
-          "  INFO 就静默走旧路径（rgl/main_scene.cppm:85），LOD 不生效 ⟹ 两臂逐位相同 ⟹ 本判据\n"
-          "  会**恒绿**——恒绿比红危险得多，所以这里抛而不是出一三条绿。\n"
-          "  生成产物：`meshlet_pack <glb> --out <bin>`（清单 = cmake/RglMeshlets.cmake 的\n"
-          "  RGL_MESHLET_MODELS，产物落在 build/rgl/models/<模型名>.glb.meshlets.bin）。\n"
-          "  日志：" + (fs::path(projectRoot()) / "build/rgl/imgqa_run.log").string());
-}
+// readEngineLog / requireClusterPathLive 已搬进 `cluster_path_gate.{h,cpp}`（本仪器与
+// shadow-caster-survival 共用一份闸门逻辑——needle 名单是「读准确文案才写得对」的东西，
+// 抄两份 = 第二份真相，漂一份就有一台仪器静默失效）。调用点行为逐字不变。
 
 /**
  * 引擎回显对账（照 `shadow_grain.cpp::requireShadowEcho` 的形态，缺行即抛）。三查：
@@ -328,7 +294,7 @@ cv::Mat captureArm(const SeamArm& a, const std::string& profileDir)
     makeProfile(profileDir, o);
     runEngineOnce(profileDir);
     const std::string logText = readEngineLog();
-    requireClusterPathLive(a.name, logText);  // 🔴 先过闸门：它一失效，后面全部读数无意义
+    requireClusterPathLive("shadow-cascade-seam", a.name, logText);  // 🔴 先过闸门：它一失效，后面全部读数无意义
     requireArmEcho(a, logText);
     const std::string png = projectRoot() + "/build/rgl/" + o.llmShotFile;
     if (!fs::exists(png))
