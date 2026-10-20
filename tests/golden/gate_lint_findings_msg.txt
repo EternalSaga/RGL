@@ -134,6 +134,7 @@ dump_gbuf	dump_gbuf 需 runtime.lua llm_debug 开且图为 deferred（G-buffer �
 ### rt/off-redline
 ### rt/off-lod5
 meshlet.shadow_lod	shadow_lod ≥ 0 但 assets = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = assets）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留
+meshlet.shadow_proxy	shadow_proxy 的宿主两脚 = meshlet.assets（MustL0 段住在簇产物 v2 尾部）+ shadow_lod ≥ 0（钉段 draw 是一条**簇** draw，用的就是阴影簇管线条目；shadow_lod = -1 时全场景走旧管线，钉段无处可发）⟹ 本组合下一条钉段 draw 都不会发，画面与门关逐位相同
 ### rt/mode-overlay
 ### rt/mode-overlay-offenable
 ### rt/instrument-offset
@@ -175,16 +176,20 @@ meshlet.cull	cull 与取代档同款限制：只在 diagnostics.cull_replay = "c
 meshlet.mode	mode = "switch" 档只在 diagnostics.cull_replay = "cpu" 生效：非默认档的 opaque 段由 cullDriver 按候选表重放（DGC 的 push 与 task 数按旧 mesh 管线烘），段内换管线不在那条路上。装配层 wireMeshletSwitch 真走到那一档被 cull 档挡下时也 warn（同因不同层：它排在设备规格闸门之后）
 ### rt/cull-ok
 ### rt/lod-neg-enable
+meshlet.shadow_proxy	shadow_proxy 的宿主两脚 = meshlet.assets（MustL0 段住在簇产物 v2 尾部）+ shadow_lod ≥ 0（钉段 draw 是一条**簇** draw，用的就是阴影簇管线条目；shadow_lod = -1 时全场景走旧管线，钉段无处可发）⟹ 本组合下一条钉段 draw 都不会发，画面与门关逐位相同
 ### rt/fallback-l0-lodneg
 meshlet.shadow_lod_fallback	shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 assets 开时才有消费者（逐模型选级住在 wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）
+meshlet.shadow_proxy	shadow_proxy 的宿主两脚 = meshlet.assets（MustL0 段住在簇产物 v2 尾部）+ shadow_lod ≥ 0（钉段 draw 是一条**簇** draw，用的就是阴影簇管线条目；shadow_lod = -1 时全场景走旧管线，钉段无处可发）⟹ 本组合下一条钉段 draw 都不会发，画面与门关逐位相同
 ### rt/fallback-l0-offenable
 meshlet.shadow_lod	shadow_lod ≥ 0 但 assets = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = assets）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留
 meshlet.shadow_lod_fallback	shadow_lod_fallback 仅当 shadow_lod ≥ 0 且 assets 开时才有消费者（逐模型选级住在 wireClusterRangeTable）—— 本组合下是死值（调参残留，同 izb.grid 形态）
+meshlet.shadow_proxy	shadow_proxy 的宿主两脚 = meshlet.assets（MustL0 段住在簇产物 v2 尾部）+ shadow_lod ≥ 0（钉段 draw 是一条**簇** draw，用的就是阴影簇管线条目；shadow_lod = -1 时全场景走旧管线，钉段无处可发）⟹ 本组合下一条钉段 draw 都不会发，画面与门关逐位相同
 ### rt/fallback-l0-ok
 ### rt/mdi-offenable
 meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.assets + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
 ### rt/mdi-lodneg
 meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.assets + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
+meshlet.shadow_proxy	shadow_proxy 的宿主两脚 = meshlet.assets（MustL0 段住在簇产物 v2 尾部）+ shadow_lod ≥ 0（钉段 draw 是一条**簇** draw，用的就是阴影簇管线条目；shadow_lod = -1 时全场景走旧管线，钉段无处可发）⟹ 本组合下一条钉段 draw 都不会发，画面与门关逐位相同
 ### rt/mdi-both
 meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.assets + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
 ### rt/mdi-ok
@@ -209,6 +214,7 @@ evssm.sun_degrees	mode != "evssm"：evssm.* 调参块没人读（按档分立，
 meshlet.instrument	instrument 是叠加段的**条目级** SPV 变体位（三值 none/offset/tint，债-129 S2 由原 debug/tint 两布尔合并），两条独立机制都会让它落空（判据按消费者写，不按本表口径写）：① mode ≠ "overlay" ⟹ `pickMeshletMeshVariant` 直接返回 base（它**只看 overlay 档**，不看 assets）；② assets = false ⟹ `bakeMeshletEntries` 吃 `slots = nullopt` 整段早退 = **一条条目都不建**，变体位没有条目可烘。变体烘进的是原位取代共用的那批条目（让叠加仪器改条目 = 诊断渗进产品路）⟹ 要么置 meshlet.mode = "overlay" 让仪器有消费者，要么把它归 "none"（原就近 warn = warnMeshletVariantInstruments，债-106 迁入）
 meshlet.mdi_shadow	mdi_shadow 的宿主（★M-1b：行表载体 + 簇 buffer 槽）的成立条件 = meshlet.assets + shadow_lod ≥ 0（wireMeshletShadowArgs 第①步）⟹ 本组合下条目必然烘不出来。装配层 wireMeshletMdiShadowActivation 还按「载体在不在」的**事实**出声（同因不同层：选级表全零 / 无产物回落只有装配期看得见）
 meshlet.shadow_lod	shadow_lod ≥ 0 但 assets = false：簇四段 buffer 的描述符槽由 wireMeshletBindings 提供（宿主 = assets）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留
+meshlet.shadow_proxy	shadow_proxy 的宿主两脚 = meshlet.assets（MustL0 段住在簇产物 v2 尾部）+ shadow_lod ≥ 0（钉段 draw 是一条**簇** draw，用的就是阴影簇管线条目；shadow_lod = -1 时全场景走旧管线，钉段无处可发）⟹ 本组合下一条钉段 draw 都不会发，画面与门关逐位相同
 pcss.max_penumbra	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）
 pcss.min_footprint_texels	滤波核宽下限（min_footprint_texels）是 **EVSSM 矩滤波专用件**：PCSS 的半径由 Δz 现算，没有「核窄到 0.5 纹素 ⟹ 抽点全落同一双线性邻域」这个失效 ⟹ 写在 pcss 块里**任何 mode 下都不生效**。要调核宽请写进 evssm 块
 pcss.search_radius	mode != "pcss"：pcss.* 调参块没人读（按档分立，evssm 档读的是 evssm.*）

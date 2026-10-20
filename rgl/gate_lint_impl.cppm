@@ -376,7 +376,8 @@ const BlockKey kCameraProbeKeys[]{
  * meshlet 块 6 枚键（宿主 = meshlet.assets）。present 口径 = 「本键配了」：
  * 布尔键 = 为真；coplanar / instrument = **偏离默认**（off / none；🔴 不是「偏离出厂档」
  * 的歧义——两枚都是三态字符串键，deviated 即「配了仪器/双臂」）；shadow_lod = **≥ 0**
- * （🔴 不是「偏离默认」——门关档 -1 也偏离默认 5，写成 deviated 会打破「门关 grep meshlet = 0」
+ * （🔴 不是「偏离默认」——门关档 -1 也偏离默认（5 → N10 起 7），写成 deviated 会打破「门关 grep
+ * meshlet = 0」
  * 护栏，tests 红线 A 用例钉住这条）。
  * 🔴 6 枚键**全部**自带消息（块消息只是新键缺省）：逐键归因不是重复项——cull 的「真实宿主 =
  * assets && mode="switch"（比块 owner 强）」这类微妙区别块消息表达不出来，塌成一条 =

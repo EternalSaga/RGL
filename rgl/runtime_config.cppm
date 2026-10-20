@@ -545,7 +545,8 @@ export struct RuntimeConfig {
 	 *
 	 * 三态语义（§18.7 已定案，别再改形态）：
 	 *  · `-1` = 本档关：装配层一条阴影条目都不建、一行日志都不打，阴影全部走既有
-	 *    `shadowPipelineIndex` 旧管线 ⟹ 逐位不变。🔴 **门关现在要显式给**（出厂不再是 -1）。
+	 *    `shadowPipelineIndex` 旧管线 ⟹ 逐位不变。🔴 **门关现在要显式给**（出厂不再是 -1；
+	 *    N10 起还要连 `shadow_proxy = false` 一起给，第三脚的理由 → runtime.lua 同处注释）。
 	 *  · `0` = 🔴 **阳性对照 L0 臂**（§18.6 判据 2）：同一新管线画每 prim 的 L0 前缀，先证明
 	 *    「管线画的是对的几何」，再谈 level D。实测与门关**逐位相同**（depth-only 每纹素深度
 	 *    = 覆盖它的图元之 min，与图元序无关）⟹ 这条同时是寻址正确性的证明。
@@ -555,7 +556,7 @@ export struct RuntimeConfig {
 	 *
 	 * 与 `meshletAssets` 的关系：本键是**独立档**（阴影段的杠杆与主 pass 的取代档正交），但
 	 * 簇四段 buffer 的描述符槽由 `meshlet.assets` 的 wireMeshletBindings 提供 ⟹ 生效需要
-	 * `assets = true` 且本键 ≥ 0。🔴 两键**同时**给默认（`assets = true` + `shadow_lod = 5`）
+	 * `assets = true` 且本键 ≥ 0。🔴 两键**同时**给默认（`assets = true` + `shadow_lod = 7`，N10 起 + `shadow_proxy = true`）
 	 * 正是为了不把本键放进「开了但不生效」的形态；只给本键不给 assets 时由 gate_lint 启动期
 	 * 申报（meshlet.shadow_lod 规则，债-106 迁自 ★18-C 的就近 WARNING `warnIfShadowLodOrphaned`）。
 	 * 画质/成本对照表（D → diff 像素）→ §18.9 末。
@@ -563,7 +564,7 @@ export struct RuntimeConfig {
 	 * readStrictBoolKey 注释那条实测纪律）。负数除 -1 以外的值不当非法（本键只把 `< 0` 当
 	 * 「关」这一件事读），但装配层不会为它们建条目以外的任何行为。
 	 */
-	int32_t meshletShadowLod = 5;
+	int32_t meshletShadowLod = 7;
 	/**
 	 * ★18-B1 阴影段簇路径的**回落策略**（`runtime.lua meshlet.shadow_lod_fallback`，默认
 	 * `"deepest"`）。仅在 `meshletShadowLod >= 0` 时有消费者。未知值 = 启动 fail-fast。
@@ -606,10 +607,12 @@ export struct RuntimeConfig {
 	 * 生效前置 = `meshlet.assets = true`（MustL0 段住在簇产物里，产物没读 ⟹ 段不存在），
 	 * 孤立组合由 gate_lint 启动期申报（meshlet.shadow_proxy 规则）。
 	 *
-	 * 与 `meshlet.shadow_lod` 无依赖关系（本批）：钉段条目的消费者是 P3 的「第一条 draw」，
-	 * 而那条 draw 的**存在**与 uniform 选级 D 正交（D 决定其余簇画到哪一级，钉段恒画 L0）。
+	 * 与 `meshlet.shadow_lod` 的关系（P3 起）：draw 层面二者正交（D 决定其余簇画到哪一级，钉段
+	 * 恒画 L0），但**宿主**是阴影簇路径 ⟹ 生效前置含 `shadow_lod ≥ 0`（gate_lint 申报）；画质
+	 * 层面二者互补——D 越粗丢的细附属投影越多，钉段把"只有级 0 还留着"的那批兜住，故出厂默认
+	 * 成对给（7 + true，2026-10-20 用户拍板，依据 → `shadow_proxy_plan.md` 数 8）。
 	 */
-	bool meshletShadowProxy = false;
+	bool meshletShadowProxy = true;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

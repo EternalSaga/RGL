@@ -519,7 +519,8 @@ export void wireClusterRangeTable(entt::registry& registry, const UploadedAssets
 								  const RuntimeConfig& cfg, const DeviceContext& device);
 
 /**
- * N10 P2：阴影代理**钉段表**装配（门 `runtime.lua meshlet.shadow_proxy`，🔴 默认关）。定义在
+ * N10 P2：阴影代理**钉段表**装配（门 `runtime.lua meshlet.shadow_proxy`，N10 P3 后**默认开**，
+ * 2026-10-20 用户拍板）。定义在
  * main:shadow_proxy（拆出理由 = 500 代码行红线，见该文件头）。
  *
  * 门开 = 把簇产物 v2 尾部的 MustL0 段读成 per-objectSlot 的 `ShadowProxyTable`（建表本体 =
@@ -529,9 +530,11 @@ export void wireClusterRangeTable(entt::registry& registry, const UploadedAssets
  *
  * 🔴 **P3 起有消费者**（画面会变）：`collectShadowCasters` 读本表填 `ShadowCandidate` 的钉段四
  * 字段，`emitShadowCasters` 对过 texel 门的候选在 c1..c3 各多发一条选级恒 0 的 draw。
- * ⟹ 门关态截图与出厂态逐位相同（两枚锚），门开态**没有锚**、判据 = imgqa + 四臂 GPU 实测。
- * 出厂 `shadow_proxy = false` 的理由不是"没接画面"，而是 P3 实测**画质收益为 0**（找回量 ≈
- * 钉住份额，一比一）→ `shadow_proxy_plan.md` §4 的数 8 段。
+ * ⟹ 门关态截图逐位不变（红线 A 那枚），出厂态 = 门开态（P3 后默认开）。转默认的依据 =
+ * 数 8 四臂实测：净账 +0.12ms 为正（收益主体来自配对的 shadow_lod 7，钉段自身边际 +0.026ms）
+ * + 画质判据全套不劣化。bistro 上画质收益为 0（找回量 ≈ 钉住份额，一比一）不是机制失效，是
+ * 出厂态本无可救之物；机制价值在通用性（任何带 MustL0 段的产物自动获保护，零逐资产调参）
+ * → `shadow_proxy_plan.md` §4 数 8 段 + §5 用户拍板行。
  *
  * @param registry 已注册实体的 registry（读 MeshRef / Transform / NextObjectSlot / Camera /
  *        RenderExtent，写 ctx）

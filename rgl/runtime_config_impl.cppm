@@ -634,9 +634,11 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * ★M-0 mdi_shadow 真 MDI 档）：
  * `meshlet = { assets, mode, instrument, coplanar, cull, shadow_lod,
  * shadow_lod_fallback, mdi_shadow }`。
- * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletAssets = true` + `meshletShadowLod = 5`
+ * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletAssets = true`；`meshletShadowLod` 曾 5、
+ * N10 起 7 且 `meshletShadowProxy = true`（2026-10-20 用户拍板，依据 → 数 8）
  * = 出厂即开簇路径与阴影远级联 LOD，2026-10-12 用户拍板。P5「门关 = 逐位不变」**仍是硬护栏**，
- * 只是门关态现在要显式 `assets = false` + `shadow_lod = -1`（实测精确复现旧锚 54e40665…）。
+ * 只是门关态现在要显式 `assets = false` + `shadow_lod = -1` + `shadow_proxy = false`（N10 起
+ * 三脚；实测精确复现旧锚 54e40665…）。
  * 逐键默认值唯一真相源 = RuntimeConfig 成员初始化，本行只列其余形态：`meshletMode = off` =
  * 不叠加不取代（债-129 S2 合并原 overlay/switch 两布尔，「同真」互斥态写不出来；债-105 起
  * 出厂不再白付 1.59ms）；`meshletInstrument = none` =

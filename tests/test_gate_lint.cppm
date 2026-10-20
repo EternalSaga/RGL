@@ -564,11 +564,15 @@ std::vector<GateFinding> lintRt(const RuntimeConfig& runtime) {
 		runtime);
 }
 
-/** 门关红线 A 的公共形态：assets = false + shadow_lod = -1（P5 验收态），再叠加传入的改动。 */
+/** 门关红线 A 的公共形态：assets = false + shadow_lod = -1 + shadow_proxy = false（P5 验收态；
+ *  N10 起第三脚必须显式给——shadow_proxy 出厂转 true 后，"其余默认"会把一个开着的键带进门关态，
+ *  gate_lint 按「键在而宿主不在」如实出声，本用例的「不多喊」判据当场红。这不是 lint 坏了：
+ *  门关的定义随默认翻转而长脚，护栏正确地抓住了这件事）。再叠加传入的改动。 */
 RuntimeConfig redlineA(void (*tweak)(RuntimeConfig&) = nullptr) {
 	RuntimeConfig r;
 	r.meshletAssets = false;
 	r.meshletShadowLod = -1;
+	r.meshletShadowProxy = false;
 	if (tweak)
 		tweak(r);
 	return r;
@@ -576,10 +580,10 @@ RuntimeConfig redlineA(void (*tweak)(RuntimeConfig&) = nullptr) {
 
 }  // namespace
 
-TEST_CASE("gate_lint meshlet 红线 A：门关态（assets=false + shadow_lod=-1，其余默认）除了该喊的不多喊") {
+TEST_CASE("gate_lint meshlet 红线 A：门关态（assets=false + shadow_lod=-1 + shadow_proxy=false，其余默认）除了该喊的不多喊") {
 	// 门关态 = P5 逐位不变的验收态（旧锚 54e40665…），**不是**出厂态（shadow_lod = -1 已偏离
-	// 默认 5）——但它是**合法**态：meshlet 八门的期望集合 = 空（shadow_lod 判据要「≥ 0」，
-	// -1 = 本档关不是孤立；其余 7 枚未开/未偏离）。逐门钉 nullptr = 「不多喊」的机器形态；
+	// 默认（5 → N10 起 7））——但它是**合法**态：meshlet 九门的期望集合 = 空（shadow_lod 判据要
+	// 「≥ 0」，-1 = 本档关不是孤立；shadow_proxy 第三脚的理由 → redlineA 注释；其余未开/未偏离）。逐门钉 nullptr = 「不多喊」的机器形态；
 	// 全局零条只按 meshlet 前缀计——非 meshlet 侧本组合也应为零，但那是上面总锚的口径，
 	// 本用例的判据对象是 meshlet 块，别把两条红线焊成一条。
 	// 变异红线：任何 meshlet 规则改成「与 assets / 偏离态无关的恒真」→ 本用例红。

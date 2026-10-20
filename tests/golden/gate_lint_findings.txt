@@ -134,6 +134,7 @@ dump_gbuf	2
 ### rt/off-redline
 ### rt/off-lod5
 meshlet.shadow_lod	1
+meshlet.shadow_proxy	1
 ### rt/mode-overlay
 ### rt/mode-overlay-offenable
 ### rt/instrument-offset
@@ -175,16 +176,20 @@ meshlet.cull	1
 meshlet.mode	1
 ### rt/cull-ok
 ### rt/lod-neg-enable
+meshlet.shadow_proxy	1
 ### rt/fallback-l0-lodneg
 meshlet.shadow_lod_fallback	0
+meshlet.shadow_proxy	1
 ### rt/fallback-l0-offenable
 meshlet.shadow_lod	1
 meshlet.shadow_lod_fallback	0
+meshlet.shadow_proxy	1
 ### rt/fallback-l0-ok
 ### rt/mdi-offenable
 meshlet.mdi_shadow	1
 ### rt/mdi-lodneg
 meshlet.mdi_shadow	1
+meshlet.shadow_proxy	1
 ### rt/mdi-both
 meshlet.mdi_shadow	1
 ### rt/mdi-ok
@@ -209,6 +214,7 @@ evssm.sun_degrees	0
 meshlet.instrument	1
 meshlet.mdi_shadow	1
 meshlet.shadow_lod	1
+meshlet.shadow_proxy	1
 pcss.max_penumbra	0
 pcss.min_footprint_texels	1
 pcss.search_radius	0

@@ -131,7 +131,10 @@ return {
     --    （逐键 → rgl/gate_lint_impl.cppm 的 kMeshletKeys）；
     --    路径选择的语义归 `meshlet.mode`（债-129 S2 已把两布尔合并成它），不归本键。
     -- 🔴 门关 = 逐位不变**仍是硬护栏**（docs/mdi_plan.md P5），但**出厂不再是门关态**（2026-10-12
-    -- 用户拍板「默认开 D=5」）⟹ 要门关必须显式给 `assets = false` + `shadow_lod = -1`。
+    -- 拍板默认开，当时 D=5；N10 起 D=7 + shadow_proxy = true，2026-10-20 拍板）⟹ 要门关必须
+    -- **三枚显式给** `assets = false` + `shadow_lod = -1` + `shadow_proxy = false`（少第三脚不坏
+    -- 画面——proxy 无宿主是 no-op——但 gate_lint 按「键在而宿主不在」出声，smoke 的 warnings=0
+    -- 判据会红；「门关 grep meshlet = 0」护栏靠三脚齐全维持）。
     -- 出厂默认截图锚随之从 54e40665…（门关）换成 95edc8cc…（本态）；两锚与三条已明写代价
     -- （+175.5MiB 显存 / +1.2s 启动 / 连带 α 叠加段白付 1.59ms）→ docs/mdi_plan.md §18.11。
     -- 逐资产门**不在本键** = 「该资产有没有簇产物」（§7.8 拍板 3：产物构建期生成、缺失 → 回落现行路径）。
@@ -205,11 +208,15 @@ return {
         --    0        = 🔴 阳性对照 L0 臂（§18.6 判据 2）：同一新管线画每 prim 的 L0 前缀，
         --               先证明「管线画的是对的几何」，再谈 level D
         --    N >= 1    = uniform 选级 D=N：每 prim 画 min(D, 本 prim 最深级) 那一段连续子区间
-        -- 🔴 **★18-C 起默认 5**（2026-10-12 用户拍板「默认开 D=5」；数据推荐档 = 5.10% L0 三角，
-        -- §18.2 实测）。生效需要 assets = true（簇四段 buffer 的描述符槽由 assets 的接线提供）；
-        -- 只给本键不给 assets 时装配层**出声**，不静默空开关。画质/成本对照表 → §18.9 末。
+        -- 🔴 **N10 起默认 7**（2026-10-20 用户拍板转默认；★18-C 曾定 5，2026-10-12）。换档依据 =
+        -- `shadow_proxy_plan.md` 数 8 四臂实测：D=7 + 钉段比出厂 D=5 的阴影 c1..3 合计快
+        -- 0.121ms（VVL 开）/ 0.140ms（关），画质判据全套不劣化（存活率两态 1.000、毫米尺逐字节
+        -- 同、跨级缝 J1 不涨、D 扫描单调 FAIL→PASS）。D=7 会丢的最细部件投影由 shadow_proxy 兜
+        -- （二者是一对默认，拆开转会把 D=7 的画质风险裸露出来）。生效需要 assets = true（簇四段
+        -- buffer 的描述符槽由 assets 的接线提供）；只给本键不给 assets 时装配层**出声**，不静默
+        -- 空开关。画质/成本对照表 → §18.9 末。
         -- 🔴 必须是整数（写成字符串/浮点 = 启动失败点名键）。
-        shadow_lod = 5,
+        shadow_lod = 7,
         -- ★18-B1 回落策略（D 超过某 prim 自身最深级时怎么办）："deepest" | "l0"。
         -- 🔴 它比 D 更主导成本（§18.2：D=7 下 deepest = 3.32% 而 l0 = 34.97% 的 L0 三角），
         -- 故未知值 = 启动 fail-fast（coplanar/aa/present_mode 纪律：静默回落 = 成本判据整批读错臂）。
@@ -223,16 +230,18 @@ return {
         -- 门 = 选 SPV 变体 / 选管线条目，不是运行时 flag（§12/§13 的 2026-10-02 教训）⟹ 门关用的
         -- 还是今天那份 SPV 与那条条目，一字节不动。🔴 必须是布尔（写成字符串/数字 = 启动失败点名键）。
         mdi_shadow = false,
-        -- N10 P2 阴影代理**钉段表**档：= true 时启动期把簇产物 v2 的 MustL0 段读成
-        -- per-objectSlot 的 ShadowProxyTable（rgl/shadow_proxy_types.cppm）+ 打 INFO 读数
-        -- （条目数 / Σ 被钉簇数 / texel 门在 8 档 × 4 级联下的活跃条目数表）。
-        -- 🔴 **P2 本批零消费者**：表建好放进 registry ctx，但没有任何 draw 由它发出（接消费点
-        -- = P3，整条线第一次变画面的一批）⟹ 门开态截图必须与出厂态**逐位相同**，那张截图就是
-        -- 「P2 真的没接画面」的自证。别把它读成「这键没用」：它与 shadow_lod 正相反，后者一开就改画面。
+        -- N10 P3 阴影代理**钉段表**档：= true 时启动期把簇产物 v2 的 MustL0 段读成
+        -- per-objectSlot 的 ShadowProxyTable（rgl/shadow_proxy_types.cppm）+ 打 INFO 读数，
+        -- 且**画面会变**：c1..c3 对过 texel 门的候选多发一条选级恒 0 的 draw，保住"只有级 0
+        -- 还留着"的细附属结构（花箱/牛腿/窗棂类）的投影——没有它，本键默认配不上 D=7。
+        -- 默认 true = 2026-10-20 用户拍板（依据 → 上面 shadow_lod 那条 + 数 8；bistro 上画质
+        -- 收益为 0 是"这台机器没有该救之物"，机制价值在通用性：任何带 MustL0 段的产物自动获
+        -- 同一保护，零逐资产调参）。
         -- 门关 = **连表都不建**（一行日志都不打，与 meshlet.assets 的早退同构）。
-        -- 生效前置 = assets = true（MustL0 段住在簇产物里）；孤立组合由 gate_lint 启动期申报。
+        -- 生效前置两脚 = assets = true（MustL0 段住在簇产物里）+ shadow_lod ≥ 0（钉段 draw 是
+        -- 簇 draw，旧管线没有能画它的条目）；孤立组合由 gate_lint 启动期申报。
         -- 🔴 必须是布尔（写成字符串/数字 = 启动失败点名键，meshlet 块专用严格读法）。
-        shadow_proxy = false,
+        shadow_proxy = true,
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）
