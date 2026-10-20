@@ -78,6 +78,12 @@ namespace RGL::imgqa {
 /// 📄 正文在 `judgments_table_survival.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& shadowCasterSurvivalJudgments();
 
+/// 地基族 · **影边世界位置绝对尺**（`shadow-edge-*`，3 条）：出厂档 D=5 每板绝对误差（🔴 界
+/// 未定：只报数不判）/ 相邻级缝宽（N 未定：只报数）/ 每板 |误差| 随 D 单调不减（容差从
+/// 纹素量化推）。与两台参照渲染仪器正交：本台真值 = 闭式算术（对共模错误免疫）。族仍是
+/// Foundation，缝按**仪器**切。📄 正文在 `judgments_table_edge.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& shadowEdgeRulerJudgments();
+
 /// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
 /// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
 /// 📄 正文在 `judgments_table_ssr.cpp`。

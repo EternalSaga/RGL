@@ -245,7 +245,7 @@ void requireDenominatorAlive(const std::vector<std::pair<std::string, std::int64
 }
 
 void requireCoveragePresent(const std::vector<std::pair<std::string, double>>& fractionByArm,
-    double floor)
+    double floor, const char* rationale)
 {
     if (fractionByArm.empty())
         throw std::runtime_error(
@@ -258,21 +258,24 @@ void requireCoveragePresent(const std::vector<std::pair<std::string, double>>& f
     }
     if (low.empty())
         return;
+    // 界的归因文本跟着靶走（默认 = seam 双机位那份，bistro 数字只对它成立）。
+    static const char* kDefaultRationale =
+        "  界为什么是闭式可辩护的：死态的有影面积是**恰 0%**（`cov ≡ 0`），不是「小于某个小数」；\n"
+        "  本靶正常读数在 48.6% 量级（主 agent 定口径时记的「有影面积 48.55%」）⟹ 取 1% 离死态\n"
+        "  一个数量级以上、离正常读数 ~48 倍，只在「阴影几乎没画」时响。换机位/换场景要重推。\n";
     throw std::runtime_error(
         "覆盖度非零闸门：**cov 场几乎全零 = 阴影项没进画面，全部差分读数作废**\n"
         "  有影面积（cov > 0.5 的像素占比）低于下界 "
         + num4(floor) + " 的臂：" + low
         + "。\n"
-        "  界为什么是闭式可辩护的：死态的有影面积是**恰 0%**（`cov ≡ 0`），不是「小于某个小数」；\n"
-        "  本靶正常读数在 48.6% 量级（主 agent 定口径时记的「有影面积 48.55%」）⟹ 取 1% 离死态\n"
-        "  一个数量级以上、离正常读数 ~48 倍，只在「阴影几乎没画」时响。换机位/换场景要重推。\n"
-        "  与分母闸门的分工：那道查「分母与 csm 臂逐位相同」，本道查「两臂图即便不同、差异也\n"
-        "  不在阴影上」（分母被换成一张无关的图；「这个机位本来没影」也会落到这里，只是那种\n"
-        "  形态分母闸门会先响并给出更具体的归因）。差分统计量对这类失效是结构性失明的——\n"
-        "  cov ≡ 0 时两臂之差也 ≡ 0，所有差分判据一起绿。\n"
-        "  下一步：① 看 none 臂与 csm 臂的 RGB 差分图（有影边形状 = 阴影在画面里，问题出在 cov\n"
-        "  的分母；一片噪声 = 阴影根本没进图）；② 数阴影段 draw 数并读 `shadow: mode=` / `izb.on=`\n"
-        "  回显；③ 换一台有影的机位。");
+        + (rationale != nullptr ? std::string(rationale) : std::string(kDefaultRationale))
+        + "  与分母闸门的分工：那道查「分母与 csm 臂逐位相同」，本道查「两臂图即便不同、差异也\n"
+          "  不在阴影上」（分母被换成一张无关的图；「这个机位本来没影」也会落到这里，只是那种\n"
+          "  形态分母闸门会先响并给出更具体的归因）。差分统计量对这类失效是结构性失明的——\n"
+          "  cov ≡ 0 时两臂之差也 ≡ 0，所有差分判据一起绿。\n"
+          "  下一步：① 看 none 臂与 csm 臂的 RGB 差分图（有影边形状 = 阴影在画面里，问题出在 cov\n"
+          "  的分母；一片噪声 = 阴影根本没进图）；② 数阴影段 draw 数并读 `shadow: mode=` / `izb.on=`\n"
+          "  回显；③ 换一台有影的机位。");
 }
 
 }  // namespace RGL::imgqa

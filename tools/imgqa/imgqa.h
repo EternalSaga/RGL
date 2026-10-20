@@ -218,6 +218,18 @@ struct ProfileOpts {
     /// ⚠ 只在交付配置路径有实现（同第 6 枚）；覆写失败（`csm` 块或键不存在）抛。
     bool overrideShadowForceCascade = false;
     int shadowForceCascadeValue = -1;
+    /// **第 8 个例外**（`shadow-edge-ruler`）：true = 把交付配置 `scene.lua` 的**顶层 `entities`
+    /// 表**整值覆写成 `deliveryEntitiesLua`（外层花括号由本工具补）。
+    ///
+    /// 为什么这**不算**「工具再抄一份真相」（同第 6/7 枚的判据）：本仪器的被测对象是**程序化靶**
+    /// （`tools/qa_scenes.py` 产出的 `models/shadow_edge_rig.glb` + 同目录簇产物），「装进场景的是
+    /// 哪个实体」就是实验的靶几何本身——交付场景 bistro 不是被测物；这与「把 meshlet.assets 抄进
+    /// ProfileOpts」性质不同（那枚不是任何判据的自变量）。簇路径生效要求靶带 `.meshlets.bin`
+    /// 产物（`rgl/main_scene.cppm` 的逐资产门），而级联/LOD 两枚自变量键只存在于交付配置
+    /// ⟹ 必须走交付路径 + 换 entities。🔴 只在交付配置路径有实现，门开而无 `deliveryConfigDir`
+    /// 一律抛；覆写失败（`entities` 键不在 / 不唯一 / 形状不认识）抛，写后读回自检不同也抛。
+    bool overrideDeliveryEntities = false;
+    std::string deliveryEntitiesLua;  ///< entities 表**值内容**（不含外层花括号）
     /// 可选机位（**写进 profile 的 camera.lua**，从第 1 帧生效）。false = 不动 camera.lua。
     ///
     /// 为什么不能只靠 `Engine::setCamera`（RPC）：RPC 落在引擎已经跑了几帧之后，而那些帧是用
@@ -1220,6 +1232,33 @@ int cmdShadowCascadeSeam();
  * 🔴 跑在**交付配置**（仓库 `configs/`）上：合成 profile 无簇产物 ⟹ 不进簇路径 ⟹ 恒绿。
  */
 int cmdShadowCasterSurvival();
+
+// ═══════════════════════════════ 影边世界位置绝对尺（shadow-edge-ruler）
+//
+// 两台既有阴影判据（`shadow-cascade-seam` 差分 / `shadow-caster-survival` 绝对存活率）都是
+// **拿一次渲染比另一次渲染**，对共模错误结构失明（前者对「四级全走 LOD」给满分 0.000；
+// 后者的小块存活率被「粗簇轮廓略胖」读到 1.0022 = 比参照还"好"）。本命令把真值换成算术：
+// 程序化靶 `shadow_edge_rig`（tools/qa_scenes.py）上，竖直板远侧影边 = 板远侧面 +
+// |SHADOW_OFF|·H（闭式）；读数 = cov 沿世界扫描线的**自身过渡中点**（相对阈值——原「50%
+// 绝对」是主 agent 规格错误 E1，浅地影下结构不可达）；主读数 = 各级影边世界位置，**头条
+// 交付数 = 级间缝宽毫米**（债-139 交界带混合带宽的设计输入）。判据本体与全部口径理由 =
+// `tools/imgqa/shadow_edge_ruler.cpp` 头注释；算子住 `shadow_edge_metric.{h,cpp}`（selftest
+// 闭式直测）；cov 与三台同式同序。
+
+/**
+ * 影边绝对尺（10 臂 = `none` 分母 + 自然渲染 × 出厂 D=5 + 钉级 force_cascade ∈ {0,1,2,3}
+ * × D ∈ {5,-1}）。🔴 原六档 D 扫描已删（主 agent 规格错误 E2：本靶上 D 逐位空操作，LOD
+ * 画质/成本 = 下一台「细附属结构」靶）。**无 flag**：机位/尺寸/帧号/扫描窗都是量具的组成
+ * 部分。五道闸门（全部抛 rc=3）：簇路径生效（复用 `cluster_path_gate`）· 分母在场 + 覆盖度
+ * 非零（复用 seam）· 🔴 每块板必须真的量到过，除非闭式预判它出块（片区外 = 预期，标 ⊘）·
+ * 🔴 参照态（force=0×D∈{5,−1} + force∈{1,2,3}×D=−1）误差落在该级自身纹素预算内（不是恰
+ * 0；超界 = 靶或换算错了）· 🔴 级间分歧阳性对照（每板四钉级读数不得全等）。三条判决线
+ * 全部 INFO 只报数不判：`shadow-edge-absolute-error`（每板每级误差 vs 本级纹素）·
+ * `shadow-edge-seam-width`（🔴 头条缝宽毫米）· `shadow-edge-cascade-agreement`（seam /
+ * max 两纹素；原「随 D 单调」退役）。🔴 跑在**交付配置**（仓库 `configs/`）+ 第 8 例外门
+ * 换 entities 装靶：级联/LOD 两枚自变量键只存在于交付配置。零引擎改动、零 shader 改动。
+ */
+int cmdShadowEdgeRuler();
 
 // ═══════════════════════════════════════════ 透明合成次序（blend-sort，债-132 结案）
 //

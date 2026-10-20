@@ -2187,6 +2187,499 @@ def scene_shadow_grain() -> Scene:
         "shadow_grain: ⑫ 背板覆盖裕量 < 3 cm（机关⑥ 落点区间的容差没了）"
     return s
 
+
+# ---------------------------------------------------------------------------
+# 场景 10：shadow_edge_rig —— 影边世界位置的**绝对尺**（真值 = 算术，不是参照渲染）
+# ---------------------------------------------------------------------------
+# ## 为什么必须有它（主 agent 立项原文，别删）
+# 本会话已建的两台阴影判据（`shadow-cascade-seam` / `shadow-caster-survival`）**都是
+# 「拿一次渲染比另一次渲染」**（级联比级联、D=5 比 D=-1），结构上看不见**共模错误**。
+# 已被实测证实的两次翻车：
+#   ① 差分仪器对「四级全走 LOD」（一个肉眼可见在丢接触阴影的形态）给出 **满分 0.000**
+#     ——四级一起变差时级间没有分歧。
+#   ② 绝对仪器的**本影面积存活率是反向误导的**：那个坏形态读 **1.0022（比参照还"好"）**
+#     ——粗簇轮廓比原始几何略胖，把丢掉的影子补回来还倒赚。
+# **根因是参照本身也是渲染。** 本靶把真值换成算术：本文件上方
+# `SUN = (0.5,-0.75,-0.45)`（= configs/scene.lua light.direction，仰角 48.11°）与
+# `SHADOW_OFF = (SUN.x/−SUN.y, SUN.z/−SUN.y) = (0.6667,-0.6)`（单位高度的影位移），
+# 于是**高度 H 的竖直挡板，其远侧影边落在 u = 板远侧面 + |SHADOW_OFF|·H**
+# （u = 光的水平行进方向单位线；|SHADOW_OFF| = 0.90140）。闭式，无参照渲染。
+# 仪器 = `imgqa shadow-edge-ruler`（算子层 shadow_edge_metric.*，臂表与闸门住仪器层）。
+#
+# ## 几何机关（编号 = 构建期 assert 的编号，改任何一条 assert 会响）
+#   ① 零起伏平地 y=0（**不许任何起伏**——顺带结掉债-139 那个卡在「鹅卵石起伏」上的
+#      2.73pp 残差）：唯一接收面、同材质。闭式解的前提「接收面水平」由几何本身钉死。
+#   ② 一排竖直挡板：长边 ⊥ 光的水平行进方向（把影边钉成直线、且垂直于扫描线 → 精度
+#      最高）；**厚度 = 本靶自变量**；高度 H 全同。每板 = 1 piece = 1 primitive =
+#      独立簇 DAG——阴影簇 LOD 的选级是**逐图元** `min(D, 自身最深级)`
+#      （rgl/main_meshlet_tables.cppm 启动对账行），若把八块板合成一个 primitive，
+#      它们共享同一张 DAG、在同一级一起塌，自变量在物理上失去意义。
+#      每板 ~1920 三角（大面 36×12 网格）：>128 三角才有 ≥2 个 L0 簇、DAG 才有深度
+#      （1 簇的 primitive 恒走 L0 = 全量几何 = 恒绿仪器）；cornell_box 2242 三角出
+#      6 级、penumbra_ladder 50 三角只出 1 级——**靶必须有足够三角数才会真的走 LOD**。
+#   ③ 板沿 u（= 光的水平行进方向 = 机位深度方向）排开 ⟹ 各板影边落在不同级联，
+#      「误差随板序」曲线天然就是「误差随距离/随级联」曲线，级联交界 = 曲线台阶。
+#   ④ 机位在**下游**（影侧）低位朝上游看：某板影边的视线**不经过该板自己**（板在影边
+#      之后），只可能被更靠近相机的板的上缘挡住——净空约束比上游机位松一个量级
+#      （上游机位要求相机高 ≈ 2× 排长才能从板顶上方看到自己的影边）。
+#      机位 = 离线网格搜索的解（搜索空间：H × 间距 × fov × 相机下游距 B × 高 Y × 目标
+#      分位，步长 0.05；判据 = assert ⑤–⑩ 全部通过 + 净空/纹素/px 刻度排序取优），
+#      常数抄录在下面；改厚度档/H/间距 = 机位作废，构建期 assert 当场抓红，重搜再改。
+#
+# ## 闭式真值与扫描线（manifest 的 measure 块 = 仪器唯一读数接口）
+#   板 i 远侧面 u_far,i = u_i + t_i/2；**真值影边 u_e,i = u_far,i + |SHADOW_OFF|·H**。
+#   扫描线沿 u：[u_e − s_up, u_e + s_dn]，s_up = 0.45·|SHADOW_OFF|·H（上游不吞接触影缘）、
+#   s_dn = 0.45·gap（下游不吞邻板影，gap = 本影边到邻板近侧面）。cov 沿扫描线的
+#   **50% 过零点** = 实测影边；窗口内多个过零点 = 前提破了（吞进接触缘/邻影）⟹ 仪器抛。
+#   带宽（接触缘到远影缘 = |SHADOW_OFF|·H）≥ 6× 最粗级纹素：窄带被 PCF 糊成矮包后
+#   50% 交叉点不再是影边位置（闭式解在「半影 ≳ 带宽」处失效）——assert ⑩。
+#
+# ## 级联自证（机位不靠肉眼看图，全部构建期 assert；公式链 = 引擎复刻，同源
+#   cascade_self_proof + render_list_impl/scene_context 的现实现）
+#   SceneBounds = 逐 primitive 去索引顶点 enclosingSphere（质心+最远点）的 unionSphere
+#   → near = max(0.05, dist−R)、far = dist+R（projectionSystem）
+#   → **向上取整到 2 的幂**（quantizeShadowDistance，债-139）
+#   → practical split（log/uni 各半，count=4）→ 各级远截止 splits[c]
+#   → 级 c 外接球半径 r_c = frustumBoundingSphere(nearC, farC)（姿态无关闭式）
+#   → **texel_c = 2·r_c/1024**（图集 2048、4 级 2×2 分块 → 块边长 1024）。
+#   断言：⑤ 全部影边视深 < 0.85·shadowFar（末级淡出从 t=0.866 起吃 cov——5a-9 的
+#   atten，落进淡出带的读数会系统性偏「受光」）；⑥ 影边跨 ≥3 枚级联（自然渲染的误差
+#   曲线必须有台阶，否则仪器没有自变量）；⑦ 视线净空：每个扫描窗点到相机之间的一切
+#   板顶缘之上 ≥ 3 mm；⑧ 窗口隔离：窗口不含他板实体、不含他影边（±20 mm 界外）；
+#   ⑨ 取景：全部窗口角点在画内且离画边 ≥ 30 px（按 captureSize 算）；
+#   ⑩ 带宽 ≥ 6×texel_max 且 s_up ≥ 2.5×texel_max。
+#
+# ## 自变量定义域 = 实测扫描（不是猜的）——🔴 扫描已跑完，结论 = 本对组合对 LOD 免疫
+# 厚度扫描（8 档 3…300 mm，`EDGE_THICKNESSES_SCAN`）在 15 臂下的原始读数全录于
+# `EDGE_SCAN_READINGS`（并随 manifest selfProof.thicknessScan 落盘）。两条推翻设计前提：
+#   ① **影边对 D 结构性不动**：D 六臂 PNG 逐位全等；引擎成本表显示 D=4 已塌到 1 簇/prim
+#     （6.2% 三角）而影不变 ⟹ 凸平板簇化只删面内部三角、轮廓恒存活（剪影不变性）。
+#     「DAG 有深度」≠「影边可动」——本靶的自变量在物理上不存在。
+#   ② **地面影浅**：太阳只占地面受光 ~30%（env 1.0 天光补满）⟹ cov 峰值 0.303（字节域），
+#     50% 过零点结构上不存在（112 个 (臂, 板) 组合全被闸门 C 点名）。bistro 的墙影深度
+#     （太阳占比 >50%）不可外推到地面。
+# 定稿档位（EDGE_THICKNESSES）因此**不存在合法取值**——修法 = 换接收面（朝日立墙）+
+# 换遮挡体形态（板+细鳍，鳍在粗级死亡才让影边动），属靶重设计，裁决权在主 agent（F4：
+# 两臂同形即停，不 tune 判据）。
+#
+# ## 变异红线（改坏哪里会让本靶立刻构建失败；逐条实跑记录见交付说明）
+#   · 把某板 u 挪出 shadowFar 射程 → assert ⑤ 红（该档将永远量不到，闸门 ③ 是运行期
+#     兜底，构建期就该拦）。
+#   · 把机位 Y 压低 5 cm → assert ⑦ 红（视线擦板顶，影边被板体挡一半 = 读数系统性
+#     偏上游而曲线形状正常——最难归因的一种假数）。
+#   · 把某板间距压到 band+t+2·s 以下 → assert ⑧ 红（窗口吞邻影 = 双过零点）。
+#   · 把 H 改矮到带宽 < 6×texel → assert ⑩ 红（PCF 把窄带糊成矮包，50% 点不再是边）。
+#   · 把地面加起伏 → 本靶**写不出**起伏（quad 平面）——前提「接收面水平」是几何事实。
+
+EDGE_H = 0.17                              # 板高（米）；带宽 = 0.9014·H = 153 mm
+EDGE_SPACING_K = 1.6                       # 间距 = K·(带宽 + t_max + 40mm)（窗口隔离的闭式下界）
+EDGE_SPACING_PAD = 0.04                    # 间距余量（米）
+EDGE_LV_K = 4.0                            # 板长边 = max(K·H, 0.4)（≥4H 让窗口 v 线不越板缘）
+EDGE_CAPTURE = (1600, 900)                 # 采集尺寸（imgqa 仪器写死同值；assert ⑨ 按它算）
+EDGE_FOV = 40.0                            # 竖直 fov（度）
+EDGE_CAM_B = 2.9                           # 相机在最后板下游 B 米（沿 u）
+EDGE_CAM_Y = 4.6                           # 相机高（米）
+EDGE_CAM_TGT_FRAC = 0.65                   # 目标 u = 首影边 + frac·(末影边 − 首影边)
+EDGE_S_UP_K = 0.45                         # 窗口上游半宽 = K·带宽
+EDGE_S_DN_K = 0.45                         # 窗口下游半宽 = K·gap
+EDGE_SCAN_B = 2.9                          # 扫描版机位（搜索解，见机关④）
+EDGE_SCAN_Y = 4.6
+EDGE_SCAN_TGT_FRAC = 0.65
+EDGE_SCAN_FOV = 40.0
+# 厚度扫描档（米）：跨 3mm…300mm 等比 ×2 —— 自变量定义域的**探测集**，不是定稿。
+EDGE_THICKNESSES_SCAN = [0.003, 0.006, 0.012, 0.025, 0.05, 0.1, 0.2, 0.3]
+# 定稿档位（米）：跨越扫描拐点（原始读数见 selfProof.thicknessScan）。
+EDGE_THICKNESSES = [0.003, 0.006, 0.012, 0.025, 0.05, 0.1, 0.2, 0.3]
+# ── 扫描原始读数（2026-10-20 首跑，`shadow-edge-ruler` 15 臂，逐字记录，不做美化）──────
+# 🔴 扫描的结论 = **本靶设计前提被实测推翻**（F4 停调口径红线：两臂同形即停，不 tune 判据）：
+#  ① D 逐位无差异：d-1/d0/d3/d5/d7/d11 六臂 PNG md5 全等（9b78bac4…），f1d5 == f1d-1
+#     （ab390d2c…）。引擎成本表给出机理：D=4 时全资产只剩 9 簇 / 658 三角（占 L0 6.2%，
+#     每 prim 恰 1 枚根簇）而影**逐位不变** ⟹ 凸平板的簇化只删 ±u 面内部三角、**轮廓
+#     （rim 边界）恒存活** ⟹ 影边在世界坐标下对 D 结构性不动。DAG 有深度（5 级）≠ 剪影可变。
+#  ② 影浅：地面受光里太阳只占 ~30%（env 1.0 桥景天光补满）⟹ cov 峰值 0.303（字节域）/
+#     ≈0.56（线性域），50% 过零点贴着平台、结构上时有时无 ⟹ 112 个 (臂, 板) 组合全部
+#     找不到过零点（闸门 C 如实抛，逐条点名）。bistro 墙面影深（太阳占墙面 >50%）不可
+#     外推到地面——定口径时就是这么错估出「1–2% 覆盖」的。
+#  ③ 逐板 umbra（cov>0.5，线性域）面积：自然臂 0.17%、f0 0.11%、f1/f2 0.17%、f3 0.01%。
+EDGE_SCAN_READINGS: dict = {
+    "date": "2026-10-20",
+    "arms": "none + 自然 D∈{-1,0,3,5,7,11} + 钉级 force∈{0,1,2,3}×D∈{5,-1}（15 臂）",
+    "perPlateErrorMm": {f"t{int(t*1000):03d}": "no-crossing(全部 14 条 csm 臂)"
+                        for t in EDGE_THICKNESSES_SCAN},
+    "dArmsBitIdentical": {"md5": "9b78bac498bc915ce85772fe80841d61",
+                          "arms": ["d-1", "d0", "d3", "d5", "d7", "d11"]},
+    "pinnedD5eqDm1": {"md5": "ab390d2c4a474486cf31763a9efc5fc5", "cascade": 1},
+    "covMaxByte": 0.303,
+    # 线性域（主 agent 独立复算修正——首报把字节域 0.303 当结论、又手推了个 0.56，域引错了）：
+    "covMaxLinear": 0.510, "covP99Linear": 0.367, "covMeanLinear": 0.004,
+    "umbraAreaPct": {"natural": 0.17, "f0": 0.11, "f1": 0.17, "f2": 0.17, "f3": 0.01},
+    "engineCostTable": "D=0:173簇/10626三角 · D=1:87/5310 · D=2:41/2654 · D=3:24/1326 · "
+                       "D=4:9/658(6.19%) · D=5: 回落自身最深级=4（9 prim 全回落）",
+    "verdict": "F4 停：影边对 D 结构性不动（剪影不变）+ 地面影浅（50% 阈值不可达）。"
+               "厚度拐点不存在——不是阈值要调，是「地面 + 凸平板」这对接收面/遮挡体组合"
+               "对 shadow LOD 免疫。",
+    # ── 终跑（E1/E2 改版后：相对阈值 + 10 臂，2026-10-20，rc=0 五闸门全过）──────────────
+    # 上面各键 = 首跑（15 臂绝对 0.5）的负结果记录，保留不删（honesty ⑤ 的证据链）。
+    "finalRun": {
+        "arms": "none + 自然 D=5 + 钉级 force∈{0,1,2,3}×D∈{5,-1}（10 臂）",
+        "seamMm": {"c0-c1": {"median": 9.82, "max": 13.68},
+                   "c1-c2": {"median": 10.32, "max": 16.61},
+                   "c2-c3": {"median": 9.99, "max": 9.99},
+                   "all": {"median": 9.99, "max": 16.61}},
+        "note": "缝是 (板,交界) 二元性质：同交界 t100=0 / t200=16.61mm。t003×级3 = 影缘落"
+                "近平面 11mm（<1 纹素）精度带 → 闭式预判预期不可量（⊘）；t100 的 c1/c2 过渡"
+                "括号样本逐位相同 → seam=0 是真测量（闸门 5 显式警告不抛）。",
+    },
+}
+# meshlet_pack --stats 实际输出（scan 靶，sha1 b8c0db69…；全文 = /tmp/opencode/pack_scan1.log）
+EDGE_PACK_STATS: dict = {
+    "levels": 5,
+    "perLevelTris": [10626, 5308, 2652, 1324, 656],
+    "perLevelClusters": [173, 86, 40, 23, 8],
+    "clusters": 330, "groups": 45, "nodes": 52,
+    "l0Shape": "avg 61.4 tris/cluster, median fill 50.0%",
+    "note": "DAG 深度 5 级满足「≥3 级」验收，但引擎成本表证明塌到 1 簇/prim 后影逐位不变"
+            "（剪影不变性），深度 ≠ 可测性。",
+}
+EDGE_N_PLATES = 8               # 板数 = 自变量档数（调色板 10 色 − 地面 = 上限 9）
+
+
+def edge_u2w(u: float, v: float, y: float = 0.0) -> tuple:
+    """(沿光水平行进方向的坐标 u, 横向 v, 高 y) → 世界 (x, z 平面 + y)。"""
+    offlen = math.hypot(*SHADOW_OFF)
+    ux, uz = SHADOW_OFF[0] / offlen, SHADOW_OFF[1] / offlen
+    return (u * ux + v * (-uz), y, u * uz + v * ux)
+
+
+def edge_frame(thicknesses: list, cam_b: float, cam_y: float, tgt_frac: float,
+               fov: float) -> dict:
+    """靶的闭式几何帧：板布局 + 地面 + 机位 + 引擎级联公式链复刻。纯函数。"""
+    offlen = math.hypot(*SHADOW_OFF)
+    band = offlen * EDGE_H                       # 带宽 = 接触缘→远影缘（沿 u）
+    lv = max(EDGE_LV_K * EDGE_H, 0.4)            # 长边
+    n = len(thicknesses)
+    t_max = max(thicknesses)
+    spacing = EDGE_SPACING_K * (band + t_max + EDGE_SPACING_PAD)
+    plates = []
+    for i, t in enumerate(thicknesses):
+        uc = i * spacing
+        far = uc + t / 2.0
+        edge = far + band
+        plates.append({"t": t, "uc": uc, "near": uc - t / 2.0, "far": far, "edge": edge})
+    gap_min = min(plates[i + 1]["near"] - plates[i]["edge"] for i in range(n - 1))
+    s_up, s_dn = EDGE_S_UP_K * band, EDGE_S_DN_K * gap_min
+    cu = plates[-1]["uc"] + cam_b                # 相机 u（下游）
+    u0 = plates[0]["uc"] - max(0.5, 2 * EDGE_H)
+    u1 = cu + 0.5
+    v_half = lv / 2 + max(0.4, 2 * EDGE_H)
+    e0, e7 = plates[0]["edge"], plates[-1]["edge"]
+    ut = e0 + tgt_frac * (e7 - e0)
+    eye = edge_u2w(cu, 0.0, cam_y)
+    tgt = edge_u2w(ut, 0.0, 0.0)
+    # ── 引擎公式链复刻（见头注「级联自证」；unionSphere = ecs_impl 同款）──
+    def _union(a, b):
+        ca, ra = a
+        cb, rb = b
+        d = math.dist(ca, cb)
+        if d == 0.0:
+            return (ca, max(ra, rb))
+        if d + ra <= rb:
+            return (cb, rb)
+        if d + rb <= ra:
+            return (ca, ra)
+        k = (d + ra - rb) / (2 * d)
+        return tuple(ca[j] + (cb[j] - ca[j]) * k for j in range(3)), (d + ra + rb) / 2.0
+    cu_, cv_ = (u0 + u1) / 2.0, 0.0
+    acc = (edge_u2w(cu_, cv_)[0], 0.0, edge_u2w(cu_, cv_)[2]), math.hypot(u1 - cu_, v_half)
+    for p in plates:
+        c = edge_u2w(p["uc"], 0.0, EDGE_H / 2.0)
+        r = math.sqrt((p["t"] / 2) ** 2 + (EDGE_H / 2) ** 2 + (lv / 2) ** 2)
+        acc = _union(acc, (c, r))
+    sb_c, sb_r = acc
+    dist = math.dist(eye, sb_c)
+    near = max(0.05, dist - sb_r)
+    far = dist + sb_r
+
+    def _quant(d):   # quantizeShadowDistance：向上取整到 2 的幂
+        m, e = math.frexp(d)
+        return math.ldexp(1.0, e - 1 if m == 0.5 else e)
+
+    def _split(near_, far_, c, count=4):   # cascadeSplitDistance（mix=0.5）
+        if c + 1 >= count:
+            return far_
+        log_s = near_ * (far_ / near_) ** (c / count)
+        uni = near_ + (far_ - near_) * ((c + 1) / count)
+        return 0.5 * log_s + 0.5 * uni
+
+    def _frustum_r(n_, f_):   # frustumBoundingSphere 半径（姿态无关闭式，×1.001 余量同引擎）
+        th = math.tan(math.radians(fov) / 2.0)
+        aspect = EDGE_CAPTURE[0] / EDGE_CAPTURE[1]
+        cs = th * math.sqrt(aspect * aspect + 1.0)
+        rn, rf = n_ * cs, f_ * cs
+        zc = (f_ * f_ - n_ * n_ + rf * rf - rn * rn) / (2.0 * (f_ - n_))
+        return math.sqrt((f_ - zc) ** 2 + rf * rf) * 1.001
+
+    sn, sf = _quant(near), _quant(far)
+    splits = [_split(sn, sf, c) for c in range(4)]
+    radii = [_frustum_r(0.02 if c == 0 else splits[c - 1], splits[c]) for c in range(4)]
+    texels = [2.0 * r / 1024.0 for r in radii]   # 块边长 = 2048/2 = 1024
+    # 视深（沿视轴）与预测级联
+    tv = (tgt[0] - eye[0], tgt[1] - eye[1], tgt[2] - eye[2])
+    tl = math.sqrt(sum(x * x for x in tv))
+    fwd = (tv[0] / tl, tv[1] / tl, tv[2] / tl)
+    for p in plates:
+        e = edge_u2w(p["edge"], 0.0)
+        p["depth"] = sum((e[k] - eye[k]) * fwd[k] for k in range(3))
+        p["cascade"] = sum(1 for c in range(3) if p["depth"] > splits[c])
+    return {"plates": plates, "band": band, "lv": lv, "spacing": spacing,
+            "s_up": s_up, "s_dn": s_dn, "gap_min": gap_min,
+            "ground": (u0, u1, -v_half, v_half), "eye": eye, "tgt": tgt,
+            "fov": fov, "near": near, "far": far, "sn": sn, "sf": sf,
+            "splits": splits, "radii": radii, "texels": texels,
+            "sceneBounds": (sb_c, sb_r), "cam_u": cu}
+
+
+def _edge_grid_face(p0, pu, pv, nu: int, nv: int) -> Geom:
+    """平行四边形面 p0 + a·pu + b·pv 的 nu×nv 网格（每 quad 独立顶点；法线 =
+    normalize(cross(pu, pv))，绕序由 quad() 保证从法线侧看 CCW）。"""
+    geoms = []
+    for i in range(nu):
+        for j in range(nv):
+            a0, a1 = i / nu, (i + 1) / nu
+            b0, b1 = j / nv, (j + 1) / nv
+            corner = _add(p0, _add((pu[0] * a0, pu[1] * a0, pu[2] * a0),
+                                   (pv[0] * b0, pv[1] * b0, pv[2] * b0)))
+            du = (pu[0] * (a1 - a0), pu[1] * (a1 - a0), pu[2] * (a1 - a0))
+            dv = (pv[0] * (b1 - b0), pv[1] * (b1 - b0), pv[2] * (b1 - b0))
+            geoms.append(quad(corner, du, dv))
+    return _merge_geoms(geoms)
+
+
+def _edge_slab(uc: float, t: float, h: float, lv: float, nv: int = 36, ny: int = 8) -> Geom:
+    """竖直板 = 沿 u 厚 t、沿 v 长 lv、高 h 的封闭长方体，底坐 y=0、中心在 (uc, ·, 0)。
+    大面（±u 面）细分 v̂ 向 nv × ŷ 向 ny；±v 面 ŷ 向 ny（与顶底 v̂ 向 nv 沿共享棱对齐，
+    流形缝合判据要求共享棱两侧细分一致）。>128 三角才有 ≥2 个 L0 簇、簇 DAG 才有深度
+    （机关②）。细分是**共面**的：轮廓与 12 三角盒逐点相同，只喂给打包器可简化的内部
+    自由度。六面绕序逐面核对：cross(pu, pv) = 外法线（û×v̂=−ŷ、ŷ×û=v̂ 等，算过）。"""
+    offlen = math.hypot(*SHADOW_OFF)
+    ux, uz = SHADOW_OFF[0] / offlen, SHADOW_OFF[1] / offlen
+    vx, vz = -uz, ux
+
+    def W(u, v, y):
+        return (u * ux + v * vx, y, u * uz + v * vz)
+    Y = (0.0, h, 0.0)
+    Vv = (lv * vx, 0.0, lv * vz)
+    Uu = (t * ux, 0.0, t * uz)
+    faces = [
+        _edge_grid_face(W(uc + t / 2, -lv / 2, 0), Y, Vv, ny, nv),   # +u 面：ŷ×v̂=+û
+        _edge_grid_face(W(uc - t / 2, -lv / 2, 0), Vv, Y, nv, ny),   # −u 面：v̂×ŷ=−û
+        _edge_grid_face(W(uc - t / 2, lv / 2, 0), Uu, Y, 1, ny),     # +v 面：û×ŷ=+v̂
+        _edge_grid_face(W(uc - t / 2, -lv / 2, 0), Y, Uu, ny, 1),    # −v 面：ŷ×û=−v̂
+        _edge_grid_face(W(uc - t / 2, -lv / 2, h), Vv, Uu, nv, 1),   # 顶面：v̂×û=+ŷ
+        _edge_grid_face(W(uc - t / 2, -lv / 2, 0), Uu, Vv, 1, nv),   # 底面：û×v̂=−ŷ
+    ]
+    return _merge_geoms(faces)
+
+
+def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -> Scene:
+    th = list(thicknesses if thicknesses is not None else EDGE_THICKNESSES)
+    fr = edge_frame(th, EDGE_SCAN_B if scan else EDGE_CAM_B,
+                    EDGE_SCAN_Y if scan else EDGE_CAM_Y,
+                    EDGE_SCAN_TGT_FRAC if scan else EDGE_CAM_TGT_FRAC,
+                    EDGE_SCAN_FOV if scan else EDGE_FOV)
+    plates, band = fr["plates"], fr["band"]
+    offlen = math.hypot(*SHADOW_OFF)
+    texel_max = max(fr["texels"])
+    colors = ["red", "magenta", "cyan", "orange", "green", "blue", "purple", "azure"]
+
+    s = Scene(
+        name="shadow_edge_rig" if not scan else "shadow_edge_scan",
+        purpose="影边世界位置绝对尺：竖直板远侧影边 = 板远侧面 + |SHADOW_OFF|·H（闭式），"
+                "误差随板序 = 误差随距离/随级联，台阶 = 级联交界（imgqa shadow-edge-ruler）",
+        honesty=("闭式解成立的前提（破任何一条读到的是假数，方向注明）：① 接收面水平 "
+                 "y=0（本靶唯一平地，无起伏）——接收面一斜，影边在世界 u 上的落点带 "
+                 "Δz·cot 项，误差随板位系统漂移；② 板的远侧影缘**竖直且垂直于光的水平"
+                 "行进方向**（长边 ⊥ u 由几何钉死）——板转个角，影边成斜线，扫描线读到"
+                 "的是混合位置；③ 光方向 = SUN=(0.5,−0.75,−0.45)（configs/scene.lua "
+                 "light 段）——harness/RPC 改光后一切真值坐标必须按新光向重算，本 manifest "
+                 "全部作废；④ 板是**不透明竖直板**，材质非 doubleSided（双面条目不进簇 "
+                 "LOD 路径 = 判据恒绿的静默失效，loader 契约见 qa_scenes 头注）。"
+                 "末级淡出（shadow.slang ⑦，t>0.866 起吃 cov）由 assert ⑤ 把全部影边"
+                 "挡在射程内；PCF 把带宽 < 数纹素的窄带糊成矮包、50% 点不再是影边，"
+                 "由 assert ⑩ 把带宽钉在 6×texel 之上。级联 texel/边界是**闭式预测**"
+                 "（公式链 = 引擎复刻，见源码头注），运行期若相机/内容变了会漂——"
+                 "仪器按 manifest 机位采集，漂移即对账红。"
+                  "🔴 ⑤ 本靶的**负结果**（2026-10-20 实测，别把它读成在测 LOD）：凸平板的"
+                  "簇 DAG **保轮廓**——塌到 1 簇/prim（6.2% 三角）影边仍逐位不动（D=-1…11 "
+                  "六臂 PNG md5 全等，主 agent 复算），所以本靶对「LOD 是否毁剪影」结构性"
+                  "免疫，它的自变量 = **级间影边分歧**（force_cascade 钉级，四臂 PNG 互不"
+                  "相同）。bistro 上真正被 LOD 丢掉的是**贴在更大主体上的细附属结构**"
+                  "（花箱/牛腿/窗棂：四级全 LOD 时近场 186 个小阴影丢 24 个），那是下一台"
+                  "「细附属结构」靶的自变量，不在本靶上找。"),
+        cameras={
+            "edge": {"position": list(fr["eye"]), "target": list(fr["tgt"]),
+                     "fovDegrees": fr["fov"],
+                     "note": "下游低位朝上游看（机关④）：影边视线不经过自己的板；"
+                             "机位 = 离线网格搜索解，构建期 assert ⑤–⑩ 验全部约束"},
+        },
+        extra={
+            "defaultLight": {"direction": list(SUN), "intensity": 12.0,
+                             "source": "configs/scene.lua light 段（闭式解的前提③）"},
+            "sunElevationDeg": math.degrees(math.asin(-SUN[1] / math.sqrt(sum(v * v for v in SUN)))),
+            "shadowOffsetPerMeterOfHeight": [SHADOW_OFF[0], SHADOW_OFF[1]],
+            "edgeOffsetPerPlate": band,
+            # ── 测量接口（imgqa shadow-edge-ruler 读本块，**不在 C++ 里重抄几何**）──
+            "measure": {
+                "u": [SHADOW_OFF[0] / offlen, SHADOW_OFF[1] / offlen],
+                "v": [-SHADOW_OFF[1] / offlen, SHADOW_OFF[0] / offlen],
+                "H": EDGE_H,
+                "bandM": band,
+                "plateLengthM": fr["lv"],
+                "captureSize": list(EDGE_CAPTURE),
+                "fovDegrees": fr["fov"],
+                "camera": {"position": list(fr["eye"]), "target": list(fr["tgt"])},
+                "sceneBounds": {"center": list(fr["sceneBounds"][0]),
+                                "radius": fr["sceneBounds"][1]},
+                "stepM": 0.004,
+                "vLines": [-fr["lv"] / 4.0, 0.0, fr["lv"] / 4.0],
+                "plates": [{
+                    "name": f"plate_t{int(round(p['t'] * 1000)):03d}",
+                    "thicknessM": p["t"],
+                    "uCenter": p["uc"],
+                    "farFaceX": edge_u2w(p["far"], 0.0)[0],
+                    "farFaceZ": edge_u2w(p["far"], 0.0)[2],
+                    "trueEdgeX": edge_u2w(p["edge"], 0.0)[0],
+                    "trueEdgeZ": edge_u2w(p["edge"], 0.0)[2],
+                    "scanFromX": edge_u2w(p["edge"] - fr["s_up"], 0.0)[0],
+                    "scanFromZ": edge_u2w(p["edge"] - fr["s_up"], 0.0)[2],
+                    "scanToX": edge_u2w(p["edge"] + fr["s_dn"], 0.0)[0],
+                    "scanToZ": edge_u2w(p["edge"] + fr["s_dn"], 0.0)[2],
+                    "depthM": p["depth"],
+                    "cascadePredicted": p["cascade"],
+                } for p in plates],
+                "cascadeModel": {
+                    "formula": ("SceneBounds(unionSphere 逐 prim 质心+最远点) → near=max(0.05,"
+                                "dist−R)/far=dist+R → 向上取整到 2 的幂(quantizeShadowDistance) →"
+                                " practical split(mix=0.5,count=4) → r_c=frustumBoundingSphere →"
+                                " texel=2r/1024（图集 2048、2×2 分块）"),
+                    "nearRaw": fr["near"], "farRaw": fr["far"],
+                    "nearQuantized": fr["sn"], "farQuantized": fr["sf"],
+                    "splitsPredicted": fr["splits"],
+                    "texelMmPredicted": [t * 1000.0 for t in fr["texels"]],
+                },
+            },
+            "selfProof": {
+                "cascade": {
+                    "note": ("generator-side closed-form replica of the engine chain; the "
+                             "instrument RE-DERIVES it in C++ from camera+sceneBounds above "
+                             "and cross-checks (drift = throw). See header 级联自证"),
+                    "occupiedCascades": sorted({p["cascade"] for p in plates}),
+                    "perPlate": [{"name": f"plate_t{int(round(p['t'] * 1000)):03d}",
+                                  "depthM": p["depth"], "cascade": p["cascade"]}
+                                 for p in plates],
+                },
+                "clearance": {
+                    "note": "min line-of-sight clearance over occluding plate tops (m)",
+                    "minM": None,  # 由构建期计算回填（下方 assert ⑦ 就地求值）
+                },
+                "thicknessScan": EDGE_SCAN_READINGS,
+                "meshletPackStats": EDGE_PACK_STATS,
+            },
+        },
+    )
+    P = s.pieces.append
+    g = fr["ground"]
+    P(Piece("ground", quad(edge_u2w(g[0], g[2]),
+                           (edge_u2w(g[1], g[2])[0] - edge_u2w(g[0], g[2])[0], 0.0,
+                            edge_u2w(g[1], g[2])[2] - edge_u2w(g[0], g[2])[2]),
+                           (edge_u2w(g[1], g[3])[0] - edge_u2w(g[1], g[2])[0], 0.0,
+                            edge_u2w(g[1], g[3])[2] - edge_u2w(g[1], g[2])[2])),
+            PAL["yellow"], roughness=0.9, radial=False, closed=False,
+            intent="唯一接收面（零起伏平地 y=0，闭式前提①；顺带结掉债-139 卡在鹅卵石"
+                   "起伏上的 2.73pp 残差）；法线 +Y"))
+    for i, p in enumerate(plates):
+        P(Piece(f"plate_t{int(round(p['t'] * 1000)):03d}",
+                _edge_slab(p["uc"], p["t"], EDGE_H, fr["lv"]),
+                PAL[colors[i % len(colors)]], roughness=0.7,
+                intent=f"竖直挡板：厚度 t={p['t']*1000:g} mm（本靶自变量）、高 {EDGE_H} m、"
+                       f"长边 ⊥ 光的水平行进方向；每板独立 primitive = 独立簇 DAG"
+                       f"（选级逐图元 min(D, 自身最深级)）"))
+
+    # ---- 构建期断言（编号对应头注「级联自证」；口头承诺不算数）----
+    tag = "shadow_edge_scan" if scan else "shadow_edge_rig"
+    assert all(p["depth"] < fr["sf"] * 0.85 for p in plates), \
+        f"{tag}: ⑤ 有影边视深落进末级淡出带（≥0.85·shadowFar={fr['sf']:.2f}）——" \
+        f"depths={[round(p['depth'],2) for p in plates]}，cov 被 atten 吃掉读数偏受光"
+    assert len({p["cascade"] for p in plates}) >= 3, \
+        f"{tag}: ⑥ 影边只跨 {len({p['cascade'] for p in plates})} 枚级联（<3）——误差曲线" \
+        f"没有台阶，仪器没有自变量；cascs={[p['cascade'] for p in plates]}"
+    # ⑦ 视线净空：窗口点 wu 对相机与它之间的板 j（u_j > wu）近侧顶缘的净空
+    clr_min = 1e30
+    for p in plates:
+        for w in (-fr["s_up"], 0.0, fr["s_dn"]):
+            wu = p["edge"] + w
+            for q in plates:
+                if q["uc"] <= p["uc"]:
+                    continue  # 相机在下游：只有 u 更大的板在视线与窗口点之间
+                T = fr["cam_u"] - wu
+                Pp = fr["cam_u"] - q["near"]
+                if T > Pp > 0:
+                    clr_min = min(clr_min, fr["eye"][1] * (1 - Pp / T) - EDGE_H)
+    assert clr_min > 0.003, \
+        f"{tag}: ⑦ 视线净空 {clr_min:.4f} m ≤ 3 mm——窗口点被板顶缘遮挡（读数系统性" \
+        f"偏上游而曲线形状正常，最难归因的假数）；加大 cam_y 重搜机位"
+    s.extra["selfProof"]["clearance"]["minM"] = clr_min
+    for i, p in enumerate(plates):
+        lo, hi = p["edge"] - fr["s_up"], p["edge"] + fr["s_dn"]
+        for j, q in enumerate(plates):
+            if i == j:
+                continue
+            assert not (lo < q["near"] < hi or lo < q["far"] < hi), \
+                f"{tag}: ⑧ {p['name'] if 'name' in p else i} 窗口吞进邻板实体"
+            assert not (lo - 0.02 < q["edge"] < hi + 0.02), \
+                f"{tag}: ⑧ 窗口吞进邻影边（双过零点，仪器必抛）"
+    # ⑨ 取景：窗口角点投影在画内 + 30 px（针孔：竖直 fov + aspect 压横轴）
+    tv = tuple(fr["tgt"][k] - fr["eye"][k] for k in range(3))
+    tl = math.sqrt(sum(x * x for x in tv))
+    f_ = tuple(x / tl for x in tv)
+    up = (0.0, 1.0, 0.0)
+    s_ = _norm((f_[1] * up[2] - f_[2] * up[1], f_[2] * up[0] - f_[0] * up[2],
+                f_[0] * up[1] - f_[1] * up[0]))
+    u_ = (s_[1] * f_[2] - s_[2] * f_[1], s_[2] * f_[0] - s_[0] * f_[2],
+          s_[0] * f_[1] - s_[1] * f_[0])
+    tanh = math.tan(math.radians(fr["fov"]) / 2.0)
+    asp = EDGE_CAPTURE[0] / EDGE_CAPTURE[1]
+
+    def _px(pt):
+        d = tuple(pt[k] - fr["eye"][k] for k in range(3))
+        z = sum(d[k] * f_[k] for k in range(3))
+        if z <= 1e-6:
+            return None
+        x = sum(d[k] * s_[k] for k in range(3))
+        y = sum(d[k] * u_[k] for k in range(3))
+        nx = x / (z * tanh * asp)
+        ny_ = y / (z * tanh)
+        return ((nx + 1) / 2 * EDGE_CAPTURE[0] - 0.5, (1 - ny_) / 2 * EDGE_CAPTURE[1] - 0.5)
+    for p in plates:
+        for wu in (p["edge"] - fr["s_up"], p["edge"] + fr["s_dn"]):
+            for vv in (-fr["lv"] / 4, fr["lv"] / 4):
+                pr = _px(edge_u2w(wu, vv))
+                assert pr is not None and 30 < pr[0] < EDGE_CAPTURE[0] - 30 \
+                    and 30 < pr[1] < EDGE_CAPTURE[1] - 30, \
+                    f"{tag}: ⑨ 窗口角点 (u={wu:.2f}, v={vv:.2f}) 投出画外/贴边——换机位重推"
+    assert band >= 6 * texel_max, \
+        f"{tag}: ⑩ 带宽 {band*1000:.0f} mm < 6×最粗纹素 {texel_max*1000:.1f} mm——窄带被" \
+        f" PCF 糊成矮包，50% 交叉点不再是影边位置；加高 H 或拉近相机重搜"
+    assert fr["s_up"] >= 2.5 * texel_max, \
+        f"{tag}: ⑩ 上游窗口 {fr['s_up']*1000:.0f} mm < 2.5×纹素（影边上游移一档就出窗）"
+    assert fr["s_dn"] >= 2.5 * texel_max, \
+        f"{tag}: ⑩ 下游窗口 {fr['s_dn']*1000:.0f} mm < 2.5×纹素（影边下游移一档就出窗）"
+    assert len(th) == EDGE_N_PLATES, f"{tag}: 板数必须 = {EDGE_N_PLATES}（调色板/判据窗口按它排）"
+    assert all(0.001 <= t <= 0.5 for t in th), f"{tag}: 厚度档越出 1mm…500mm 物理量程"
+    assert all(b > a for a, b in zip(th, th[1:])), f"{tag}: 厚度档必须严格升序（板序=自变量序）"
+    return s
+
+
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
@@ -2197,6 +2690,7 @@ SCENES = {
     "ssr_rig_empty": scene_ssr_rig_empty,
     "blend_sort": scene_blend_sort,
     "shadow_grain": scene_shadow_grain,
+    "shadow_edge_rig": scene_shadow_edge_rig,
 }
 
 

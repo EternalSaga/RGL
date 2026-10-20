@@ -188,6 +188,8 @@ int dispatch(const std::string& cmd, const Args& P)
         { "shadow-cascade-seam", cmdShadowCascadeSeam },
         // 同上：零 flag；J1 阈值未定期只出 INFO（不进 rc），J2 是形状判据（无实测数字阈值）。
         { "shadow-caster-survival", cmdShadowCasterSurvival },
+        // 同上：零 flag；J1/J2 界未定期只出 INFO（不进 rc），J3 是形状判据（容差从闭式推）。
+        { "shadow-edge-ruler", cmdShadowEdgeRuler },
         { "blend-sort", cmdBlendSort },
     };
     if (const auto meta = kMeta.find(cmd); meta != kMeta.end())

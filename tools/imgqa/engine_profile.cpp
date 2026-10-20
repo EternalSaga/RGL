@@ -1,12 +1,15 @@
 // 配置语义层：把 `ProfileOpts` 翻译成 lua（交付侧逐键覆写 / 合成侧整份写出）。
 //
-// 三层缝（B5 拆文件）：本文件 = **配置语义**（认得 ProfileOpts 与 shadow.lua / scene.lua 这些
-// 文件名）；`engine_lua_edit.cpp` = **lua 文本编辑原语**（不认识配置，只做定位与替换）；
+// 四层缝（B5 拆文件 + 第 8 枚门后二次拆，护栏 = 500 代码行）：本文件 = **配置生成/写盘**
+// （认得 ProfileOpts 与 shadow.lua / scene.lua 这些文件名）；`engine_profile_gates.cpp` =
+// **例外门**（写盘之后的 read-modify-write + 写后读回自检，共同契约见其头注）；
+// `engine_lua_edit.cpp` = **lua 文本编辑原语**（不认识配置，只做定位与替换）；
 // `engine.cpp` = **引擎会话**（profile 目录之外的一切：SPV 新鲜度守卫、子进程生命周期、RPC）。
 // 缝的另一半理由：只有本文件吃 `engine_lua_edit.h`，改判据容差动那边、加诊断键动这里。
 
 #include "imgqa.h"
 #include "engine_lua_edit.h"
+#include "engine_profile_gates.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -226,136 +229,6 @@ void rewriteTaaBlock(std::string& scene, const ProfileOpts& o)
     if (head == std::string::npos)
         throw std::runtime_error("交付配置 scene.lua 不是 `return {` 形状，无法注入 taa 块");
     scene.insert(head + 8, "\n" + blk.str());
-}
-
-/**
- * 第 4 个例外门（批 N6d）：覆写交付配置 `shadow.lua` 的软影滤波轴。
- * 门闭 = 直接返回（一个键都不写 = 现有判据逐位不变）。
- * @throws 档名非法 / 键缺失 / 太阳角给了不消费它的档
- */
-void applyShadowRouteGate(const std::string& dir, const ProfileOpts& o)
-{
-    if (!o.overrideShadowRoute)
-        return;
-    const std::string mode = o.shadowRouteMode;
-    if (mode != "none" && mode != "csm" && mode != "pcss" && mode != "evssm")
-        throw std::runtime_error("overrideShadowRoute=true 而 shadowRouteMode='" + mode
-            + "' 不是 none|csm|pcss|evssm 之一（拼错的档名引擎只在启动期喊，本工具在生成期就拒）");
-    std::string sh = readFile(dir + "/shadow.lua");
-    overrideTopLevelValue(sh, "shadow.lua", "mode", "\"" + mode + "\"");
-    // izb 强制关：整值换成**最小子表** `{ on = false }`（引擎硬切后只收子表形态，扁平
-    // 布尔 = 启动报错）。留着它 = 硬影 mask 乘在软影之上 = 测的不是滤波轴（§4.1）。
-    overrideTopLevelValue(sh, "shadow.lua", "izb", "{ on = false }");
-    if (o.shadowRouteSunDegrees >= 0.0) {
-        if (mode != "pcss" && mode != "evssm")
-            throw std::runtime_error("shadowRouteSunDegrees="
-                + std::to_string(o.shadowRouteSunDegrees) + " 而 mode='" + mode
-                + "'：太阳角只有 pcss/evssm 两档消费，写进 none/csm = 配置里写了、什么都没发生");
-        std::ostringstream v;
-        v << std::setprecision(9) << o.shadowRouteSunDegrees;
-        overrideValueInTable(sh, "shadow.lua", mode, "sun_degrees", v.str());
-    }
-    // 写出后自检：读回**解析后的值**比对，而不是在文件里搜字面量。
-    // "覆写了但没生效"是这类工具最贵的失效（键名打偏 = 静默拿出厂值下判据）。
-    // ⚠ 刻意不用 `sh.find("on = true") == npos` 那种"旧值离场"搜法：它把判据耦合到
-    //   **全文**（含注释）——configs/shadow.lua 的注释块正在讲子表形态怎么写，哪天补一行
-    //   `-- izB = { on = true, ... }` 示例，旧搜法就抛一句看不懂的"自检失败"。
-    const bool modeOk = topLevelValueOf(sh, "mode", "shadow.lua") == "\"" + mode + "\"";
-    const bool izbOk = topLevelValueOf(sh, "izb", "shadow.lua") == "{ on = false }";
-    if (!modeOk || !izbOk)
-        throw std::runtime_error("shadow.lua 覆写后自检失败（mode=" + mode
-            + " / izb = { on = false } 之一没真正落上，读回值 = \"" + topLevelValueOf(sh, "mode", "shadow.lua")
-            + "\" / \"" + topLevelValueOf(sh, "izb", "shadow.lua")
-            + "\"）——拒绝在旧值上下判据");
-    writeFile(dir + "/shadow.lua", sh);
-}
-
-/**
- * 第 5 个例外门（批 N6d）：把 profile 切成**一次性截图**形态（钉死帧号）。
- * 门闭 = 直接返回。rpc 同时关掉是引擎既有约定（llm 截图在跑时 `/shot` 返 409）。
- */
-void applyLlmShotGate(const std::string& dir, const ProfileOpts& o)
-{
-    if (!o.overrideLlmShot)
-        return;
-    if (o.llmShotFile.empty())
-        throw std::runtime_error("overrideLlmShot=true 而 llmShotFile 为空——截图落在哪里都不知道");
-    if (o.llmShotDelayFrames < 0)
-        throw std::runtime_error("llmShotDelayFrames 不能为负: "
-            + std::to_string(o.llmShotDelayFrames));
-    std::string rt = readFile(dir + "/runtime.lua");
-    replaceValue(rt, "runtime.lua", "llm_debug", "true");
-    overrideValueInTable(rt, "runtime.lua", "llm_shot", "file", "\"" + o.llmShotFile + "\"");
-    overrideValueInTable(rt, "runtime.lua", "llm_shot", "size",
-        "{ " + std::to_string(o.size[0]) + ", " + std::to_string(o.size[1]) + " }");
-    overrideValueInTable(rt, "runtime.lua", "llm_shot", "delay_frames",
-        std::to_string(o.llmShotDelayFrames));
-    if (rt.find("llm_debug = true") == std::string::npos)
-        throw std::runtime_error("runtime.lua 覆写后自检失败（llm_debug 不是 true）");
-    writeFile(dir + "/runtime.lua", rt);
-
-    std::string dg = readFile(dir + "/diagnostics.lua");
-    replaceValue(dg, "diagnostics.lua", "rpc", "false");
-    writeFile(dir + "/diagnostics.lua", dg);
-}
-
-/**
- * 块内键的**写后读回**（第 6/7 例外门共用）。读回的是 `topLevelValueOf(表名)` 拿到的**整块
- * 值文本**，再在里面找 `键 = 值`。为什么不在全文里搜：
- *  ① 块内搜 = 只可能命中本块的那枚键（与 `overrideValueInTable` 的「表跨度内未命中 = 不越界
- *     去别的表找」同口径）——覆写与自检**必须同一套定位判据**，否则覆写打偏到别的块而自检说
- *     「没问题」，自检就成了摆设（`applyShadowRouteGate` 的注释把这条写在了顶层口径上）；
- *  ② 带 ` = ` 的形态顺带避开同前缀兄弟键（`shadow_lod_fallback` 不含 `shadow_lod = `）。
- * ⚠ 本自检**不是**「引擎读到的值」的终局证据，它只保证「我写进去的就是我要的那个值」。引擎
- * 是否真按这个值跑，由消费方的**引擎回显对账**钉（`shadow_cascade_seam.cpp` 查
- * `csm.force_cascade=` 与 `min(D=` 两条回显）。两层各管一段，缺任一段就有一段静默。
- */
-void requireBlockKey(const std::string& text, const std::string& file,
-    const std::string& table, const std::string& key, const std::string& value)
-{
-    const std::string block = topLevelValueOf(text, table, file);
-    if (block.find(key + " = " + value) == std::string::npos
-        && block.find(key + "=" + value) == std::string::npos)
-        throw std::runtime_error(file + " 覆写后自检失败：`" + table + "." + key
-            + "` 读回的不是 " + value + "（读回块 = " + block
-            + "）——覆写打偏或被别处盖掉，拒绝在旧值上下判据");
-}
-
-/**
- * 第 6 个例外门（`shadow-cascade-seam`，债-110）：覆写交付配置 `runtime.lua` 的
- * `meshlet.shadow_lod`（★18 远级簇 LOD 的 uniform 选级 D）。门闭 = 第一行返回 = 一个键都不
- * 多写 = 现有判据逐位不变。取值语义（-1 = 关 / 0 = 阳性对照 L0 臂 / N≥1 = 选级 D=N）的唯一
- * 真相源 = `configs/runtime.lua` 与 `rgl/runtime_config.cppm`，本函数只搬运不解释。
- * @throws 块/键不存在（`overrideValueInTable` 抛）/ 写后读回不是给定值
- */
-void applyShadowLodGate(const std::string& dir, const ProfileOpts& o)
-{
-    if (!o.overrideShadowLod)
-        return;
-    std::string rt = readFile(dir + "/runtime.lua");
-    const std::string v = std::to_string(o.shadowLodValue);
-    overrideValueInTable(rt, "runtime.lua", "meshlet", "shadow_lod", v);
-    requireBlockKey(rt, "runtime.lua", "meshlet", "shadow_lod", v);
-    writeFile(dir + "/runtime.lua", rt);
-}
-
-/**
- * 第 7 个例外门（同上判据）：覆写交付配置 `shadow.lua` 的 `csm.force_cascade`（**强制选级
- * 诊断键**，不是画质旋钮）。为什么不并进第 4 枚（`overrideShadowRoute`）：那枚覆写的是**软影
- * 滤波轴**、且会连带把 `izb` 强制成 `{ on = false }`，与本键正交——两件事装一扇门，改一条
- * 必踩另一条（而这两条的改动缝本来就不同：一条是滤波档定案，一条是诊断仪器）。
- * 门闭 = 第一行返回 = 逐位不变。
- * @throws `csm` 块/键不存在 / 写后读回不是给定值
- */
-void applyShadowForceCascadeGate(const std::string& dir, const ProfileOpts& o)
-{
-    if (!o.overrideShadowForceCascade)
-        return;
-    std::string sh = readFile(dir + "/shadow.lua");
-    const std::string v = std::to_string(o.shadowForceCascadeValue);
-    overrideValueInTable(sh, "shadow.lua", "csm", "force_cascade", v);
-    requireBlockKey(sh, "shadow.lua", "csm", "force_cascade", v);
-    writeFile(dir + "/shadow.lua", sh);
 }
 
 /**
@@ -755,6 +628,13 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             "overrideShadowLod / overrideShadowForceCascade 是交付配置模式的例外门（覆写**交付** "
             "runtime.lua 的 meshlet.shadow_lod 与 shadow.lua 的 csm.force_cascade），而本 opts "
             "没给 deliveryConfigDir ⟹ 没有实现路径。开着门却静默不生效 = 在出厂值上下判据，拒绝生成");
+    // 第 8 例外门（换 entities 装程序化靶）同罪同判据：合成路径的 scene.lua 是**从零写的**，
+    // entities 由 glb / entitiesLua 两枚既有字段给，根本没有「覆写交付 entities」这回事。
+    if (o.deliveryConfigDir.empty() && o.overrideDeliveryEntities)
+        throw std::runtime_error(
+            "overrideDeliveryEntities 是交付配置模式的例外门（它覆写的是**交付** scene.lua 的顶层 "
+            "entities 表），而本 opts 没给 deliveryConfigDir ⟹ 没有实现路径（合成 profile 请直接给 "
+            "glb / entitiesLua）。开着门却静默不生效 = 场景里装的根本不是靶，拒绝生成");
     fs::create_directories(outDir);
     // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
     // 判据必须在**用户实际跑的那份配置**上求值（ProfileOpts::deliveryConfigDir 的注释里
@@ -779,6 +659,11 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         // 吃前写的结果（换序 = 前面的覆写被丢掉）。门闭 = 各自第一行返回 = 逐位不变。
         applyShadowLodGate(outDir, o);
         applyShadowForceCascadeGate(outDir, o);
+        // 第 8 例外门（换 entities 装程序化靶）。放在 applyDeliverySceneLua **之后**：
+        // 那枚函数是 scene.lua 的既有写者（env/ao/taa/spin 覆写 + 一次性写盘），本门在它
+        // 落盘的文本上继续 read-modify-write——换序 = 本门的覆写被 applyDeliverySceneLua
+        // 的写盘丢掉（场景装回 bistro 而判据照跑 = 静默换靶）。门闭 = 第一行返回 = 逐位不变。
+        applyDeliveryEntitiesGate(outDir, o);
         // 所有覆写落盘后统一过一遍语法护栏（理由见该函数注释：坏配置必须在生成期点名文件，
         // 不能变成引擎的 `'{' expected` 天书）。
         requireLuaSyntax(outDir);

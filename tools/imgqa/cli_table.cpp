@@ -529,6 +529,9 @@ std::vector<SubcommandSpec> allSpecs()
     // `shadow-caster-survival` 排在 shadow-cascade-seam 之后（正文住 `cli_table_survival.cpp`）。
     // 同上一条的理由：-h 顺序只是打印序，不挪既有条目、不让既有 append 注释的位置声明失效。
     append(shadowCasterSurvivalSpecs());
+    // `shadow-edge-ruler` 排在 shadow-caster-survival 之后（正文住 `cli_table_edge.cpp`）。
+    // 同上一条的理由：-h 顺序只是打印序，不挪既有条目。
+    append(shadowEdgeRulerSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

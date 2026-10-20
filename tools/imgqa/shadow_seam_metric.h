@@ -192,9 +192,11 @@ void requireDenominatorAlive(const std::vector<std::pair<std::string, std::int64
  * A 放行（图确实不同）而 cov ≡ 0 ⟹ 所有差分判据一起绿。B 判的是单臂绝对量，与差分无关。
  * @param fractionByArm 每条 csm 臂的 (臂名, coverageFraction 读数)
  * @param floor         下界（调用方传 `kSeamCoverageFloor`；本层不认识仪器常数）
+ * @param rationale     「界为什么是这个数」的归因文本——**跟着靶走**（bistro 的 48.6% 量级
+ *                      论证套在浅影靶上就是假归因），默认 = seam 双机位那份。
  */
 void requireCoveragePresent(const std::vector<std::pair<std::string, double>>& fractionByArm,
-    double floor);
+    double floor, const char* rationale = nullptr);
 
 }  // namespace RGL::imgqa
 #endif  // RGL_IMGQA_SHADOW_SEAM_METRIC_H

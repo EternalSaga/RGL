@@ -264,8 +264,11 @@ void testJudgmentFamilies(Checker& c)
     // 75 → 77：`shadow-caster-survival` 两条（债-139 补位：差分判据对「四级一起变差」结构失明，
     // 本台量**绝对量**存活率）：J1 出厂档小块/近场存活率（🔴 阈值未定 TODO：运行期只出 INFO）/
     // J2 本影面积存活率随 D 单调不增，见 judgments_table_survival.cpp。
+    // 77 → 80：`shadow-edge-ruler` 三条（真值 = 闭式算术，补两台「拿渲染比渲染」仪器对共模
+    // 错误的结构失明）：J1 出厂档绝对误差 / J2 相邻级缝宽（两条界未定只报数）/ J3 |误差| 随 D
+    // 单调不减（形状判据），见 judgments_table_edge.cpp。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 77（族拆分最容易掉条目）", all.size() == 77, std::to_string(all.size()));
+    c.chk("判据总数 == 80（族拆分最容易掉条目）", all.size() == 80, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -553,6 +556,8 @@ int cmdSelftest()
     testShadowSeamSignalGates(c);
     testShadowCasterSurvival(c);
     testShadowCasterSurvivalGuards(c);
+    testShadowEdgeRuler(c);
+    testShadowEdgeRulerGuards(c);
     testDiffStructMetric(c);
     testDiffStructDomainGuard(c);
     testDiffBlockAnchors(c);

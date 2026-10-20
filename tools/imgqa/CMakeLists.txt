@@ -28,6 +28,8 @@ add_executable(imgqa
     cli_table_seam.cpp
     # `shadow-caster-survival` 的 spec 段（同 seam 段的拆法，缝按仪器切）。
     cli_table_survival.cpp
+    # `shadow-edge-ruler` 的 spec 段（同 survival 段的拆法，缝按仪器切）。
+    cli_table_edge.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -45,10 +47,14 @@ add_executable(imgqa
     #                            `engine_lua_edit.h`，其余定位件留在本 TU 匿名 namespace）
     #   · engine_profile.cpp   = **配置语义**——把 ProfileOpts 翻译成 lua（交付侧逐键覆写 /
     #                            合成侧整份写出），`makeProfile` 按配置域切小函数
+    #   · engine_profile_gates.cpp = **例外门**（第 4..8 枚：写盘后的 read-modify-write +
+    #                            写后读回自检；护栏逼的一刀——加第 8 枚门后 521 代码行 > 500。
+    #                            共同契约「门闭 = 逐位不变」与调用顺序语义见其头注）
     #   · engine.cpp           = **引擎会话**——SPV 新鲜度守卫 + rgl 子进程生命周期 + RPC 客户端
     # 依赖只向下：会话层不认识任何一份 lua 文件的名字，配置层不 fork 进程。
     engine_lua_edit.cpp
     engine_profile.cpp
+    engine_profile_gates.cpp
     engine.cpp
     image.cpp
     judge.cpp
@@ -77,6 +83,10 @@ add_executable(imgqa
     # 随 D 单调不增），缝按仪器切（`judgments_table_seam.cpp` 把头注缝声明为「本段三条全部属于
     # shadow-cascade-seam」）。
     judgments_table_survival.cpp
+    # `shadow-edge-ruler` 判据段（3 条：出厂档绝对误差【界未定只报数】/ 相邻级缝宽【N 未定
+    # 只报数】/ |误差| 随 D 单调不减），缝按仪器切（`judgments_table_survival.cpp` 把头注缝
+    # 声明为「本段两条属于 shadow-caster-survival」）。
+    judgments_table_edge.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -121,6 +131,11 @@ add_executable(imgqa
     # 分档边界 + 8 邻接 + 空档 NaN + 守卫各一条 throwsStd + 闸门 C/D + 两条判决线挂号，全部闭式
     # 不启引擎（合成场直打 `shadow_survival_metric.cpp`）。
     selftest_survival.cpp
+    # `shadow-edge-ruler` 口径层（影边世界位置绝对尺）的自检段：🔴 立命断言「合成斜坡 50%
+    # 过零点误差 <1e-9」/ 变宽 50% 点不动 / 全 0·全 1·多过零三守卫（多过零必须抛）/
+    # worldPerpMm 闭式 / 级联公式链闭式对账 / 闸门 C·D（含零臂·零板空集合守卫）/ 挂号，
+    # 全部闭式不启引擎（合成 cov 场直打 `shadow_edge_metric.cpp`）。
+    selftest_edge.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -259,6 +274,18 @@ add_executable(imgqa
     shadow_survival_metric.cpp
     shadow_caster_survival_judge.cpp
     shadow_caster_survival.cpp
+    # `shadow-edge-ruler`：影边世界位置**绝对尺**（真值 = 闭式算术，补两台「拿渲染比渲染」
+    # 仪器对共模错误的结构失明）。拆 TU 的缝 = **口径 vs 仪器内部**（四切法照
+    # shadow-caster-survival）：`shadow_edge_metric.cpp` = 口径层（50% 过零点 / 世界毫米换算 /
+    # 级联公式链闭式 / 闸门 C·D，被 selftest 闭式直测）；`shadow_edge_target.cpp` = manifest
+    # measure 块读取 + 扫描线构造 + 两个独立实现的公式链对账；`shadow_edge_ruler.cpp` = 臂表 +
+    # 采集 + 引擎回显对账 + 四道闸门 + 误差曲线；`shadow_edge_ruler_judge.cpp` = J1/J2（INFO
+    # 不判）+ J3（单调性）。跨 TU 类型与量具常数唯一出处 = `shadow_edge_ruler.h`（口径常数在
+    # `shadow_edge_metric.h`）。第 8 例外门（换 entities 装靶）住 `engine_profile_gates.cpp`。
+    shadow_edge_metric.cpp
+    shadow_edge_target.cpp
+    shadow_edge_ruler_judge.cpp
+    shadow_edge_ruler.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器
