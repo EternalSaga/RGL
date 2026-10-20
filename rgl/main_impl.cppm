@@ -23,7 +23,8 @@ import vulkan_window;
 import vk_instance;
 import vk_device;
 import device_fault;  // GPU fault 诊断通路（device lost 出口抓一次；纯旁路）
-import meshlet_shadow_args;  // heap 槽审计执行账（退出收口那行；门开过才出声）
+import meshlet_shadow_args;  // heap 槽审计执行账（登记进诊断账注册表）
+import shutdown_ledger;       // 诊断账注册表（登记 + 两条路结算）
 import vk_swapchain;
 import vk_resources;
 import scene_data;  // SceneDataService（架构债务续账步骤 1）
@@ -298,6 +299,19 @@ void checkPushDataLimits(const DeviceContext& device) {
 }
 
 /**
+ * 诊断账的**唯一登记处**（债-140 第四击 ③）：加一笔账 = 在这里加一行 `add(...)`。
+ *
+ * 为什么放在 main 而不是各模块自己登记：静态自注册要赌初始化顺序、还要赌链接器不把
+ * 无人引用的目标文件丢掉——两种失效都是静默的（账没了但没人红）。显式一张表 = 漏没漏
+ * 一眼可见，而"漏登记"这件事恰好写不出静态判据（查的就是"没出现的那一处"）。
+ * @param ledger 目标账本（生产侧传 `RGL::shutdownLedger()`；测试传自己的实例）
+ */
+void registerDiagnosticReporters(RGL::ShutdownLedger& ledger) {
+	ledger.add(RGL::reportDeviceFaultPollSummary);
+	ledger.add(RGL::reportHeapSlotAuditSummary);
+}
+
+/**
  * 退出前的诊断收口（main 保持在 120 行红线内，本函数把三件"帧循环结束后才做"的事收一处）。
  *
  * 顺序有理由：① profiler dump 与 ② gpu profiler 解绑必须在 `gpuProfiler` 这个 main 栈对象
@@ -310,11 +324,13 @@ void checkPushDataLimits(const DeviceContext& device) {
  * 一行未出，就是证据。抓取点 = `ecs_impl` 的 `drawFrameChecked`（帧循环所有 device-lost
  * 来源汇流的最早一点，且此刻 device 还活着）。
  */
+
 void exitDiagnostics() {
 	RGL::profilerDump();       // Phase 9：trace/stats/摘要收口（profiler=0 = 静默 no-op）
 	bindGpuProfiler(nullptr);  // Phase 9.2：gpuProfiler 析构前解绑（帧循环已结束）
-	RGL::reportDeviceFaultPollSummary();
-	RGL::reportHeapSlotAuditSummary();  // heap 槽审计执行账（门开过才出声）
+	// 诊断账结算（注册表 = 唯一清单，登记点见 registerDiagnosticReporters）。
+	// 🔴 device-lost 之路上也调同一条：见 `ShutdownLedger` 的类注释（为什么必须两处都调）。
+	RGL::shutdownLedger().run();
 }
 
 /** Phase 5.5 IBL 风格契约检查（validateEnvironmentContract）已随刀②.2 删除，理由见
@@ -713,6 +729,8 @@ int main() {
 #ifdef RGL_AFTERMATH  // 编译期开关：须早于任何 device 创建（Aftermath 文档要求）
 	enableAftermath();
 #endif
+	// 诊断账登记（🔴 第一件事：任何一条退出/崩溃路都要已经能结算，包括配置加载失败）
+	RGL::registerDiagnosticReporters(RGL::shutdownLedger());
 	// 配置先于窗口：llm_debug 模式影响建窗（离屏隐藏窗 + 配置尺寸）
 	auto configsOpt = loadAllConfigs();
 	if (!configsOpt)

@@ -610,6 +610,28 @@ export inline ShaderObjectStats shaderObjectStats() {
 	return shaderStatsDetail::mutableStats();
 }
 
+/**
+ * 一条 shader object 上**实际烘进去**的 binding mapping 的可查副本（债-140 第四击 ①）。
+ *
+ * ## 为什么要有这份副本（Vulkan 侧没有查询口）
+ * `vkCreateShadersEXT` 的 mapping 数组是**只进不出**的：传进去之后驱动不留可查接口，
+ * 而 `bakeBindingMappings` 原本把它写在构造函数的栈数组里、建完就丢。于是"条目 34 号
+ * binding 到底映射到哪一枚堆槽"这件事在运行期**无从验证**——只能信烘焙那一步的代码。
+ * 本结构就是把那一步的事实**顺手记下来**，让"信"变成"对账"。
+ *
+ * 🔴 这是**我们自己记的账**，不是驱动回读的。所以它验证的是"我们交给驱动的那份 mapping
+ * 与服务写入的那枚槽是否同一枚"，**不**验证"驱动真的按这份 mapping 建了映射"。
+ * 前一种分家是代码 bug（可查、必查）；后一种是驱动 bug（本结构管不着）。
+ *
+ * 三个字段逐一对应 `VkDescriptorSetAndBindingMappingEXT` 里 `sourceData.constantOffset`
+ * 那条路径（本引擎的图形条目只用 `HEAP_WITH_CONSTANT_OFFSET` 这一种 source）。
+ */
+export struct BakedBindingMapping {
+	uint32_t binding = 0;        ///< firstBinding（本引擎每条只放 1 个 binding）
+	uint64_t heapOffset = 0;     ///< sourceData.constantOffset.heapOffset（**字节**）
+	uint64_t heapArrayStride = 0; ///< sourceData.constantOffset.heapArrayStride（资源堆 = descriptorSize）
+};
+
 /** RenderPipeline 的内部拼装细节（不导出：只服务本模块的构造函数）。 */
 namespace shaderDetail {
 	/**
@@ -809,6 +831,11 @@ export class RenderPipeline {
 	 *  🔴 `taskHasStage == false` 时**保持空且不解引用**——`taskShaderHandle()` 是唯一出口。 */
 	vk::raii::ShaderEXT taskShader = nullptr;
 	bool taskHasStage = false;
+	/**
+	 * 烘进去的 mapping 的可查副本（`BakedBindingMapping` 的注释载有完整理由）。
+	 * 构造期从 `bakeBindingMappings` 的输出数组抄一份，之后只读（热重载走整对象替换）。
+	 */
+	std::vector<BakedBindingMapping> bakedMappingCopy;
 
     public:
 	/**
@@ -849,6 +876,19 @@ export class RenderPipeline {
 		// 点名条目，防的是未来 extra 列表继续加长时静默越界写栈。
 		VkDescriptorSetAndBindingMappingEXT mappings[48]{};
 		const uint32_t mappingCount = shaderDetail::bakeBindingMappings(effect, bindings, debugName, mappings);
+
+		// 🔴 债-140 第四击 ①：把交给驱动的那份 mapping **顺手抄一份**，让"条目 34 号 binding
+		// 映射到哪枚堆槽"在运行期可查（Vulkan 侧没有查询口，原形态是栈数组建完即丢）。
+		// 只读 constantOffset 那条 union 路径 —— 本函数的 add() 只发
+		// HEAP_WITH_CONSTANT_OFFSET 这一种 source（图形条目全走它），所以对本模块产出的
+		// 每一条 mapping 该字段都是**当初真正写进去的那个值**，不是跨 union 乱读。
+		bakedMappingCopy.clear();
+		bakedMappingCopy.reserve(mappingCount);
+		for (uint32_t i = 0; i < mappingCount; ++i)
+			bakedMappingCopy.push_back(BakedBindingMapping {
+				.binding = mappings[i].firstBinding,
+				.heapOffset = mappings[i].sourceData.constantOffset.heapOffset,
+				.heapArrayStride = mappings[i].sourceData.constantOffset.heapArrayStride });
 
 		VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo{};
 		mappingInfo.sType = VK_STRUCTURE_TYPE_SHADER_DESCRIPTOR_SET_AND_BINDING_MAPPING_INFO_EXT;
@@ -949,6 +989,15 @@ export class RenderPipeline {
 	[[nodiscard]] vk::ShaderEXT meshShaderHandle() const { return *meshShader; }
 	/** @return frag 阶段 shader 句柄（DGC execution set 一次性写入，Phase 7b；inactive 路不消费）。 */
 	[[nodiscard]] vk::ShaderEXT fragShaderHandle() const { return *fragShader; }
+	/**
+	 * 本条目**实际烘进去**的 binding mapping 副本（债-140 第四击 ① 的取证入口）。
+	 * 批 M 过滤掉的 binding 不在里面 —— 所以"查不到某个 binding"本身就是一条有效读数，
+	 * 对账方必须把它与"查到了但值不对"分开报（两种现场的下一步完全相反）。
+	 * @return 烘入顺序的 mapping 视图（下标无含义，按 binding 号查）
+	 */
+	[[nodiscard]] std::span<const BakedBindingMapping> bakedMappings() const {
+		return bakedMappingCopy;
+	}
 };
 
 }  // namespace RGL

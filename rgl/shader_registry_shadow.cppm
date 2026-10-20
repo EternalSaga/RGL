@@ -15,6 +15,7 @@ import vk_device;
 import vk_resources;
 import shader;
 import asset_table;
+import mdi_rows;  // kMdiShadowRowBinding（烘的号 = 对账的号，一处定义）
 
 namespace RGL {
 
@@ -103,7 +104,7 @@ namespace RGL {
 	// vkCreateShadersEXT 报错，实测首跑现形 ⟹ 落全树第一个空闲号）。描述符内容 =
 		// MeshletShadowArgsService 写入的 storage buffer 描述符（整张 ring×2 容量，轮转落在
 		// argsOffset/rowBase 这两个**数**上，描述符与条目启动期烘一次不动）。
-		b.extra.push_back({.binding = 34, .sampler = false, .heapSlot = argsSlot});
+		b.extra.push_back({.binding = kMdiShadowRowBinding, .sampler = false, .heapSlot = argsSlot});
 		auto entry = PipelineEntry{.name = "shadow_meshlet_mdi",
 			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
 				"shadow_meshlet_mdi"),

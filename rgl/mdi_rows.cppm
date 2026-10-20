@@ -321,4 +321,19 @@ export [[nodiscard]] std::expected<MdiShadowRowTable, std::string> buildMdiShado
 export [[nodiscard]] std::optional<std::string> validateMdiShadowRows(
 	const MdiShadowRowTable& table, std::span<const MdiShadowCandidate> cands);
 
+/**
+ * 行表在 MDI 阴影管线条目上的 **binding 号**（债-140 第四击 Ⓐ）。
+ *
+ * 为什么要有名字而不是两处各写 34：烘那一步（`addShadowMeshletMdiEntry` 往
+ * `bindings.extra` 塞条目）与对账那一步（`logBakedRowMappingAudit` 按号查烘入的 mapping）
+ * 必须查**同一个号**——写两份字面量，改号时必漂，而漂了的症状是"对账永远说没烘"，
+ * 一条假的红字比没有红字更糟。
+ *
+ * 号源：定案号 22 被 sceneHeader UBO 占用（docs/mdi_plan.md §19.2 D2），实测让位到 34。
+ * 🔴 shader 侧的对应声明 = `rgl/shaders/shadow_meshlet.task.slang` 的
+ * `[[vk::binding(34, 0)]]`；C++↔shader 两侧同向由批 M 的 `declaredBindingsUnion` 在运行期兜
+ *（SPV 没声明的 binding 不烘），本常量只保证 **C++ 侧两处**不各抄一份。
+ */
+export constexpr uint32_t kMdiShadowRowBinding = 34;
+
 }  // namespace RGL

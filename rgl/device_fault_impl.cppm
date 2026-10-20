@@ -34,7 +34,6 @@ std::string describeSpan(uint64_t bytes) {
 struct PollStats {
 	uint64_t calls = 0;   ///< 轮询调用次数（门开才计数，门关时连这里都不动）
 	uint64_t masked = 0;  ///< 抓到的 masked fault 条数
-	bool printed = false;  ///< 汇总是否已出声（崩溃路径到不了 main 的退出收口，见 summary）
 };
 /** 轮询账的可变单例（函数内 static = 无静态初始化顺序问题；退出时由 reportDeviceFaultPollSummary 读）。 */
 PollStats& pollStats() {
@@ -472,9 +471,9 @@ void reportDeviceFaultPollSummary() {
 	// 🔴 **只出声一次**，且 device-lost 之路上也要出：原先只挂在 main 的退出收口里，而那条路
 	// 在 device lost 时执行不到（收尾 waitIdle 抛 vk::SystemError，异常展开跳过 exitDiagnostics）
 	// ⟹ 挂的那几轮根本报不出"轮了多少次"。现在抓取点与退出收口两处都调，打出去重。
-	if (stats.calls == 0u || stats.printed)
+	// 去重不再由本函数负责：注册表（`ShutdownLedger`）持有 printed（债-140 第四击 ③）。
+	if (stats.calls == 0u)
 		return;  // 从未启用 = 不出声（启用与否由启动期那行 INFO 承担，不在这里重复一遍）
-	stats.printed = true;
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("device fault 轮询账: 调用 {} 次，抓到 masked fault {} 次", stats.calls, stats.masked);
 }

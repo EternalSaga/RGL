@@ -23,7 +23,7 @@ import input_probe;     // 脚本化输入探针（2026-09-28 输入链回归护
 import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/archive/phase9_plan.md）
 import gpu_canary;
 import device_fault;  // GPU fault masked 轮询（diagnostics.fault_poll 门，默认关 = 零调用）
-import meshlet_shadow_args;  // heap 槽审计执行账（device-lost 之路上也要出）
+import shutdown_ledger;  // 诊断账注册表（device-lost 之路上也要结算，见 faultCaptureOnLost）
 import param_registry;   // DebugPanelState（批 10.7 点选跳页请求位）
 import scene_context;
 import taa_jitter;  // 批 12.6 TAA：halton 抖动 / jitter→投影 / 跳切判据（纯函数层）
@@ -533,12 +533,15 @@ void faultCaptureOnLost(RGL::Renderer& renderer, std::string_view context, uint3
 	// 驱动给了两次 dump，不带帧号就会互相覆盖，而"哪一帧留过现场"正是这条数据要回答的。
 	reportDeviceFaultOnLost(device.getDevice(), device.getDeviceFaultSupport(), context,
 	    "frame" + std::to_string(frame));  // 本文件 GMF 没有 fmt（modules 坑），用 std::to_string
-	// 🔴 两笔**执行账**必须在这里也打一遍：main 的退出收口在 device lost 时执行不到（收尾
+	// 🔴 崩溃现场的 heap 槽 dump（债-140 夜间批）：devcoredump 只说 fault@0、不说哪条 binding，
+	// 而描述符堆在 host 可见映射上、device lost 后仍读得到 —— 必须在**这里**读，晚一步
+	// （异常展开过 DeviceContext）就连 device 都没了。
+	renderer.logMdiEntrySlotsOnLost();  // （device 是 DeviceContext，槽在 Renderer 手里）
+	// 🔴 诊断账必须在这里也结算一遍：main 的退出收口在 device lost 时**执行不到**（收尾
 	// waitIdle 抛 vk::SystemError，异常展开跳过它），而"审计/轮询到底跑了多少帧"这个数
 	// 只在崩溃的轮次里才有意义——只在正常退出打印 = 系统性排除掉正在调查的那些轮。
-	// 两个 summary 各自去重（printed），正常退出时仍只出一次。
-	reportDeviceFaultPollSummary();
-	reportHeapSlotAuditSummary();
+	// 注册表按 reporter 去重（`ShutdownLedger`），正常退出时每条账仍只出一遍。
+	shutdownLedger().run();
 }
 
 /** resize 处理 + 失败日志（文案原样）：转调 resizeSystem；失败打 "Resize 错误: {}"

@@ -227,6 +227,7 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/slot_ledger.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/pending_evictions.cppm"  # B2-4③′ 债-124：frames-in-flight 逐出台账（纯逻辑，rlgfx/rlscene 两侧共用）
     "${CMAKE_CURRENT_SOURCE_DIR}/compute_access_log.cppm"  # B2-2：compute 访问日志 + hazard 派生（纯值 + 一次查表，零设备 ⟹ rlbase；裁决在 rlgfx 的 offgraph_sync）
+    "${CMAKE_CURRENT_SOURCE_DIR}/shutdown_ledger.cppm"  # 债-140③：诊断账注册表（纯逻辑零设备 ⟹ rlbase）
     "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/taa_jitter.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/velocity_field.cppm"   # 批 14.4：逐像素速度场纯函数层（rlbase，FSR 硬前置）

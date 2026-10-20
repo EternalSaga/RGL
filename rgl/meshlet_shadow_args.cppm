@@ -9,6 +9,7 @@ import vk_device;     // DeviceContext（描述符写入取 device 句柄）
 import vk_resources;  // Resources（allocSlot / descriptor heap 槽地址 / VMA 分配器）
 import VmaRaii;       // VmaBuffer / VmaAllocatorRAII
 import mdi_rows;      // MdiShadowRow / kMdiShadowRowStride + 尺寸/偏移算术与同源 pair
+import shader;        // BakedBindingMapping（Ⓐ 烘入 mapping 对账；同层无环：shader 不 import 本模块）
 
 /**
  * meshlet_shadow_args —— 真 MDI 阴影段的**行表 GPU 载体**（docs/mdi_plan.md §19.5 ★M-1a，rlscene）
@@ -221,6 +222,84 @@ export HeapSlotAudit auditHeapSlot(std::span<const std::byte> current,
 export std::string describeHeapSlotAudit(const HeapSlotAudit& audit);
 
 /**
+ * **烘入 mapping** 对账的结论（债-140 第四击 Ⓐ；纯数据 = 无设备可单测）。
+ *
+ * ## 它补的是上一击的哪半个盲区
+ * `heap_slot_audit` 审的是**服务认为自己那枚**槽（`argHeapSlot`）里的字节。但 GPU 读的不是
+ * "服务认为的那枚"，而是**条目烘进去的那枚** —— 两者由两条独立代码路径给出：
+ *   · 服务：`writeSlotDescriptor()` 把 BDA 写进 `argHeapSlot`；
+ *   · 条目：`addShadowMeshletMdiEntry(clusterSlots, argsSlot)` → `bakeBindingMappings`
+ *     把 `slotBytes(argsSlot, descriptorSize)` 烘成 binding 34 的 heapOffset。
+ * 只要这两条路给出不同的槽号，症状就是**服务往 Y 写、GPU 从 X 读**：X 里可能是 0，
+ * 也可能是别的 buffer 的描述符 —— 而 CPU 侧对 Y 的审计**永远看不到这件事**。
+ * 本对账把另一半补上。
+ *
+ * ## 换算式（🔴 必须是 `slotBytes` 的逆运算，且要顶住"除不尽"）
+ * 烘的时候是 `heapOffset = slot * descriptorSize`（唯一合法拼写 =
+ * `shaderDetail::slotBytes`，债-13 的坑 5 护栏）。所以读回来是
+ * `slot = heapOffset / descriptorSize`，**且仅当** `heapOffset % descriptorSize == 0`。
+ * 除不尽 = 这条 mapping 的 heapOffset 不是资源堆槽偏移（例如误传了 sampler 堆的字节偏移），
+ * 那要单独点名 —— 拿它整除出一个槽号去比"槽号不符"，会把单位错误报成接线错误。
+ *
+ * ## 为什么判据是"与烘之前记录的期望比"而不是"与闭式 BDA 比"
+ * 上一击刚踩过：描述符的内存布局是驱动私有的。mapping 的**值**虽然是我们自己算的，
+ * 但"期望值"仍然只能来自**同一条代码路径记下的期望**（服务的槽号 × 步长），
+ * 不能另起一处闭式重算 —— 那正是本项目"单一来源不承重"那条要堵的形态。
+ */
+export struct BakedMappingAudit {
+	bool bindingFound = false;    ///< 烘入 mapping 里**有**这个 binding（没有 = 声明与 mapping 分家）
+	bool sizeUsable = false;      ///< descriptorSize > 0（= 0 时换算式无从执行）
+	bool strideMatches = false;   ///< heapArrayStride == descriptorSize（否则这条 mapping 描述的不是一枚资源槽）
+	bool offsetSlotAligned = false;  ///< heapOffset 是 descriptorSize 的整数倍
+	bool slotMatches = false;     ///< 换算出的槽号 == 服务写入的槽号
+	uint32_t binding = 0;         ///< 被审的 binding 号（本引擎 = 34）
+	uint32_t bakedSlot = 0;       ///< heapOffset / descriptorSize（仅在对齐时有意义）
+	uint32_t expectedSlot = 0;    ///< 服务的 argHeapSlot
+	uint32_t descriptorSize = 0;  ///< 一枚描述符占的字节数
+	uint64_t bakedHeapOffset = 0;    ///< 烘进去的字节偏移
+	uint64_t expectedHeapOffset = 0; ///< 期望的字节偏移（expectedSlot × descriptorSize）
+	/** 对账是否通过（五项全真）。 */
+	[[nodiscard]] bool ok() const {
+		return bindingFound && sizeUsable && strideMatches && offsetSlotAligned && slotMatches;
+	}
+};
+
+/**
+ * 对账本体（**纯函数**：烘入 mapping 列表 + 期望进，结论出）。
+ * @param baked 条目实际烘进去的 mapping（`RenderPipeline::bakedMappings()`）
+ * @param binding 要审的 binding 号（行表 = 34）
+ * @param expectedSlot 服务实际写入描述符的那枚槽（`MeshletShadowArgsService::argSlot()`）
+ * @param descriptorSize 描述符步长（同上来源，🔴 不在这里另算）
+ */
+export BakedMappingAudit auditBakedRowMapping(std::span<const BakedBindingMapping> baked,
+	uint32_t binding, uint32_t expectedSlot, uint32_t descriptorSize);
+
+/**
+ * 结论 → 一行可读文本（五种现场措辞**两两不同**，各指一个不同的下一步）。
+ *
+ * 🔴 尤其不许混的两条：① "条目根本没烘 binding 34"（GPU 读未映射 binding，基址来源
+ * 未定义 —— fault@0 的一条**正面**来路）；② "烘的是 X 而服务写的是 Y"（两条路分家）。
+ * ① 的下一步是查批 M 的声明过滤与 SPV，② 的下一步是查装配层的参数传递。
+ */
+export std::string describeBakedRowMappingAudit(const BakedMappingAudit& audit);
+
+/**
+ * 对账 + 出声（启动期一次性；调用点 = `wireMeshletMdiShadowActivation`）。
+ *
+ * 🔴 **判负路径不经门**：五项里任何一项不符都是**接线 bug**，判据两侧的值来自同一条代码
+ * 路径、与驱动无关 ⟹ 不存在"换台机器就红"的假阳性，把它做成可关的开关只会让它在需要它的
+ * 那次跑里恰好没开。门（`heap_slot_audit`）只管**通过时**的那行 INFO 正读数。
+ * @param baked 条目实际烘进去的 mapping
+ * @param entryName 条目名（进正文，多个条目时能认出是哪条）
+ * @param binding 被审 binding 号
+ * @param expectedSlot 服务写入的槽号
+ * @param descriptorSize 描述符步长
+ */
+export void logBakedRowMappingAudit(std::span<const BakedBindingMapping> baked,
+	std::string_view entryName, uint32_t binding, uint32_t expectedSlot,
+	uint32_t descriptorSize);
+
+/**
  * 装配层持有的**行表载体 + 一个 heap 槽**（★M-1a 的对外服务；ring×2 只在这一个对象里）。
  *
  * 构造做三件事（顺序 = 先领号后建 buffer 都行，但描述符必须在 buffer 地址已知之后写）：
@@ -320,6 +399,36 @@ export class MeshletShadowArgsService {
 	 */
 	[[nodiscard]] std::optional<HeapSlotAudit> auditSlot() const;
 
+	/**
+	 * 一枚描述符占的字节数（= 描述符堆的 descriptorSize，构造期取一次存下）。
+	 * 🔴 Ⓐ 对账的期望值必须用**这一个**数：烘那一步用的也是它
+	 *（`slotBytes(argsSlot, descriptorSize)`），两处各查一次 = 两个真相源。
+	 */
+	[[nodiscard]] uint32_t descriptorBytes() const { return descriptorSize; }
+
+	/**
+	 * 登记"本条目实际会读的全部 heap 槽"（债-140 夜间批）。
+	 *
+	 * 🔴 为什么Ⓐ不够：Ⓐ 只比对了 binding 34 一枚槽。但条目烘了 8 条 mapping（scene data
+	 * 子范围 + 簇 buffer 17-20 + 行表 34），**任何一枚是零描述符 = 基址 0 = fault@0 的直接
+	 * 来源**，而 devcoredump 从来没说 fault 是哪条 binding 触发的。本登记让"逐帧审计"与
+	 * "device-lost 现场 dump"两条路都能覆盖全部 8 枚。
+	 * @param baked 条目实际烘进去的 mapping（`RenderPipeline::bakedMappings()`）
+	 */
+	void registerEntrySlots(std::span<const BakedBindingMapping> baked);
+
+	/**
+	 * 全部已登记槽的内容读数（每枚一行 `binding N 槽 M [hex]`，全零的标 `🔴零描述符`）。
+	 *
+	 * 用途两处：① `diagnostics.heap_slot_audit` 开时逐帧查（发现零描述符**只报一次**，
+	 * 避免每帧刷）；② **device-lost 抓取点无条件 dump** —— 这是 CPU 侧能拿到的、最接近
+	 * "GPU 当时看到什么"的东西（槽内容在 host 可见映射上，device lost 之后仍可读）。
+	 */
+	[[nodiscard]] std::string describeEntrySlots() const;
+
+	/** 逐帧审计入口（门 = `heap_slot_audit`）：发现全零描述符即 ERROR，每个 binding 只报一次。 */
+	void auditEntrySlotsOnce() const;
+
 	/** 构造期拍的槽内容快照（审计的判据基准；空 = 未拍）。 */
 	[[nodiscard]] std::span<const std::byte> slotSnapshot() const { return slotSnapshotBytes; }
 
@@ -363,6 +472,9 @@ export class MeshletShadowArgsService {
 	 * 恒拍（不看诊断门）：成本 = 构造期一次 ≤64B 拷贝，换来"审计随时可开而基准不依赖门"。
 	 */
 	std::vector<std::byte> slotSnapshotBytes;
+	/** 条目实际会读的全部 (binding, 槽号)（`registerEntrySlots` 填；换算式同 Ⓐ）。 */
+	std::vector<std::pair<uint32_t, uint32_t>> entrySlots;
+	uint32_t descriptorSize = 0;  ///< 一枚描述符的字节数（构造期取；Ⓐ 换算式的分母）
 };
 
 /**

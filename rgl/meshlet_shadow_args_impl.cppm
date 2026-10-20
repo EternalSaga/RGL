@@ -40,6 +40,22 @@ std::string formatSlotBytes(std::span<const std::byte> bytes, size_t cap = 64) {
 	return out;
 }
 
+/** 一段描述符字节是否全零（= 零描述符 = 基址 0，fault@0 的直接来源）。 */
+bool bytesAllZero(std::span<const std::byte> bytes) {
+	for (const auto b : bytes)
+		if (b != std::byte{0})
+			return false;
+	return true;
+}
+
+/** binding 是否已经报过（表最多 8 项，线性扫；手写而不是 std::find——modules 坑）。 */
+bool alreadyReported(const std::vector<uint32_t>& reported, uint32_t binding) {
+	for (const uint32_t b : reported)
+		if (b == binding)
+			return true;
+	return false;
+}
+
 /** 8 字节小端形态是否出现在 span 内**任意**字节偏移（`auditHeapSlot` 的附带信息专用）。 */
 bool containsAddressLE(std::span<const std::byte> bytes, uint64_t form) {
 	if (form == 0ull || bytes.size() < 8)
@@ -71,7 +87,6 @@ struct AuditStats {
 	uint64_t frames = 0;      ///< 实际执行过对账的帧数
 	uint64_t mismatch = 0;    ///< 判负次数（含三种现场）
 	uint64_t noBaseline = 0;  ///< 无基准（快照为空）次数
-	bool printed = false;     ///< 汇总是否已出声（见 reportHeapSlotAuditSummary）
 };
 /** 审计执行账的可变单例（函数内 static = 无静态初始化顺序问题；只在主线程的录制路径上写）。 */
 AuditStats& auditStats() {
@@ -317,6 +332,86 @@ std::string describeHeapSlotAudit(const HeapSlotAudit& audit) {
 	    audit.firstDiffByte);
 }
 
+BakedMappingAudit auditBakedRowMapping(std::span<const BakedBindingMapping> baked,
+	uint32_t binding, uint32_t expectedSlot, uint32_t descriptorSize) {
+	BakedMappingAudit a;
+	a.binding = binding;
+	a.expectedSlot = expectedSlot;
+	a.descriptorSize = descriptorSize;
+	a.sizeUsable = descriptorSize > 0u;
+	a.expectedHeapOffset =
+	    a.sizeUsable ? static_cast<uint64_t>(expectedSlot) * descriptorSize : 0ull;
+	// 按 binding 号查（烘入顺序无含义：批 M 的声明过滤会改变条数与顺序）。
+	const BakedBindingMapping* found = nullptr;
+	for (const auto& m : baked)
+		if (m.binding == binding) {
+			found = &m;
+			break;
+		}
+	a.bindingFound = found != nullptr;
+	if (!a.bindingFound || !a.sizeUsable)
+		return a;  // 无从换算，后面三项保持 false（措辞由这两条优先负责）
+	a.bakedHeapOffset = found->heapOffset;
+	a.strideMatches = found->heapArrayStride == descriptorSize;
+	// 🔴 换算式 = `shaderDetail::slotBytes` 的逆运算，且**先验整除**（见接口注释）。
+	a.offsetSlotAligned = found->heapOffset % descriptorSize == 0ull;
+	if (!a.offsetSlotAligned)
+		return a;
+	a.bakedSlot = static_cast<uint32_t>(found->heapOffset / descriptorSize);
+	a.slotMatches = a.bakedSlot == expectedSlot;
+	return a;
+}
+
+std::string describeBakedRowMappingAudit(const BakedMappingAudit& audit) {
+	const std::string head = fmt::format(
+	    "binding {} 烘入 mapping 对账：烘入 heapOffset={:#x}（步长 {}）期望槽号 {} → 堆偏移 {:#x}"
+	    "（descriptorSize={}）",
+	    audit.binding, audit.bakedHeapOffset, audit.descriptorSize, audit.expectedSlot,
+	    audit.expectedHeapOffset, audit.descriptorSize);
+	// 🔴 判序 = 责任归属的判序，五种现场各指一个不同的下一步，措辞不许互相包含。
+	if (!audit.bindingFound)
+		return head + " —— 🔴🔴 条目**根本没烘 binding "
+		    + std::to_string(audit.binding)
+		    + "**（SPV 声明了它却没有 mapping，或两侧同向约束被破）。GPU 读未映射的 binding ⟹ "
+		      "基址来源未定义，这正是 fault@0 的一条正面来路。下一步 = 查批 M 的声明过滤"
+		      "（declaredBindingsUnion）与 task SPV，**不是**查行表内容";
+	if (!audit.sizeUsable)
+		return head + " —— 🔴 descriptorSize = 0，槽↔字节换算式无从执行 = 本模块或描述符堆"
+		      "自己算错了步长（调用方 bug，与驱动无关）";
+	if (!audit.strideMatches)
+		return head + " —— 🔴 烘入的 heapArrayStride 与 descriptorSize 不等 = 这条 mapping 描述的"
+		      "**不是一枚资源堆描述符**（sampler 堆偏移误接到资源 binding 上？单位错，不是接线错）";
+	if (!audit.offsetSlotAligned)
+		return head + " —— 🔴 烘入的 heapOffset 不是 descriptorSize 的整数倍 = 换算式被喂了"
+		      "非槽起点的字节偏移（例如按元素而不是按槽算）。下一步 = 查 slotBytes 的调用点";
+	if (!audit.slotMatches)
+		return head + " —— 🔴🔴 **两条路指向不同槽**：烘入槽号 "
+		    + std::to_string(audit.bakedSlot) + " ≠ 服务写入的槽号 "
+		    + std::to_string(audit.expectedSlot) + "。服务把行表 BDA 写进后者，GPU 从前者读 —— "
+		      "那里可能是 0，也可能是别的 buffer 的描述符。这就是 fault@0 的直接成因形态，"
+		      "且 heap_slot_audit **看不见**（它审的是服务那枚）。下一步 = 查 "
+		      "addShadowMeshletMdiEntry 的 argsSlot 实参传递链";
+	return head + " —— 烘入槽号 == 服务写入槽号（两条路同源，CPU 侧无分家）";
+}
+
+void logBakedRowMappingAudit(std::span<const BakedBindingMapping> baked,
+	std::string_view entryName, uint32_t binding, uint32_t expectedSlot,
+	uint32_t descriptorSize) {
+	const auto audit = auditBakedRowMapping(baked, binding, expectedSlot, descriptorSize);
+	auto* logger = RLLogger::getInstance();
+	if (logger) {
+		// 🔴 判负**不经门**（理由见接口注释：判据两侧来自同一条代码路径，与驱动无关，
+		// 不存在假阳性，所以没有"可以关掉"的余地）。门只管通过时那行正读数。
+		if (!audit.ok())
+			logger->error("baked mapping audit[{}]: {}", entryName,
+			    describeBakedRowMappingAudit(audit));
+		else if (diagnostics().heapSlotAudit)
+			logger->info("baked mapping audit[{}]: {} —— 条目数 {}（正读数也要有出处，否则"
+			             "「零 ERROR」分不清是「对过且相符」还是「根本没对」）",
+			    entryName, describeBakedRowMappingAudit(audit), baked.size());
+	}
+}
+
 void MeshletShadowArgsService::allocArgSlot() {
 	auto slot = resources.allocSlot(SlotSegment::Runtime, "meshlet.gpu.shadowArgs");
 	if (!slot)
@@ -334,6 +429,9 @@ void MeshletShadowArgsService::createRing(uint32_t sliceRows, uint32_t slices) {
 }
 
 void MeshletShadowArgsService::writeSlotDescriptor() {
+	// 步长取**一次**存成员：本函数（写描述符 + 拍快照）与 Ⓐ 的换算式共用同一个数，
+	// 两处各查一次描述符堆 = 两个真相源（虽然值相同，但"相同"这件事没人守）。
+	descriptorSize = resources.getDescriptorHeap().getDescriptorSize();
 	// range = **整张容量**（覆盖所有 slice）⟹ 逐帧轮转只改 offset，描述符与槽号终身不动
 	// （§19.5 的免第二槽解法）。写法 = `MeshletCullService::writeSlotDescriptor` 同款：
 	// `writeResourceDescriptorsEXT` + `DeviceAddressRangeEXT`，host 直写不进命令流。
@@ -346,15 +444,14 @@ void MeshletShadowArgsService::writeSlotDescriptor() {
 		throw std::runtime_error("meshlet shadow args: 槽地址解析失败 —— "
 		                         + slotAddr.error().describe());
 	device.getDevice().writeResourceDescriptorsEXT(desc,
-	    vk::HostAddressRangeEXT { *slotAddr, resources.getDescriptorHeap().getDescriptorSize() });
+	    vk::HostAddressRangeEXT { *slotAddr, descriptorSize });
 
 	// 🔴 债-140 第三击 ①：写完**立刻**从 host 映射读回槽内容当快照（审计的判据基准）。
 	// 恒拍，不看诊断门——成本是构造期一次 ≤64B 拷贝，换来"审计随时可开而基准与门无关"
 	// （门控快照 = 门开的那一帧才开始有基准，之前几帧的改写它看不见）。
 	// ⚠ 这里读的是**自己刚写的那块内存**，不是设备状态；host 可见映射上这是合法读。
-	const auto size = resources.getDescriptorHeap().getDescriptorSize();
 	const auto* base = static_cast<const std::byte*>(*slotAddr);
-	slotSnapshotBytes.assign(base, base + size);
+	slotSnapshotBytes.assign(base, base + descriptorSize);
 }
 
 std::optional<HeapSlotAudit> MeshletShadowArgsService::auditSlot() const {
@@ -368,6 +465,54 @@ std::optional<HeapSlotAudit> MeshletShadowArgsService::auditSlot() const {
 	const std::span<const std::byte> current {
 		static_cast<const std::byte*>(*slotAddr), slotSnapshotBytes.size() };
 	return auditHeapSlot(current, slotSnapshotBytes, ring.deviceAddress, argHeapSlot);
+}
+
+void MeshletShadowArgsService::registerEntrySlots(std::span<const BakedBindingMapping> baked) {
+	entrySlots.clear();
+	if (descriptorSize == 0u)
+		return;  // 无从换算（Ⓐ 同款护栏：步长为 0 时不做除法）
+	for (const auto& m : baked) {
+		if (m.heapOffset % descriptorSize != 0ull)
+			continue;  // 非槽起点的偏移（sampler 堆之类），不参与本审计
+		entrySlots.emplace_back(m.binding,
+			static_cast<uint32_t>(m.heapOffset / descriptorSize));
+	}
+}
+
+std::string MeshletShadowArgsService::describeEntrySlots() const {
+	std::string out;
+	for (const auto& [binding, slot] : entrySlots) {
+		const auto addr = resources.getDescriptorHeap().getSlotCpuAddress(slot);
+		if (!addr) {
+			out += fmt::format("\n  binding {} 槽 {} —— 🔴 槽地址解析失败", binding, slot);
+			continue;
+		}
+		const std::span<const std::byte> bytes {
+			static_cast<const std::byte*>(*addr), descriptorSize };
+		out += fmt::format("\n  binding {:>2} 槽 {:>5} [{}]{}", binding, slot, formatSlotBytes(bytes),
+		    bytesAllZero(bytes) ? "  🔴🔴 **零描述符 = 基址 0**" : "");
+	}
+	return out.empty() ? "（未登记任何条目槽）" : out;
+}
+
+void MeshletShadowArgsService::auditEntrySlotsOnce() const {
+	// 每个 binding 只报一次：全零描述符若是常态（例如某条 binding 本引擎根本不写），每帧刷
+	// 会把日志冲干净、反而盖掉真正的现场；若是竞态，第一次出现就是最有价值的一次。
+	static std::vector<uint32_t> reported{};
+	for (const auto& [binding, slot] : entrySlots) {
+		if (alreadyReported(reported, binding))
+			continue;
+		const auto addr = resources.getDescriptorHeap().getSlotCpuAddress(slot);
+		if (!addr)
+			continue;  // 解析失败**不算**"零描述符"——两件事不许混进同一条读数
+		if (!bytesAllZero({static_cast<const std::byte*>(*addr), descriptorSize}))
+			continue;
+		reported.push_back(binding);
+		if (auto* logger = RLLogger::getInstance())
+			logger->error("heap slot audit: 条目 binding {} 的堆槽 {} 内容**全零** = 零描述符 = "
+			              "基址 0（fault@0 的直接来源）—— 该槽从未被写过或被清零了。全文:\n{}",
+			    binding, slot, describeEntrySlots());
+	}
 }
 
 void MeshletShadowArgsService::auditAndLog(uint32_t frameSlot, uint32_t segments) const {
@@ -401,9 +546,10 @@ void reportHeapSlotAuditSummary() {
 	// waitIdle 抛 vk::SystemError，异常展开跳过 exitDiagnostics）。后果是挂的那几轮报
 	// "审了 0 帧"，于是"审了 2005 帧零不符"这个数**系统性地排除了正在调查的那些轮**。
 	// 现在两个点都调它 + 打出去重 = 正常退出与崩溃退出各出一次，不多不少。
-	if (stats.frames == 0u || stats.printed)
+	// 去重不再由本函数负责：注册表（`ShutdownLedger`）持有 printed，两条路各调一次
+	// `shutdownLedger().run()`，谁先到谁结算（债-140 第四击 ③）。
+	if (stats.frames == 0u)
 		return;
-	stats.printed = true;
 	if (auto* logger = RLLogger::getInstance())
 		logger->info("heap slot audit 执行账: 审了 {} 帧，不符 {} 次，无基准 {} 次", stats.frames,
 		    stats.mismatch, stats.noBaseline);

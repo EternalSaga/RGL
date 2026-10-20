@@ -30,6 +30,7 @@ import scene_data;     // kShadowMapSize（阴影图边长，与模型条目同�
 import meshlet_lod;   // MeshletShadowLodTable（★M-1a：载体的生效事实与「每段行数上界」的来源）
 import shadow_proxy_types;  // ShadowProxyTable（N10 P3：钉段行也占 sliceRows 上界的一行）
 import meshlet_shadow_args;  // MeshletShadowArgsService（★M-1a：真 MDI 行表的 GPU 载体，装配层持有）
+import mdi_rows;  // kMdiShadowRowBinding（对账查的号 = 烘进去的号，同一常量）
 import render_list;          // MeshletMdiShadowActivation（★M-1b：第⑤步 emplace 的生效标记，采集侧读它）
 import frame_session;        // FrameSession::kFramesInFlight（★M-1a：ring×2 的轮转节奏唯一真相源）
 import meshlet_cull_service;  // MeshletCullService（★1-a2-i 逐簇剔除的 GPU 侧载体，装配层构造）
@@ -580,6 +581,18 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
 	// 条目幂等（同名命中返回既有下标）；argsSlot = ④ 领的行表堆槽，binding 34 与声明同向。
 	const uint32_t mdiIdx = pipelines.addShadowMeshletMdiEntry(clusterSlots,
 		assembly.shadowArgs->argSlot());
+	// 🔴 债-140 第四击 Ⓐ：**烘入 mapping 对账**（补上 heap_slot_audit 自知的另一半盲区）。
+	// 上一击审的是"服务那枚槽里的字节"，但 GPU 读的是**条目烘进去的那枚槽** —— 两条独立
+	// 代码路径（服务 writeSlotDescriptor / 条目 bakeBindingMappings）给出各自的槽号，
+	// 一旦分家就是"服务往 Y 写、GPU 从 X 读"，而 X 里可能是 0 = fault@0 的直接成因形态，
+	// 且上一击**永远看不见**（它只审 Y）。判负不经门（两侧同源于一条代码路径，无假阳性）。
+	logBakedRowMappingAudit(pipelines.entry(mdiIdx).pipeline.bakedMappings(),
+	    "shadow_meshlet_mdi", kMdiShadowRowBinding, assembly.shadowArgs->argSlot(),
+	    assembly.shadowArgs->descriptorBytes());
+	// 🔴 夜间批补：Ⓐ 只审了 binding 34 一枚，而条目烘了 8 条 mapping。**任何一枚是零描述符
+	// = 基址 0 = fault@0 的直接来源**，而 devcoredump 从不说 fault 是哪条 binding 触发的。
+	// 登记下来让"逐帧审计"与"device-lost 现场 dump"两条路都能覆盖全部 8 枚。
+	assembly.shadowArgs->registerEntrySlots(pipelines.entry(mdiIdx).pipeline.bakedMappings());
 	const uint32_t bound = bindMdiShadowEntryToAssets(pipelines, assets, mdiIdx);
 	if (bound == 0) {
 		if (logger)

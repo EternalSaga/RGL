@@ -31,11 +31,25 @@ module;
  *       就是掩码形态：槽前 8 字节 = 0x0000800103532330，BDA = 0xffff800103532330）
  *   Ⓔ `allZero` 的初值从 `true` 改成 `false` → 红「全零」两条
  *   Ⓕ 把 `sizeMismatch` 的早退删掉 → 红「长度不同」那条（会拿短 span 去比长 span）
+ *
+ * ## Ⓐ 烘入 mapping 对账（第四击新增，同一张网的另一半）
+ * 上一击审"服务那枚槽里的字节"，本击审"条目烘进去的是哪枚槽"——两条独立代码路径，
+ * 分家时上一击**看不见**（它只审服务那枚）。被测函数 = `auditBakedRowMapping`。
+ *   Ⓖ 换算式写反（`heapOffset * descriptorSize` 而不是除）→ 红「恒等」+「差一」+「别的 buffer」
+ *   Ⓗ 删掉整除检查（`offsetSlotAligned` 恒真）→ 红「堆偏移除不尽」那条
+ *      （除不尽却整除出一个合理槽号 = 把单位错误洗成通过）
+ *   Ⓘ 删掉 `bindingFound` 早退 → 红「根本没烘」那条（会拿 0 去比，报成"槽号分家"，
+ *      把人送去查参数传递，而该查的是 SPV 声明）
+ *   Ⓙ `strideMatches` 恒真 → 红「范围错」那条
+ *   Ⓚ 删掉 `sizeUsable` 早退 → 红「descriptorSize = 0」那条（真除零 = SIGFPE，
+ *      测试进程直接崩；一条诊断通路把自己弄崩是必须被抓住的形态）
  */
 export module test_heap_slot_audit;
 
 import rlstd;
 import meshlet_shadow_args;
+import shader;  // BakedBindingMapping（Ⓐ 的输入类型）
+import mdi_rows;  // kMdiShadowRowBinding（对账查的号 = 烘进去的号）
 
 namespace RGL {
 namespace {
@@ -180,6 +194,161 @@ TEST_CASE("describeHeapSlotAudit：四种现场的措辞两两不同（同一段
 	for (const auto& t : texts) {
 		CHECK(t.find("heap 槽 1") != std::string::npos);
 		CHECK(t.find("0xffff800103532330") != std::string::npos);
+	}
+}
+
+
+// ─── Ⓐ 烘入 mapping 对账（债-140 第四击）───────────────────────────────────────
+
+namespace {
+
+/** 造一份"条目实际烘进去的 mapping"：塞两条无关 mapping 在前，逼对账**按号查**。 */
+std::vector<BakedBindingMapping> bakedWith(uint32_t binding, uint64_t heapOffset,
+	uint64_t stride) {
+	std::vector<BakedBindingMapping> v;
+	v.push_back(BakedBindingMapping { .binding = 0, .heapOffset = 0, .heapArrayStride = stride });
+	v.push_back(BakedBindingMapping { .binding = 1, .heapOffset = stride, .heapArrayStride = stride });
+	v.push_back(BakedBindingMapping {
+	    .binding = binding, .heapOffset = heapOffset, .heapArrayStride = stride });
+	v.push_back(BakedBindingMapping {
+	    .binding = 21, .heapOffset = 12 * stride, .heapArrayStride = stride });
+	return v;
+}
+
+constexpr uint32_t kDescSize = 32;       // 本机实测（装桩行里的"基准快照 32 字节"）
+constexpr uint32_t kServiceSlot = 8258;  // 本机实测的行表槽号
+
+}  // namespace
+
+TEST_CASE("auditBakedRowMapping 恒等：烘入槽号 == 服务槽号（本机实测形状）") {
+	// 8258 × 32 = 264256 = 0x40840，与启动日志里那行逐字相同
+	const auto baked = bakedWith(kMdiShadowRowBinding, 0x40840ull, kDescSize);
+	const auto a = auditBakedRowMapping(baked, kMdiShadowRowBinding, kServiceSlot, kDescSize);
+	CHECK(a.ok());
+	CHECK(a.bindingFound);
+	CHECK(a.strideMatches);
+	CHECK(a.offsetSlotAligned);
+	CHECK(a.slotMatches);
+	CHECK(a.bakedSlot == kServiceSlot);
+	CHECK(a.expectedHeapOffset == 0x40840ull);
+	const auto text = describeBakedRowMappingAudit(a);
+	CHECK(text.find("两条路同源") != std::string::npos);
+	CHECK(text.find("8258") != std::string::npos);
+}
+
+TEST_CASE("auditBakedRowMapping 反向用例：槽号**差一**（两条路各领一枚相邻槽）") {
+	// 服务写 8258、条目烘的是 8257 —— 差一枚槽，heap_slot_audit 完全看不出来
+	const auto baked = bakedWith(kMdiShadowRowBinding, 8257ull * kDescSize, kDescSize);
+	const auto a = auditBakedRowMapping(baked, kMdiShadowRowBinding, kServiceSlot, kDescSize);
+	CHECK(a.bindingFound);
+	CHECK(a.offsetSlotAligned);
+	CHECK_FALSE(a.slotMatches);
+	CHECK_FALSE(a.ok());
+	CHECK(a.bakedSlot == 8257u);
+	const auto text = describeBakedRowMappingAudit(a);
+	CHECK(text.find("两条路指向不同槽") != std::string::npos);
+	CHECK(text.find("8257") != std::string::npos);  // 两侧槽号都要进正文
+	CHECK(text.find("8258") != std::string::npos);
+	CHECK(text.find("fault@0") != std::string::npos);
+	CHECK(text.find("heap_slot_audit") != std::string::npos);  // 要点名"上一击看不见这件事"
+}
+
+TEST_CASE("auditBakedRowMapping 反向用例：mapping 指向**别的 buffer** 的槽（差得远）") {
+	const auto baked = bakedWith(kMdiShadowRowBinding, 100ull * kDescSize, kDescSize);
+	const auto a = auditBakedRowMapping(baked, kMdiShadowRowBinding, kServiceSlot, kDescSize);
+	CHECK_FALSE(a.slotMatches);
+	CHECK_FALSE(a.ok());
+	CHECK(a.bakedSlot == 100u);
+	const auto text = describeBakedRowMappingAudit(a);
+	CHECK(text.find("两条路指向不同槽") != std::string::npos);
+	CHECK(text.find("别的 buffer 的描述符") != std::string::npos);
+}
+
+TEST_CASE("auditBakedRowMapping 反向用例：条目**根本没烘**这个 binding（声明与 mapping 分家）") {
+	// 批 M 的声明过滤把它滤掉了 / extra 里忘了塞 —— GPU 读的是未映射 binding，基址来源未定义
+	std::vector<BakedBindingMapping> baked;
+	baked.push_back(BakedBindingMapping { .binding = 0, .heapOffset = 0, .heapArrayStride = 32 });
+	baked.push_back(BakedBindingMapping { .binding = 21, .heapOffset = 672, .heapArrayStride = 32 });
+	const auto a = auditBakedRowMapping(baked, kMdiShadowRowBinding, kServiceSlot, kDescSize);
+	CHECK_FALSE(a.bindingFound);
+	CHECK_FALSE(a.ok());
+	// 🔴 未烘时**不许**再算槽号：拿 0 去除会得出"烘入了槽 0"，把"没烘"报成"槽号分家"，
+	// 下一步就被送去查参数传递，而真正该查的是 SPV 声明与批 M 过滤。
+	CHECK(a.bakedSlot == 0u);
+	const auto text = describeBakedRowMappingAudit(a);
+	CHECK(text.find("根本没烘") != std::string::npos);
+	CHECK(text.find("declaredBindingsUnion") != std::string::npos);
+	CHECK(text.find("两条路指向不同槽") == std::string::npos);
+}
+
+TEST_CASE("auditBakedRowMapping 反向用例：范围错（stride ≠ descriptorSize = 不是一枚资源槽）") {
+	const auto baked = bakedWith(kMdiShadowRowBinding, 0x40840ull, kDescSize * 2);
+	const auto a = auditBakedRowMapping(baked, kMdiShadowRowBinding, kServiceSlot, kDescSize);
+	CHECK(a.bindingFound);
+	CHECK_FALSE(a.strideMatches);
+	CHECK_FALSE(a.ok());
+	const auto text = describeBakedRowMappingAudit(a);
+	CHECK(text.find("不是一枚资源堆描述符") != std::string::npos);
+	CHECK(text.find("单位错") != std::string::npos);
+	// 单位错与接线错是两件事，措辞不许串
+	CHECK(text.find("两条路指向不同槽") == std::string::npos);
+}
+
+TEST_CASE("auditBakedRowMapping 反向用例：堆偏移除不尽（换算式被喂了非槽起点的字节）") {
+	// 0x40841 = 8258 槽 + 1 字节。整除检查若被跳过，会整除出一个"看起来合理"的槽号 8258
+	// 从而**通过**对账 —— 而实际烘进去的偏移根本不是槽起点。
+	const auto baked = bakedWith(kMdiShadowRowBinding, 0x40841ull, kDescSize);
+	const auto a = auditBakedRowMapping(baked, kMdiShadowRowBinding, kServiceSlot, kDescSize);
+	CHECK(a.bindingFound);
+	CHECK_FALSE(a.offsetSlotAligned);
+	CHECK_FALSE(a.ok());
+	CHECK(a.bakedSlot == 0u);  // 除不尽就不该产出槽号
+	const auto text = describeBakedRowMappingAudit(a);
+	CHECK(text.find("不是 descriptorSize 的整数倍") != std::string::npos);
+	CHECK(text.find("slotBytes") != std::string::npos);
+}
+
+TEST_CASE("auditBakedRowMapping 反向用例：descriptorSize = 0（换算式无从执行 = 调用方 bug）") {
+	const auto baked = bakedWith(kMdiShadowRowBinding, 0ull, 0ull);
+	const auto a = auditBakedRowMapping(baked, kMdiShadowRowBinding, kServiceSlot, 0u);
+	CHECK(a.bindingFound);
+	CHECK_FALSE(a.sizeUsable);
+	CHECK_FALSE(a.ok());
+	const auto text = describeBakedRowMappingAudit(a);
+	CHECK(text.find("无从执行") != std::string::npos);
+	CHECK(text.find("调用方 bug") != std::string::npos);
+	// 步长为 0 时**不许**做除法（整数除零 = SIGFPE；一条诊断通路把自己弄崩是最低级的收场，
+	// 本断言与上一条合起来才真正钉住"先判 sizeUsable 再除"的判序）
+	CHECK(text.find("两条路指向不同槽") == std::string::npos);
+}
+
+TEST_CASE("describeBakedRowMappingAudit：六种现场措辞两两不同（同一条 binding，六个下一步）") {
+	const std::string texts[] = {
+		describeBakedRowMappingAudit(auditBakedRowMapping(
+		    bakedWith(kMdiShadowRowBinding, 0x40840ull, kDescSize), kMdiShadowRowBinding,
+		    kServiceSlot, kDescSize)),
+		describeBakedRowMappingAudit(auditBakedRowMapping(
+		    bakedWith(kMdiShadowRowBinding, 8257ull * kDescSize, kDescSize), kMdiShadowRowBinding,
+		    kServiceSlot, kDescSize)),
+		describeBakedRowMappingAudit(auditBakedRowMapping(
+		    bakedWith(kMdiShadowRowBinding, 100ull * kDescSize, kDescSize), kMdiShadowRowBinding,
+		    kServiceSlot, kDescSize)),
+		describeBakedRowMappingAudit(auditBakedRowMapping(
+		    {}, kMdiShadowRowBinding, kServiceSlot, kDescSize)),
+		describeBakedRowMappingAudit(auditBakedRowMapping(
+		    bakedWith(kMdiShadowRowBinding, 0x40840ull, kDescSize * 2), kMdiShadowRowBinding,
+		    kServiceSlot, kDescSize)),
+		describeBakedRowMappingAudit(auditBakedRowMapping(
+		    bakedWith(kMdiShadowRowBinding, 0x40841ull, kDescSize), kMdiShadowRowBinding,
+		    kServiceSlot, kDescSize)),
+	};
+	for (size_t i = 0; i < 6; ++i)
+		for (size_t j = i + 1; j < 6; ++j)
+			CHECK_MESSAGE(texts[i] != texts[j], "第 ", i, " 与第 ", j, " 种现场措辞相同");
+	// 每条都自带 binding 号与期望槽号（红了要能当场看出烘的是什么、该是什么）
+	for (const auto& t : texts) {
+		CHECK(t.find("binding 34") != std::string::npos);
+		CHECK(t.find("8258") != std::string::npos);
 	}
 }
 

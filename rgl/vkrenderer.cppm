@@ -255,8 +255,24 @@ export class Renderer {
 	 * `prepareMdiShadowRows` 首行早退 = 零 upload 零 barrier 零新命令（逐位不变的构造性保证）。
 	 * @param service 行表载体（nullptr = 宿主条件不成立；此时采集侧必零段，指针无人解引用）
 	 */
+
 	void setMeshletShadowArgsService(MeshletShadowArgsService* service) {
 		mdiShadowArgs = service;
+	}
+
+	/**
+	 * device-lost 时 dump 阴影 MDI 条目**全部** heap 槽的内容（债-140 夜间批）。
+	 *
+	 * 🔴 为什么值得在崩溃路径上做：devcoredump 只给"fault @ VA 0x0"，**从不说是哪条 binding**
+	 * 触发的。描述符堆是 host 可见映射，device lost 之后 CPU 照样读得到 ⟹ 这是我们能拿到的、
+	 * 最接近"GPU 当时看到什么"的东西。零描述符（基址 0）若在这里现形，就是 fault@0 的正面证据。
+	 */
+	void logMdiEntrySlotsOnLost() const {
+		if (mdiShadowArgs == nullptr)
+			return;  // 门关 / 载体未建 = 没有槽可 dump（不编造"全零"的假现场）
+		if (auto* logger = RLLogger::getInstance())
+			logger->error("device fault: 阴影 MDI 条目 heap 槽现场（device-lost 时刻，逐条 binding）——{}",
+			    mdiShadowArgs->describeEntrySlots());
 	}
 
 	/**

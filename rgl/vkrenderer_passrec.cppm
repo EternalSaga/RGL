@@ -438,6 +438,7 @@ void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlo
 	if (diagnostics().heapSlotAudit) {
 		auto z = zone("heapSlotAudit");
 		mdiShadowArgs->auditAndLog(frameSlot, list.mdiSegments.size());
+		mdiShadowArgs->auditEntrySlotsOnce();  // 全部 8 枚槽，不只 34
 	}
 	uint32_t tasks = 0;  // 债-113：本帧 MDI task 数（= Σ 段锚）。上界 = 总行数（不变量 4 逐行守
 	                     // gcX ≤ 1 ⟹ tasks ≤ rows ≤ ring 容量），uint32_t 内不会回卷

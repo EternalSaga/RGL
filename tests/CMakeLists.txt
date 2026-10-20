@@ -104,7 +104,8 @@ set(RGL_TEST_SOURCES
     test_shadow_proxy_types.cppm  # N10 P2 阴影代理钉段表：五条 invariant 各配反向用例（错误串两两不同）+ radius 闭式锚 + v1/零条空表 + R2 签名与阶跃闭式
     test_shadow_proxy_emit.cppm   # N10 P3 钉段 draw 的采集与发射：c0 恒一条 + c1..c3 两条 / push 独立块指针身份 / texel 门两态 / collect 宿主嵌套三态 / 门关与空表形状相等
     test_device_fault.cppm       # GPU fault 诊断通路的纯函数面：后端优先级真值表 / 枚举翻译两两不同 / 地址区间 spec 闭式 / 空报告与查询失败两条出口可分 / EXT 两段式容量决策
-    test_heap_slot_audit.cppm   # 债-140 第三击①：描述符堆槽内容对账（恒等 / 清零 / 快照本身是零 / 陈旧地址 / 长度不符 五种现场两两可分）
+    test_shutdown_ledger.cppm      # 诊断账注册表：幂等（两条路只结算一次）/ 顺序=登记顺序 / 空表不印 / 置位先于调用
+    test_heap_slot_audit.cppm   # 债-140 第三击①：描述符堆槽内容对账（恒等 / 清零 / 快照本身是零 / 陈旧地址 / 长度不符 五种现场两两可分）+ 第四击Ⓐ：烘入 mapping 对账（六种现场两两可分）
     test_mdi_rows.cppm           # ★M-0（§19.3）MDI 行表构建器：行序=候选序 + 前 12B 对账 Vk 结构 + stride 合法性 + 四条不变量反向用例（错误串两两不同）+ 配置键探针
                                  # + ★M-1a（§19.5）尺寸/偏移算术：🔴 argsOffset 与 rowBase 同源 + 07089/07090 合一闭式边界 + 容量少 1 字节必红
     test_mdi_shadow_emit.cppm    # ★M-1b（§19.2 D4 / §19.5）生效档采集判据：constexpr 桥（schema↔mdi_rows）+ 每级联一条 MDI + 同源 pair 闭式字面 + 混合形态/孔洞流/五档回落 + 行序=候选序
@@ -133,6 +134,36 @@ set(RGL_TEST_SOURCES
     test_descriptor_heap_ubo.cppm    # gpu 套件能力 spike：resource heap 能否放 eUniformBuffer 并被 ConstantBuffer<T> 读（+ binding→槽机制证伪）；dheap 4/5 = StructuredBuffer 元素 stride 8/44 设备端往返（R3 撤销条件第 2 条）
     test_render_target_cache.cppm    # gpu 套件 RT 缓存多描述符：跨重建槽复用（EVSSM 矩图迁入的结构性收益）+ 逐项独立领号 + 预发号不重复领 + 规格漂移报错不动已有附件
 )
+# ── 测试归属完整性闸门（与 rgl/CMakeLists.txt 的引擎模块闸门同款理由）────────────
+# 磁盘上每个 `test_*.cppm` 必须**恰好登记一次**。漏登记**不会有人红**：那个文件只是不再
+# 编译，而 "663 passed" 与 "680 passed" 在门禁眼里一样绿 —— 少了东西同样让判据失效而
+# 不出声。2026-10-20 实测踩到（债-140 第四击批）：一次批量编辑把已存在的条目整行吞掉
+#（替换而非追加），configure 与 `just gates` 四道全绿，17 条用例静默消失，
+# 直到对比测试总数才发现。反向（清单有、磁盘无）CMake 自己会报 "Cannot find source
+# file"，不必重复。
+file(GLOB RGL_TEST_FILES_ON_DISK CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/test_*.cppm")
+# 非用例 TU：支撑模块挂 rgl_test_support（见下方 target_sources），不进 RGL_TEST_SOURCES
+set(RGL_TEST_NON_CASE_FILES test_support.cppm)
+set(RGL_TEST_REGISTERED_ABS "")
+# 🔴 `IN LISTS` 后面接的是**变量名**而不是值：写成 ${RGL_TEST_NON_CASE_FILES} 会去找一个
+# 名叫 `test_support.cppm` 的变量（恒空）⟹ 闸门反过来误报（本批实测踩过）。
+foreach(_t IN LISTS RGL_TEST_SOURCES RGL_TEST_NON_CASE_FILES)
+    list(APPEND RGL_TEST_REGISTERED_ABS "${CMAKE_CURRENT_SOURCE_DIR}/${_t}")
+endforeach()
+set(_test_unregistered "")
+foreach(_f IN LISTS RGL_TEST_FILES_ON_DISK)
+    if(NOT _f IN_LIST RGL_TEST_REGISTERED_ABS)
+        list(APPEND _test_unregistered "${_f}")
+    endif()
+endforeach()
+if(_test_unregistered)
+    string(REPLACE ";" "\n    " _test_pretty "${_test_unregistered}")
+    message(FATAL_ERROR
+        "以下测试 TU 未登记进 tests/CMakeLists.txt 的 RGL_TEST_SOURCES：\n    ${_test_pretty}\n"
+        "它现在**根本不编译**，而 `just test` 依旧全绿 —— 用例数会静默变少。"
+        "加进去时顺手写一行「测什么」的说明（本清单每条都带）。")
+endif()
+
 
 # ─── 11.3-1b 探针 SPIR-V（izb_spike mesh/frag，测试专用不入引擎 SPV 面）──────
 # 复用 cmake/RglSlang.cmake（SLANG_FLAGS 唯一声明点，勿在此内联 flag）；本目录
