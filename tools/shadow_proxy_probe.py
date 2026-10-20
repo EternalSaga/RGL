@@ -90,12 +90,19 @@ VERTEX_STRIDE = 48      # ModelVertex（pos f32×3 @0）
 
 # FileHeader 字段表（照 format.h 顺序）：magic8 ver4 tool4 sha20 fnv4 然后 **7**×u32（primCount..
 # nodeWidth），@68 是编译器为 uint64 插的 **4B 对齐填充**（不是字段！），再 2×u64 三角数 + 7×u64
-# 段偏移 = 144B，其后 reserved[12] 凑满 192B。
-# 🔴 这条布局**不靠推理成立**：main() 里拿「末段末尾 == 文件字节数」硬自证，错了当场停
-# （bistro 实测 offNodes + nodeCount×32 = 184,553,920 == 文件大小，逐位闭合）。
+# 段偏移 = 144B，其后 reserved 凑满 192B。
+# 🔴 这条布局**不靠推理成立**：Product() 里拿「末段末尾 == 文件字节数」硬自证，错了当场停
+# （bistro v1 实测 offNodes + nodeCount×32 = 184,553,920 == 文件大小，逐位闭合）。
+#
+# **v2**（shadow proxy N10 P1）从 reserved 里划出 offMustL0(Q @144) + mustL0Count(I @152)
+# ⟹ 有效字段 156B，头部仍是 192B。两版**共用前 144B**（v2 的字段序与 v1 逐位相同 = format.h
+# 版本史写死的兼容契约）；本探针同时认两版，为的是「改前 / 改后两份产物用同一把尺量」。
 HDR_FMT = "<8sII20sIIIIIIII4xQQ7Q"
+HDR_FMT_V2 = HDR_FMT + "QI"
 HEADER_SIZE = 192
-assert struct.calcsize(HDR_FMT) == 144, "头部字段表应算到 144B（+ reserved[12] + 4B 填充 = 192B）"
+MUSTL0_SIZE = 12  # DiskMustL0（prim / clusterOffset / clusterCount 三枚 u32）
+assert struct.calcsize(HDR_FMT) == 144, "头部字段表应算到 144B（+ reserved + 4B 填充 = 192B）"
+assert struct.calcsize(HDR_FMT_V2) == 156, "v2 = v1 的 144B + offMustL0(8) + mustL0Count(4)"
 
 # proxy 表每条目字节数（P2 形态：word[0] task 数 + clusterStart + meshGroupCount 三枚由选级派生）
 ENTRY_BYTES = 12
@@ -132,25 +139,38 @@ class Product:
         # 🔴 `access` **必须写关键字**：POSIX 下 mmap 的第三个位置参数是 `flags`，把 ACCESS_READ(=1)
         # 按位置传进去会变成 MAP_SHARED ⟹ 向只读文件要写映射，报 PermissionError 而不是类型错误。
         self.mm = mmap(self.fh.fileno(), 0, access=ACCESS_READ)
-        (magic, ver, self.tool_version, _sha, _fnv, self.prim_count, self.vertex_count,
+        magic, ver = struct.unpack_from("<8sI", self.mm, 0)
+        if magic != MAGIC:
+            die(f"magic 不符：{magic!r} ≠ {MAGIC!r}（不是 meshlet_pack 产物？）")
+        if ver not in (1, 2):
+            die(f"formatVersion={ver}，本探针认 1（v1）与 2（v2 = v1 + 尾部 MustL0 段）")
+        self.format_version = ver
+        # v1 没有尾部那段 ⟹ 偏移 0 / 条数 0（与写侧 serialize 的"段不存在"口径一致：
+        # mustL0Count==0 时 offMustL0 就是文件长，一个字节都不追加）
+        (*head, self.off_mustl0, self.mustl0_count) = (
+            struct.unpack_from(HDR_FMT_V2, self.mm, 0) if ver == 2 else
+            struct.unpack_from(HDR_FMT, self.mm, 0) + (0, 0))
+        (_magic, _ver, self.tool_version, _sha, _fnv, self.prim_count, self.vertex_count,
          self.cluster_count, self.group_count, self.node_count, self.level_count,
          self.node_width, self.l0_tris, self.total_tris,
          off_prim, off_vpool, off_clu, off_tris, off_remap, off_groups,
-         off_nodes) = struct.unpack_from(HDR_FMT, self.mm, 0)
-        if magic != MAGIC:
-            die(f"magic 不符：{magic!r} ≠ {MAGIC!r}（不是 meshlet_pack 产物？）")
-        if ver != 1:
-            die(f"formatVersion={ver}，本探针只认 1")
+         off_nodes) = head
         self.off = dict(prim=off_prim, vpool=off_vpool, clu=off_clu,
                         tris=off_tris, remap=off_remap, groups=off_groups, nodes=off_nodes)
-        # 🔴 **解析器的硬自证**：末段（Nodes）末尾必须正好等于文件字节数。这条不需要任何外部
-        # 锚点，而它能抓住"字段表错一位"这类会让后面全部读数变成错表的病——比 --expect 更该信。
+        # 🔴 **解析器的硬自证**：**末段**（v1 = Nodes，v2 = MustL0）末尾必须正好等于文件字节数。
+        # 这条不需要任何外部锚点，而它能抓住"字段表错一位"这类会让后面全部读数变成错表的病——
+        # 比 --expect 更该信。v2 的 MustL0 段为空时 offMustL0 == 文件长（写侧不追加字节）
+        # ⟹ 同一条判据对"门关态产物"照样成立，两版共用一把尺。
         size = os.fstat(self.fh.fileno()).st_size
-        end = off_nodes + self.node_count * 32
+        tail = "offMustL0 + mustL0Count×12" if ver == 2 else "offNodes + nodeCount×32"
+        end = (self.off_mustl0 + self.mustl0_count * MUSTL0_SIZE if ver == 2 else
+               off_nodes + self.node_count * 32)
         if end != size:
-            die(f"头部字段表与文件**不闭合**：offNodes + nodeCount×32 = {end:,} ≠ "
+            die(f"头部字段表与文件**不闭合**：{tail} = {end:,} ≠ "
                 f"文件大小 {size:,}（差 {size - end:+,}B）⟹ 偏移表读错，停止出数")
         seq = [off_prim, off_vpool, off_clu, off_tris, off_remap, off_groups, off_nodes]
+        if ver == 2:
+            seq.append(self.off_mustl0)
         if seq != sorted(seq) or seq[0] != HEADER_SIZE:
             die(f"段偏移不单调或首段不在 {HEADER_SIZE}B：{seq}")
         self.file_size = size
@@ -313,7 +333,9 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     groups = [g for g in prod.by_prim[p]]
     per_level: dict[int, list[tuple]] = defaultdict(list)
     l0_spans: list[tuple] = []          # (clusterOffset, clusterCount) —— L0 段的 group 区间
+    all_spans: list[tuple] = []         # (depth, clusterOffset, clusterCount) —— 数 7 用全部级
     for _depth, _prim, off, cnt in groups:
+        all_spans.append((_depth, off, cnt))
         if _depth == 0:
             l0_spans.append((off, cnt))
         for k, c in enumerate(prod.clusters(off, off + cnt)):
@@ -377,20 +399,21 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     # 而它够不够细只能实测：一个 L0 group 跨几个分量？
     l0_groups_pure: Counter = Counter()
     l0_group_cluster_hist: Counter = Counter()
-    l0_group_info: list[tuple] = []      # (簇数, L0 三角合计, 该 group 涉及的分量集合)
-    for off, cnt in l0_spans:
+    # (depth, 簇数, 该级三角合计, 该 group 涉及的分量集合) —— 全部级（数 7 要逐级段）
+    group_info: list[tuple] = []
+    for dep, off, cnt in all_spans:
         if not cnt:
             continue
-        l0_group_cluster_hist[cnt] += 1
-        cs, tri = set(), 0
-        for gi in range(off, off + cnt):
-            cs |= comp_of_cluster.get(gi, set())
-            tri += sum(1 for _ in range(0, 0))
-        # 三角合计：该 group 区间内每簇的 triCount 之和
+        cs = set()
+        tri = 0  # 三角合计：该 group 区间内每簇的 triCount 之和
         for k in range(cnt):
+            cs |= comp_of_cluster.get(off + k, set())
             tri += prod.clusters(off + k, off + k + 1)[0][2]
-        l0_groups_pure[len(cs)] += 1
-        l0_group_info.append((cnt, tri, cs))
+        group_info.append((dep, cnt, tri, cs))
+        if dep == 0:
+            l0_group_cluster_hist[cnt] += 1
+            l0_groups_pure[len(cs)] += 1
+    l0_group_info = [(cnt, tri, cs) for dep, _c, tri, cs in group_info if dep == 0]
 
     # ---- 每分量包围盒对角线（源 glb 单位，未乘 scene.lua 的 scale）----
     # 门槛的正确形态是**空间尺寸**（"在阴影图里占不占得下一枚纹素"），不是三角数；这里两个都算，
@@ -463,7 +486,8 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
             "l0_group_purity": dict(l0_groups_pure),
             "l0_group_clusters": dict(l0_group_cluster_hist),
             "l0_spans": l0_spans,
-            "l0_group_info": l0_group_info}
+            "l0_group_info": l0_group_info,
+            "group_info": group_info}
 
 
 def main() -> int:
@@ -490,11 +514,14 @@ def main() -> int:
     print(f"  prims={prod.prim_count} vertices={prod.vertex_count:,} "
           f"clusters={prod.cluster_count:,} groups={prod.group_count:,}")
     print(f"  levels={prod.level_count} nodeWidth={prod.node_width} "
-          f"toolVersion={prod.tool_version}")
+          f"toolVersion={prod.tool_version} formatVersion={prod.format_version}"
+          + (f" mustL0={prod.mustl0_count} 条" if prod.format_version == 2 else ""))
     print(f"  header.l0TriangleCount={prod.l0_tris:,}  totalTriangleCount={prod.total_tris:,}")
-    print(f"  文件 {prod.file_size:,}B ｜ 末段 Nodes 末尾 = "
-          f"{prod.off['nodes'] + prod.node_count * 32:,}B ⟹ **偏移表闭合 ✓**"
-          f"（字段表错一位就走不到这行）")
+    tail_end = (prod.off_mustl0 + prod.mustl0_count * MUSTL0_SIZE if prod.format_version == 2
+                else prod.off["nodes"] + prod.node_count * 32)
+    print(f"  文件 {prod.file_size:,}B ｜ 末段"
+          f"{' MustL0' if prod.format_version == 2 else ' Nodes'}末尾 = "
+          f"{tail_end:,}B ⟹ **偏移表闭合 ✓**（字段表错一位就走不到这行）")
 
     # ---- 分组索引（groups 只解析一次）----
     groups = prod.groups()
@@ -748,9 +775,20 @@ def main() -> int:
     dmin1 = 1.0 / args.glb_scale
     prot = [v for r in res for v in r["runs"].values() if v[2] >= dmin1]
     print(f"\n  受保护分量（对角线 ≥1m）共 {len(prot):,} 个：")
-    dh = Counter((min(d - 1, 0) if d < INF else -1) for _rn, d, _dg in prot)
-    print(f"    需要的选级（死亡级−1；-1 = 恒存活、不受限）：" +
+    # 🔴 **旧版这条把整份"需求二值"的结论带偏过**（2026-10-20 修）：它写的是 `min(d - 1, 0)`，
+    # 而 `min` 把**任意**死亡级都夹成 0 ⟹ 打印出来的 "0:6672" 其实是"任意级死亡"的合计，
+    # 不是"死亡级==1"的计数。§7.2 据此写的"必须 L0 6,672 个、级 1~11 零个"是量具缺陷（第七条
+    # "曾经量错过"），实测真分布见下面两行：死亡级==1 只有 196 个（= 打包侧 --must-l0-diag 的
+    # 判据，与它逐位对账），其余 6,476 个死在级 2~11 —— 那批**本方案救不到**（两条 draw 只
+    # 表达"钉 0"）。数 6 的 group 侧口径一直用的是真的 `lv == 1`，所以 18 group / 16,380 三角
+    # 不受影响、无需重测。
+    dh = Counter(((d - 1) if d < INF else -1) for _rn, d, _dg in prot)
+    print(f"    需要的选级（= 死亡级−1；-1 = 恒存活、不受限）：" +
           "  ".join(f"{k}:{v}" for k, v in sorted(dh.items())))
+    n_must_l0 = sum(1 for _rn, d, _dg in prot if d == 1)
+    n_dying = sum(1 for _rn, d, _dg in prot if d < INF)
+    print(f"    🔴 死亡级==1（= P1 的 must_L0 定义，对账打包侧 --must-l0-diag）= {n_must_l0:,}"
+          f" ｜ 任意级死亡 = {n_dying:,} ｜ 恒存活 = {len(prot) - n_dying:,}")
     rh = Counter(rn for rn, _d, _dg in prot)
     print(f"    它的 L0 簇形成几段（1 = 一条 draw 就够）：" +
           "  ".join(f"{k}段:{v}" for k, v in sorted(rh.items()) if k <= 5) +
@@ -783,18 +821,63 @@ def main() -> int:
           f"  ｜ ≥5 分量 {sum(v for k, v in g_pure.items() if k >= 5):,}"
           f"（{sum(v for k, v in g_pure.items() if k >= 5) / tg * 100:.1f}%）")
     print(f"  按 group 粒度做 must_L0（含必须 L0 分量的 group **整组**钉 L0）的代价：")
-    print(f"    {'门槛':>7} {'要钉的 group':>12} {'draws 增量':>11} {'额外 L0 三角':>13}"
+    print(f"    🔴 draws 增量口径 = **被钉 prim 数 × 4 级联**（上界：假设被钉 prim 全在四级都画）。")
+    print(f"       旧版乘的是 `level_count`（18×12=216）—— 乘数无出处，draws 按帧按级联发、")
+    print(f"       与级数无关（§7.3 教训 5）。相对列 = 额外三角 / 现状 D=5（0.11 即总 1.11×）。")
+    print(f"    {'门槛':>7} {'要钉的 group':>12} {'draws 增量≤':>11} {'额外 L0 三角':>13}"
           f"{'相对现状 D=5':>13}")
+    must_per_m: dict[float, int] = {}
     for m in SIZE_BINS_M:
         dm = m / args.glb_scale
         must = [(r, gi) for r in res for gi in r["l0_group_info"]
                 if any(d >= dm and lv == 1 for c in gi[2]
                        for _n, lv, d in [r["comps_info"][c]] for _ in (0,))]
         n_g = len(must)
+        must_per_m[m] = n_g
         extra = sum(gi[1] for _r, gi in must)
         now5 = sum(tris_at(r, 5) for r in res)
-        print(f"    {m:>6.2f}m {n_g:>12,} {n_g * prod.level_count:>11,} {extra:>13,}"
+        n_prims = len({r["prim"] for r, _ in must})
+        print(f"    {m:>6.2f}m {n_g:>12,} {n_prims * 4:>11,} {extra:>13,}"
               f"{extra / max(now5, 1):>12.2f}×")
+
+    # ---- 数 7：**多段排序**（把 P1 的二分排序施加到每一级段）的代价 ----
+    # 196 改准后二值只救死亡级==1 的 196 个分量；死在级 2~D 的要靠"钉 死亡级−1"。机制与 P1
+    # 同形：含"死在级 L+1"分量的 group 钉到该 prim 级 L 段前部，每 (prim, level) 一条 draw，
+    # CPU 逐段发射、task 数由簇区间算得出 ⟹ **不继承级号位图的"GPU 现算"MDI 冲突**。
+    print(f"\n== 数 7：**多段排序**（P1 的二分排序施加到每一级段）救中间级死亡的代价 ==")
+    print(f"  判据：级 L 段的 group 含『死亡级 == L+1 且对角线 ≥ 门槛』的分量 ⟹ 整组钉级 L。")
+    print(f"  draws 增量 = (prim, level) 对数 × 4 级联（上界）。L0 列必须 == 数 6 的 group 数（硬对账）。")
+    now5 = sum(tris_at(r, 5) for r in res)
+    for D in (5, 7):
+        nowD = sum(tris_at(r, D) for r in res)
+        print(f"  多段 @D={D}（基准 = 纯级 {D} 的 {nowD:,} 三角；相对列对现状 D=5 = {now5:,}）：")
+        print(f"    {'门槛':>7} " + " ".join(f"钉L{L}".rjust(6) for L in range(D)) +
+              f"{'(prim,lv)对':>11}{'draws≤':>8}{'总三角':>11}{'相对现状':>9}")
+        for m in SIZE_BINS_M:
+            dm = m / args.glb_scale
+            perL: Counter = Counter()
+            pairs, extra = 0, 0
+            for r in res:
+                ci = r.get("comps_info")
+                if not ci:
+                    continue
+                lvls = set()
+                for dep, _cnt, tri, cs in r["group_info"]:
+                    if dep >= D:
+                        continue
+                    if any(d >= dm and lv == dep + 1 for c in cs
+                           for _n, lv, d in [ci[c]]):
+                        perL[dep] += 1
+                        lvls.add(dep)
+                        extra += tri
+                pairs += len(lvls)
+            if abs(perL.get(0, 0) - must_per_m.get(m, -1)) > 0:
+                die(f"数 7 与数 6 的 L0 列对不上（门槛 {m}m：{perL.get(0, 0)} vs "
+                    f"{must_per_m.get(m)}）⟹ 两处判据实现漂了，本表不可信")
+            total = nowD + extra
+            cells = " ".join(f"{perL.get(L, 0):>6,}" for L in range(D))
+            print(f"    {m:>6.2f}m {cells}{pairs:>11,}{pairs * 4:>8,}{total:>11,}"
+                  f"{total / max(now5, 1):>8.2f}×")
 
     # ---- 门槛的"看内容"对账：拒绝让门槛只由代价曲线决定 ----
     if args.list_affected > 0:

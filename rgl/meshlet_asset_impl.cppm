@@ -24,7 +24,10 @@ struct SectionInfo {
 	uint64_t align;
 };
 
-/** 七段固定顺序（= format.h 的落盘顺序），下标即段序。 */
+/** 七段固定顺序（= format.h 的落盘顺序），下标即段序。
+ *  ⚠ v2 起产物尾部还可有第八段 MustL0，**本模块不读它**（口径见接口头 kMeshletFormatVersionMax
+ *  那条）；本表只列"读取侧会拿视图的段"，所以 `checkSectionChain` 的末段仍是 Nodes，
+ *  尾部多出来的字节由「Nodes 段尾 ≤ 文件长」这条放过。 */
 constexpr size_t kSectionCount = 7;
 
 /** sourceSha1 等身份字段的小写 hex（仅日志身份，→ 接口裁决 1）。 */

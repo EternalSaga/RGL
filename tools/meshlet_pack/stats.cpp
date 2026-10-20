@@ -73,6 +73,22 @@ void printStats(const PackedAsset& a, const std::vector<SourcePrim>& prims, cons
         hand.total ? 100.0 * double(hand.negative) / double(hand.total) : 0.0,
         (unsigned long long)hand.negative, (unsigned long long)hand.total);
 
+    // ─── shadow proxy N10 P1：must_L0 判据读数（对账面 = tools/shadow_proxy_probe.py 的数 6）──
+    // 🔴 三个承重读数（must_L0 分量数 / 被钉 group 数 / 额外 L0 三角）是**移植正确性判据**：
+    // 门槛 100 源单位（= bistro 世界 1m）下应复现探针在 v1 产物上量到的 6,672 / 18 / 16,380。
+    // 对不上就是移植错了（口径漂移），**不许调判据去凑**——components.h 头注记着四条曾量错过的坑。
+    const MustL0Stats& m = a.mustL0;
+    std::fprintf(out, "must_L0 diag          %.6g 源单位%s\n", a.mustL0Diag,
+        a.mustL0Diag > 0.0 ? "" : "  (0 = 关闭判定：不排序、MustL0 段为空、簇序与 v1 逐位相同)");
+    std::fprintf(out, "components            %llu  (位置焊接后的连通分量，逐 prim 内跑)\n", (unsigned long long)m.components);
+    std::fprintf(out, "  must_L0 components  %llu  (死亡级==1 且包围对角线 >= 门槛)\n", (unsigned long long)m.mustL0Components);
+    std::fprintf(out, "  pinned groups       %llu / %llu L0 group  (prim %llu → MustL0 段 %zu 条)\n",
+        (unsigned long long)m.pinnedGroups, (unsigned long long)m.l0Groups,
+        (unsigned long long)m.primsAffected, a.mustL0Ranges.size());
+    std::fprintf(out, "  extra L0 tris       %llu  (", (unsigned long long)m.pinnedTris);
+    if (s.l0Tris) std::fprintf(out, "%.2f%%", 100.0 * double(m.pinnedTris) / double(s.l0Tris));
+    std::fprintf(out, " of L0 %llu)\n", (unsigned long long)s.l0Tris);
+
     const uint64_t total = s.poolBytes + s.l0IndexBytes + s.remapBytes + s.otherIndexBytes;
     std::fprintf(out, "data plane:\n");
     std::fprintf(out, "  vertex pool     %7.1f MB  (%llu x %uB)\n", mb(s.poolBytes), (unsigned long long)a.vertexCount(), kVertexStride);

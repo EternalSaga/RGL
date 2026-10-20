@@ -16,6 +16,7 @@ add_executable(meshlet_pack
     glb_source.cpp
     tinygltf_impl.cpp      # tinygltf 实现 TU（port 只装头文件，rgl/tinygltf_impl.cpp 同法）
     packer.cpp             # 唯一的 CLUSTERLOD_IMPLEMENTATION 单元
+    components.cpp         # must_L0 判据（焊接/并查集/逐级覆盖）+ L0 段 group 重排
     verify.cpp
     serialize.cpp
     stats.cpp

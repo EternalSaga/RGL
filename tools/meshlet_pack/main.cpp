@@ -1,6 +1,6 @@
 // meshlet_pack —— 离线簇化打包器（簇化轴 ★0-a）。
 //
-//   用法: meshlet_pack <in.glb> [--out <bin>] [--verify] [--stats]
+//   用法: meshlet_pack <in.glb> [--out <bin>] [--verify] [--stats] [--must-l0-diag <源单位>]
 //
 // glb → meshlet 簇 LOD DAG 产物（顶点池 + 8bit 簇索引 + 逐簇包围体 + group DAG +
 // 空间层级），布局契约 = format.h；统计表 = --stats（与 docs/mdi_plan.md §7.2 逐项
@@ -12,6 +12,7 @@
 // TU 切缝（tools/ 侧样式规则：单文件 < 500 代码行；缝按改动面切，imgqa 先例）：
 //   · glb_source.*  = 输入侧（tinygltf 读 glb，no-op image loader；口径 = §7 dump.py）
 //   · packer.*      = 转换（clodBuild 逐 prim + clodBuildHierarchy 全局一次；钉死配置）
+//   · components.*  = 判据（位置焊接 + 连通分量 + 逐级覆盖 → must_L0）与 L0 段 group 重排
 //   · verify.*      = 自检与变异红线（判据本体）
 //   · serialize.*   = 输出侧（format.h 落盘）
 //   · stats.*       = 读数表（对拍面）
@@ -25,6 +26,7 @@
 // 产物默认不落 build 目录（★0-b 才接构建期）；本批验收产物写 /tmp/opencode/mdi/out/。
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -43,27 +45,62 @@ namespace {
 
 void usage()
 {
-    std::fprintf(stderr, "usage: meshlet_pack <in.glb> [--out <bin>] [--verify] [--stats]\n");
+    std::fprintf(stderr,
+        "usage: meshlet_pack <in.glb> [--out <bin>] [--verify] [--stats] [--must-l0-diag <源单位>]\n"
+        "  --must-l0-diag  must_L0 门槛 = 分量包围对角线下限（**源 glb 单位**，非米；\n"
+        "                  bistro 的 100 = 世界 1m，因 scene.lua scale=0.01）。0 = 关闭：\n"
+        "                  不排序、MustL0 段为空、簇序与 v1 逐位相同。默认 0。\n");
 }
 
 struct Options {
     std::string input, output;
     bool doVerify = false, doStats = false;
+    /// must_L0 门槛（源 glb 单位的分量包围对角线）；0 = 关闭判定。口径见 components.h。
+    double mustL0Diag = 0.0;
 };
+
+/// `--must-l0-diag` 的值：必须是个非负有限数（NaN 走 `!(v >= 0.0)` 这侧被拒；负数语义上就是
+/// "关掉"，与其悄悄当 0 用不如拒绝——参数写错的人想要的是出声，不是默认值）。
+bool takeDiag(const char* text, double& out)
+{
+    char* end = nullptr;
+    const double v = std::strtod(text, &end);
+    if (end == text || *end != '\0' || !(v >= 0.0)) return false;
+    out = v;
+    return true;
+}
+
+/// 长选项消费。返回 true = 已识别且合法（`i` 按引用推进：带值的选项吃掉下一枚参数）；
+/// 返回 false = 不识别或值非法（调用处一次红，run() 里不再出现 argv）。
+bool parseOption(int argc, char** argv, int& i, Options& o)
+{
+    const std::string arg = argv[i];
+    if (arg == "--verify") { o.doVerify = true; return true; }
+    if (arg == "--stats") { o.doStats = true; return true; }
+    if (arg == "--out") {
+        if (++i >= argc) return false;
+        o.output = argv[i];
+        return true;
+    }
+    if (arg == "--must-l0-diag") {
+        if (++i >= argc) return false;
+        return takeDiag(argv[i], o.mustL0Diag);
+    }
+    return false;
+}
 
 // CLI 解析（缝 = 参数形态 vs 编排：判错在返回 false 处一次红，run() 里不再出现 argv）。
 bool parseArgs(int argc, char** argv, Options& o)
 {
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        if (arg == "--verify") o.doVerify = true;
-        else if (arg == "--stats") o.doStats = true;
-        else if (arg == "--out") {
-            if (++i >= argc) return false;
-            o.output = argv[i];
-        } else if (!arg.empty() && arg[0] == '-') return false;
-        else if (o.input.empty()) o.input = arg;
-        else return false;
+        if (!arg.empty() && arg[0] == '-') {
+            if (!parseOption(argc, argv, i, o)) return false;
+        } else if (o.input.empty()) {
+            o.input = arg;
+        } else {
+            return false;
+        }
     }
     return !o.input.empty();
 }
@@ -100,10 +137,15 @@ int run(const Options& opt)
     std::vector<SourcePrim> prims = loadGlbSource(opt.input);
     std::fprintf(stderr, "glb loaded: %zu prims (%.1fs)\n", prims.size(), secs());
 
-    PackedAsset asset = packAsset(prims, sha1);
+    PackedAsset asset = packAsset(prims, sha1, opt.mustL0Diag);
     std::fprintf(stderr, "packed: %llu clusters / %llu groups / %llu nodes (%.1fs)\n",
         (unsigned long long)asset.stats.totalClusters, (unsigned long long)asset.stats.groups,
         (unsigned long long)asset.stats.nodes, secs());
+    if (opt.mustL0Diag > 0.0)
+        std::fprintf(stderr, "must_L0(diag>=%.6g 源单位): %llu 分量 / 钉 %llu group（额外 L0 三角 %llu）/ %llu 段 (%.1fs)\n",
+            opt.mustL0Diag, (unsigned long long)asset.mustL0.mustL0Components,
+            (unsigned long long)asset.mustL0.pinnedGroups, (unsigned long long)asset.mustL0.pinnedTris,
+            (unsigned long long)asset.mustL0Ranges.size(), secs());
 
     if (opt.doStats) printStats(asset, prims, opt.input.c_str(), stdout);
 

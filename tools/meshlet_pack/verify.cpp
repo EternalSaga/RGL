@@ -1,4 +1,4 @@
-// verify.cpp —— 产物自检三条 + 一条结构辅助。
+// verify.cpp —— 产物自检三条 + 一条结构辅助 + 五条 must_L0 重排 invariant（N10 P1）。
 //
 // ## 检查项
 //
@@ -17,6 +17,13 @@
 //      丢掉时全局下标自洽地左移，①②③ 全绿，只有这条红）。另含：每 group ≥1 簇、
 //      depth==0 ⟺ refined==-1、refined 指向同 primitive 的更浅 group、非 terminal
 //      group 必被 ≥1 簇 refined。
+//   ⑤ **分量划分互不相交、并集 = 该 prim 全部三角**（计划 §3.6 R5 的打包侧对应物）
+//   ⑥ **每 prim 的 depth 序列仍单调不减**（= 引擎侧 meshlet_lod invariant 2 的对应物）
+//   ⑦ **每 group 的簇仍连续、且集合与重排前逐位相同**（"只搬条目不改成员"的机器形态）
+//   ⑧ **groups 数组顺序与重排前逐位相同**（refined 存的是它的下标，动不得）
+//   ⑨ **MustL0 区间表与重排后的产物自洽**（判据重跑 + 被钉段是各 prim L0 段的前缀）
+//
+//   ⑤~⑨ 是 N10 P1（L0 段 group 重排）新增的五条，逐条的"为什么只有它能红"见函数注释。
 //
 // ## 🔴 变异红线（每批交付的测试由主 agent 当场变异验红后才入账）
 //
@@ -25,6 +32,20 @@
 //     · 变异 A：某簇 triOffset 处写坏一个 8bit 局部索引 → ①（L0 时）+ ② 必须红。
 //     · 变异 B：depth≥1 的某个 group 整组不产出 → ④ 必须红（①②③ 绿 = 预期形态，
 //       ① 只保 L0；若变异落在 depth 0 则 ① 也红）。
+//   N10 P1 追加四条（验"判据真的在起作用"，不是验"能跑"；四条 2026-10-20 全部**实测**，
+//   注入点见 components.cpp 头注；每条还原后都重跑过基线确认回绿）：
+//     · 变异 C：关掉位置焊接（WeldTable::insert 里 memcmp 命中后不 return）→ 三个判据读数
+//       一起变差：分量 145,828 → **282,242**（与 Python 探针 --no-weld 同口径实测逐位对上）、
+//       must_L0 196 → 1,678、被钉 group 18 → 316、额外 L0 三角 16,380 → 329,958。
+//       verify 九条**全绿 = 预期**（它验的是划分自洽，不是划分正确 —— 正确性由 C 的读数对账钉）。
+//     · 变异 D1：stable 二分的两半对调（must_L0 排到最后）→ **只有 ⑨ 红**（"区间内第 0 个簇的
+//       group 未被判据钉住"）。⑥⑦⑧ 全绿同样是预期：簇集合、depth 序列、groups 顺序都没变，
+//       变的只是段内先后 —— ⑨ 是"前缀性"这件事**唯一**的抓手。
+//     · 变异 D2：同 prim 内跨级对调两簇（52472 ↔ 52473，即把 depth==0 段最后一簇与 depth==1
+//       段第一簇换位置）→ ④⑥⑦ 三条一起红，⑥ 点名"prim 1513 的 depth 序列在簇 52473 处由 1
+//       降到 0"。⚠ 单靠"两半对调"红不了 ⑥（段内全是 depth 0），⑥ 只在**搬出段外**时红。
+//     · 门槛 300 源单位（= 世界 3m）→ 被钉 group 数 **0**（探针数 6 同档实测也是 0）：
+//       验"读数随门槛动"，排除"判据其实恒输出同一个数"。
 //   验完红必须回滚回绿才算交付；**回滚只准 `cp f f.bak`，禁止 `git checkout --`**。
 #include "verify.h"
 
@@ -194,22 +215,54 @@ bool checkBounds(const PackedAsset& a, std::FILE* out)
 //   · checkVertexSubset     簇顶点 ⊆ refined group 顶点集（group 整组丢失 → 下标
 //                           左移指到邻居 group 时，这条是唯一会红的抓手）
 
-// 返回 fail 串（空 = 绿）。以下四个 helper 同此约定。
-std::string checkGroupRanges(const PackedAsset& a)
+// 返回 fail 串（空 = 绿）。以下 helper 同此约定。
+//
+// 逐 group：≥1 簇 + 区间不越界 + 区间内每个簇的 group 字段指回来（= 该 group 的簇是**一段连续
+// 区间**）+ prim 下标有效；顺带收集区间供铺满检查（拆两刀 = 认知复杂度护栏逼的，缝在"逐 group"
+// 与"跨 group"之间）。
+std::string checkEachGroupRange(const PackedAsset& a, std::vector<std::pair<uint64_t, uint64_t>>& spans)
 {
-    uint32_t cursor = 0;
     for (size_t gi = 0; gi < a.groups.size(); ++gi) {
         const PackedGroup& g = a.groups[gi];
         const std::string where = "group " + std::to_string(gi) + " ";
         if (g.clusterCount == 0) return where + "不含任何簇（某一级少算一组的形态）";
-        if (g.clusterOffset != cursor || cursor + g.clusterCount > a.clusters.size()) return where + "簇区间不连续/越界";
+        if (uint64_t(g.clusterOffset) + g.clusterCount > a.clusters.size()) return where + "簇区间越界";
         for (uint32_t k = 0; k < g.clusterCount; ++k)
-            if (a.clusters[cursor + k].group != gi) return "cluster 的 group 字段与所在 group 不符";
-        cursor += g.clusterCount;
+            if (a.clusters[g.clusterOffset + k].group != gi)
+                return where + "的簇区间里混进别的 group 的簇（簇不连续 / 搬错家）";
         if (g.prim >= a.prims.size()) return where + "的 primitive 下标越界";
+        spans.emplace_back(g.clusterOffset, g.clusterCount);
+    }
+    return {};
+}
+
+// 铺满 [0, clusterCount)：按**起点排序后**首尾相接。
+// 🔴 口径变更（N10 P1）：旧版是"按 group 下标序首尾相接"，那条比引擎真正吃的更强（引擎侧
+// meshlet_ranges::scanPrimRange 自己按起点 sort，只要求"每 prim 一个连续区间"）。而 L0 段
+// 重排**合法地**让 prim 内 group 下标序 ≠ 簇序——groups 顺序动不得（refined 吃它），被钉的
+// 那批 group 天然不连续。判据因此取引擎吃的那条：不重叠、无缝隙、铺满。
+// ⚠ 变异 B（group 整组不产出）不由这条抓、也从来不是由这条抓的，仍归 checkTerminalRefined /
+// checkVertexSubset ⟹ 本条放松不削弱变异红线。
+std::string checkRangeTiling(const PackedAsset& a, std::vector<std::pair<uint64_t, uint64_t>>& spans)
+{
+    std::sort(spans.begin(), spans.end());
+    uint64_t cursor = 0;
+    for (const auto& [start, count] : spans) {
+        if (start != cursor)
+            return "group 簇区间未铺满全表：起点 " + std::to_string(start) + " != " + std::to_string(cursor)
+                + "（重叠或有缝）";
+        cursor += count;
     }
     if (cursor != a.clusters.size()) return "group 簇区间未覆盖全部簇";
     return {};
+}
+
+std::string checkGroupRanges(const PackedAsset& a)
+{
+    std::vector<std::pair<uint64_t, uint64_t>> spans;
+    spans.reserve(a.groups.size());
+    std::string fail = checkEachGroupRange(a, spans);
+    return fail.empty() ? checkRangeTiling(a, spans) : fail;
 }
 
 std::string checkRefinedSemantics(const PackedAsset& a, std::vector<uint32_t>& refinedBy)
@@ -276,6 +329,229 @@ bool checkDag(const PackedAsset& a, std::FILE* out)
     return fail.empty();
 }
 
+// ─── ⑤⑥⑦⑧⑨ shadow proxy N10 P1：分量划分与 L0 段重排的 invariant ──────────────────
+//
+// 五条各一条**两两不同**的错误串、前缀点名（形态照 rgl/meshlet_lod.cppm 的五条 invariant：
+// 它们是"产物或判据漂了"的探测器，不是审美）。⑤ 与 ⑨ 内部的子判据同样各给一条串——一条
+// invariant 塌成一条串就没法归因是"漏数"还是"重数"。
+
+// ⑤ 分量划分互不相交、并集 = 该 prim 全部三角（计划 §3.6 R5 的打包侧对应物）
+//
+// 三条独立对照：
+//   · Σ 分量三角 == 分析看到的 L0 三角 —— 划分不重不漏（互不相交由并查集**构造性**成立，
+//     这条抓的是归属计数那一侧：漏一个三角、同一三角数两遍都会让它分家）
+//   · 分析看到的 L0 三角 == stats.l0Tris —— 两条**独立** L0 口径互证（stats 走 group.depth==0
+//     累加 triCount，分析走 clusters→tris→remap 逐三角解码；同 skill rgl-test-discipline
+//     "独立复算同一量"那条：本探针四条量错里三条靠这个抓出来的）
+//   · 三顶点跨分量的 L0 三角 == 0 —— "取首顶点当整三角归属"的前提（与探针同口径）
+std::string checkComponentPartition(const PackedAsset& a)
+{
+    const MustL0Stats& m = a.mustL0;
+    if (m.components == 0 && a.stats.l0Tris > 0)
+        return "⑤ 分量划分为空而产物有 L0 三角：判据没跑（analyzeMustL0 未调用？）";
+    if (m.attributedTris != m.l0Tris)
+        return "⑤ 分量三角归属求和 " + std::to_string(m.attributedTris) + " != 分析看到的 L0 三角 "
+            + std::to_string(m.l0Tris) + "（划分漏数或重数）";
+    if (m.l0Tris != a.stats.l0Tris)
+        return "⑤ 分析看到的 L0 三角 " + std::to_string(m.l0Tris) + " != stats.l0Tris "
+            + std::to_string(a.stats.l0Tris) + "（两条独立 L0 口径分家：group.depth==0 累加 vs 逐簇解码）";
+    if (m.splitTris != 0)
+        return "⑤ 存在 " + std::to_string(m.splitTris)
+            + " 个 L0 三角的三顶点落在不同分量（焊接或归属漂了，取首顶点归属当场失效）";
+    return {};
+}
+
+// ⑥ 每 prim 的 depth 序列仍单调不减 = 引擎侧 meshlet_lod invariant 2 的对应物
+//
+// 它破了引擎直接报错（"级内连续"没了 ⟹ 取不出某一级的连续簇区间）。重排的合法性恰恰建立在
+// "只在 depth==0 段内部动"，所以这条是**重排做错了**最直接的抓手（搬出段外 / 排序键写反）。
+std::string checkDepthMonotonic(const PackedAsset& a)
+{
+    std::vector<uint32_t> lo(a.prims.size(), UINT32_MAX), hi(a.prims.size(), 0);
+    for (const PackedGroup& g : a.groups) {
+        lo[g.prim] = std::min(lo[g.prim], g.clusterOffset);
+        hi[g.prim] = std::max(hi[g.prim], g.clusterOffset + g.clusterCount);
+    }
+    for (size_t p = 0; p < a.prims.size(); ++p) {
+        int32_t prev = -1;
+        for (uint32_t c = lo[p]; c < hi[p]; ++c) {
+            const PackedCluster& cl = a.clusters[c];
+            if (cl.group >= a.groups.size()) return "⑥ 簇 " + std::to_string(c) + " 的 group 下标越界";
+            const int32_t d = a.groups[cl.group].depth;
+            if (d < prev)
+                return "⑥ prim " + std::to_string(p) + " 的 depth 序列在簇 " + std::to_string(c) + " 处由 "
+                    + std::to_string(prev) + " 降到 " + std::to_string(d) + "（重排越出 depth==0 段）";
+            prev = d;
+        }
+    }
+    return {};
+}
+
+// ⑦ 每个 group 的簇仍是一段连续区间，且这段的**集合**与重排前逐位相同
+//
+// 簇身份 = triOffset：打包时逐簇追加 ⟹ 严格递增 ⟹ 唯一。按集合比而不是按位置比，正是
+// "重排只搬条目、不改成员"这句话的机器形态：搬错一家（把 A group 的簇塞进 B group）当场红，
+// 而"画哪些三角"这件事从头到尾没变——本批"截图逐位不变"的立论就在这一条上。
+/// 单 group 的三条：簇数未变 / 区间不越界且仍是本 group 的连续一段 / 簇**集合**与重排前相同。
+/// 簇身份 = triOffset：打包时逐簇追加 ⟹ 严格递增 ⟹ 唯一。按集合比而不是按位置比，正是
+/// "重排只搬条目、不改成员"这句话的机器形态：搬错一家（把 A group 的簇塞进 B group）当场红，
+/// 而"画哪些三角"这件事从头到尾没变——本批"截图逐位不变"的立论就在这一条上。
+std::string checkOneGroupSet(const PackedAsset& a, size_t gi, std::vector<uint32_t>& before,
+    std::vector<uint32_t>& after)
+{
+    const PackedGroup& g = a.groups[gi];
+    const PackedGroup& old = a.groupsBeforeReorder[gi];
+    const std::string where = "⑦ group " + std::to_string(gi) + " ";
+    if (g.clusterCount != old.clusterCount)
+        return where + "的簇数由 " + std::to_string(old.clusterCount) + " 变成 "
+            + std::to_string(g.clusterCount) + "（重排只准搬条目，不准改成员）";
+    if (uint64_t(g.clusterOffset) + g.clusterCount > a.clusters.size())
+        return where + "的簇区间越出簇表（重排算错偏移）";
+    for (uint32_t k = 0; k < g.clusterCount; ++k)
+        if (a.clusters[g.clusterOffset + k].group != gi)
+            return where + "的簇不再是一段连续区间（区间里混进别的 group 的簇）";
+    before.clear();
+    after.clear();
+    for (uint32_t k = 0; k < g.clusterCount; ++k) {
+        before.push_back(a.clustersBeforeReorder[old.clusterOffset + k].triOffset);
+        after.push_back(a.clusters[g.clusterOffset + k].triOffset);
+    }
+    std::sort(before.begin(), before.end());
+    std::sort(after.begin(), after.end());
+    if (before != after) return where + "的簇集合与重排前不同（整组搬错家）";
+    return {};
+}
+
+std::string checkGroupClusterSets(const PackedAsset& a)
+{
+    if (a.clustersBeforeReorder.size() != a.clusters.size())
+        return "⑦ 簇总数 " + std::to_string(a.clusters.size()) + " 与重排前 "
+            + std::to_string(a.clustersBeforeReorder.size()) + " 不符（重排搬丢或搬重）";
+    if (a.groupsBeforeReorder.size() != a.groups.size())
+        return "⑦ group 条数与重排前不符（快照缺失？packAsset 未无条件快照）";
+    std::vector<uint32_t> before, after;
+    for (size_t gi = 0; gi < a.groups.size(); ++gi) {
+        std::string fail = checkOneGroupSet(a, gi, before, after);
+        if (!fail.empty()) return fail;
+    }
+    return {};
+}
+
+// ⑧ groups 数组顺序与重排前逐位相同（除簇区间）
+//
+// 🔴 这条是"绝对不能动"那条红线的机器版：clodBuild 回调返回值被库原样记进新簇的 refined
+// （= 全局 group 下标），groups 一旦被搬动，全部 refined 指错而**没有任何一条**其它检查会红
+// （④ 只查 refined 指向更浅的同 prim group，搬动后照样成立）。
+std::string checkGroupsOrderStable(const PackedAsset& a)
+{
+    if (a.groupsBeforeReorder.size() != a.groups.size()) return "⑧ group 条数与重排前不符";
+    for (size_t i = 0; i < a.groups.size(); ++i) {
+        const PackedGroup& x = a.groups[i];
+        const PackedGroup& y = a.groupsBeforeReorder[i];
+        if (x.depth != y.depth || x.prim != y.prim || x.radius != y.radius || x.error != y.error
+            || std::memcmp(x.center, y.center, sizeof x.center) != 0)
+            return "⑧ group " + std::to_string(i) + " 的非簇区间字段与重排前不同（groups 被搬动 ⟹ refined 全指错）";
+    }
+    return {};
+}
+
+// ⑨ MustL0 区间表与**重排后的产物**自洽
+//
+// 判据只吃簇的归属与几何、不吃簇的先后 ⟹ 在重排后的产物上重跑一遍必须给出同一个被钉集合。
+// 不一致有两种解释，都该红：判据其实依赖簇序（那 P2 的对照表不可信），或重排改掉了判据吃的
+// 东西（那"只改分组"这句话是假的）。再顺着表核**前缀性**：运行期"多发一条 draw"取的就是表里
+// 这段簇区间，前缀断了就取不出单条连续簇区间。
+
+/// 判据侧**独立**重建的每 prim 视图（不吃 MustL0 表）：depth==0 段的簇范围 + 被钉簇数。
+struct MustL0PrimView {
+    std::vector<uint32_t> l0Start, l0End, pinClusters;
+};
+
+MustL0PrimView scanMustL0Prims(const PackedAsset& a, const MustL0Result& r)
+{
+    MustL0PrimView v;
+    v.l0Start.assign(a.prims.size(), UINT32_MAX);
+    v.l0End.assign(a.prims.size(), 0);
+    v.pinClusters.assign(a.prims.size(), 0);
+    for (size_t gi = 0; gi < a.groups.size(); ++gi) {
+        const PackedGroup& g = a.groups[gi];
+        if (g.depth != 0) continue;
+        v.l0Start[g.prim] = std::min(v.l0Start[g.prim], g.clusterOffset);
+        v.l0End[g.prim] = std::max(v.l0End[g.prim], g.clusterOffset + g.clusterCount);
+        if (r.pinned[gi] != 0) v.pinClusters[g.prim] += g.clusterCount;
+    }
+    return v;
+}
+
+/// 重跑判据与打包时读数的两条聚合对照。
+std::string checkMustL0Rejudge(const PackedAsset& a, const MustL0Result& r)
+{
+    if (r.stats.mustL0Components != a.mustL0.mustL0Components)
+        return "⑨ 重跑判据的 must_L0 分量数 " + std::to_string(r.stats.mustL0Components) + " != 打包时 "
+            + std::to_string(a.mustL0.mustL0Components) + "（判据依赖簇序，重排改变了判据本身）";
+    if (r.stats.pinnedTris != a.mustL0.pinnedTris)
+        return "⑨ 重跑判据的额外 L0 三角 " + std::to_string(r.stats.pinnedTris) + " != 打包时 "
+            + std::to_string(a.mustL0.pinnedTris) + "（同上，且这次连代价账都变了）";
+    return {};
+}
+
+/// 表里一条 = 该 prim 被钉的那段簇区间。核四件事：与判据算出的簇数一致 / 从该 prim 的
+/// depth==0 段起点开始（前缀性）/ 区间内每个簇的 group 都被钉 / 区间后紧跟着的簇**没**被钉
+/// （否则前缀不完整，第二条 draw 会漏簇）。
+std::string checkOneMustL0Entry(const PackedAsset& a, const MustL0Result& r, const MustL0PrimView& v,
+    const DiskMustL0& t, size_t e)
+{
+    const std::string where = "⑨ MustL0 段第 " + std::to_string(e) + " 条 ";
+    const uint32_t p = t.prim;
+    if (t.clusterCount == 0) return where + "簇数为 0（空区间不进表）";
+    if (t.clusterCount != v.pinClusters[p])
+        return where + "簇数 " + std::to_string(t.clusterCount) + " != 判据被钉簇数 "
+            + std::to_string(v.pinClusters[p]);
+    if (t.clusterOffset != v.l0Start[p])
+        return where + "起点 " + std::to_string(t.clusterOffset) + " != 该 prim depth==0 段起点 "
+            + std::to_string(v.l0Start[p]) + "（重排没把 must_L0 排到最前面）";
+    if (uint64_t(t.clusterOffset) + t.clusterCount > v.l0End[p])
+        return where + "越出该 prim 的 depth==0 段（[" + std::to_string(t.clusterOffset) + ","
+            + std::to_string(t.clusterOffset + t.clusterCount) + ") 不在 [" + std::to_string(v.l0Start[p]) + ","
+            + std::to_string(v.l0End[p]) + ") 内";
+    for (uint32_t k = 0; k < t.clusterCount; ++k)
+        if (r.pinned[a.clusters[t.clusterOffset + k].group] == 0)
+            return where + "区间内第 " + std::to_string(k) + " 个簇的 group 未被判据钉住（前缀里混进不该画的簇）";
+    const uint32_t after = t.clusterOffset + t.clusterCount;
+    if (after < v.l0End[p] && r.pinned[a.clusters[after].group] != 0)
+        return where + "之后紧跟着仍是被钉 group（前缀不完整，第二条 draw 会漏簇）";
+    return {};
+}
+
+std::string checkMustL0Table(const PackedAsset& a)
+{
+    const MustL0Result r = analyzeMustL0(a, a.mustL0Diag);
+    std::string fail = checkMustL0Rejudge(a, r);
+    if (!fail.empty()) return fail;
+    const MustL0PrimView v = scanMustL0Prims(a, r);
+    size_t e = 0;
+    for (size_t p = 0; p < a.prims.size(); ++p) {
+        if (v.pinClusters[p] == 0) continue;
+        if (e >= a.mustL0Ranges.size())
+            return "⑨ prim " + std::to_string(p) + " 有被钉簇却没进 MustL0 段（少一条）";
+        if (a.mustL0Ranges[e].prim != p)
+            return "⑨ MustL0 段第 " + std::to_string(e) + " 条的 prim = " + std::to_string(a.mustL0Ranges[e].prim)
+                + " 与判据算出的 " + std::to_string(p) + " 不符（表少记或 prim 序错）";
+        fail = checkOneMustL0Entry(a, r, v, a.mustL0Ranges[e], e);
+        if (!fail.empty()) return fail;
+        ++e;
+    }
+    if (e != a.mustL0Ranges.size())
+        return "⑨ MustL0 段有 " + std::to_string(a.mustL0Ranges.size() - e) + " 条对不上判据（多记或 prim 序错）";
+    return {};
+}
+
+bool runCheck(std::FILE* out, const char* name, const std::string& fail, const std::string& green)
+{
+    report(out, fail.empty(), name, fail.empty() ? green : fail);
+    return fail.empty();
+}
+
 }  // namespace
 
 bool verifyAsset(const PackedAsset& asset, const std::vector<SourcePrim>& prims, std::FILE* out)
@@ -285,6 +561,21 @@ bool verifyAsset(const PackedAsset& asset, const std::vector<SourcePrim>& prims,
     ok = checkLocalIndices(asset, out) && ok;
     ok = checkBounds(asset, out) && ok;
     ok = checkDag(asset, out) && ok;
+    ok = runCheck(out, "⑤ 分量划分互不相交、并集 = 该 prim 全部三角", checkComponentPartition(asset),
+            std::to_string(asset.mustL0.components) + " 分量 / " + std::to_string(asset.mustL0.l0Tris) + " L0 三角，不重不漏")
+        && ok;
+    ok = runCheck(out, "⑥ 每 prim 的 depth 序列单调不减（meshlet_lod invariant 2 对应物）",
+            checkDepthMonotonic(asset), std::to_string(asset.prims.size()) + " prim 全部单调")
+        && ok;
+    ok = runCheck(out, "⑦ 每 group 的簇连续且集合与重排前逐位相同", checkGroupClusterSets(asset),
+            std::to_string(asset.groups.size()) + " group 的簇集合未变")
+        && ok;
+    ok = runCheck(out, "⑧ groups 数组顺序与重排前逐位相同（refined 的命根子）", checkGroupsOrderStable(asset),
+            "groups 未被搬动")
+        && ok;
+    ok = runCheck(out, "⑨ MustL0 区间表与重排后的产物自洽（判据重跑 + 前缀性）", checkMustL0Table(asset),
+            std::to_string(asset.mustL0Ranges.size()) + " 条区间，被钉段均为各 prim L0 段前缀")
+        && ok;
     std::fprintf(out, "%s\n", ok ? "verify: 全绿" : "verify: 有红项");
     return ok;
 }

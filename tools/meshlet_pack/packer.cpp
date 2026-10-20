@@ -94,7 +94,7 @@ const float* PackedAsset::vertexPos(uint32_t globalIndex) const
     return reinterpret_cast<const float*>(vertexPool.data() + size_t(globalIndex) * kVertexStride);
 }
 
-PackedAsset packAsset(const std::vector<SourcePrim>& prims, const uint8_t sourceSha1[20])
+PackedAsset packAsset(const std::vector<SourcePrim>& prims, const uint8_t sourceSha1[20], double mustL0Diag)
 {
     PackedAsset out;
     std::memcpy(out.sourceSha1, sourceSha1, 20);
@@ -189,6 +189,24 @@ PackedAsset packAsset(const std::vector<SourcePrim>& prims, const uint8_t source
         const clodNode& nd = clodNodes[n];
         out.nodes[n] = {{nd.bounds.center[0], nd.bounds.center[1], nd.bounds.center[2]},
             nd.bounds.radius, nd.bounds.error, nd.group, nd.child_offset, nd.child_count};
+    }
+
+    // 重排前快照 = verify ⑦⑧ 的对照面。**无条件**快照（门关态也留对照：否则那两条 invariant
+    // 变成"空表比空表"的恒真）。代价 = 61,518 簇 × 44B ≈ 2.7MB + 7,596 group × 36B，零头。
+    out.groupsBeforeReorder = out.groups;
+    out.clustersBeforeReorder = out.clusters;
+
+    // ─── shadow proxy N10 P1：must_L0 判定 + prim 内 depth==0 段的 group 重排 ─────────────
+    // 位置在层级**之后**：clodBuildHierarchy 只吃 clodGroups（depth + 包围体），与簇序无关，
+    // 但把重排放到最后能让"Nodes 段逐位不变"成为构造性事实而不是推理（本批硬护栏 = 截图逐位）。
+    // 🔴 判定**永远跑**（哪怕门槛为 0）：分量划分本身是 verify ⑤ 的受检对象，关掉判定会让那
+    // 三条 invariant 退化成恒真的假绿。门槛 0 只是不排序、不写 MustL0 段。
+    out.mustL0Diag = mustL0Diag;
+    const MustL0Result mustL0 = analyzeMustL0(out, mustL0Diag);
+    out.mustL0 = mustL0.stats;
+    if (mustL0Diag > 0.0) {
+        reorderL0Groups(out, mustL0);
+        out.mustL0.primsAffected = out.mustL0Ranges.size();
     }
 
     // 统计收口（口径逐项对 §7.2）

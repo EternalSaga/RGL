@@ -27,8 +27,23 @@ include_guard()
 
 # 本批清单 = 只有 bistro（其余 5 个 glb **不进清单**：每个都是几百 MB 产物与数秒转换，
 # 全量生成不是 ★0-b2 的口径；扩清单 = 后续批次按验收需要加行）。
+#
+# 每条 = `<glb 路径>|<--must-l0-diag 门槛>`，门槛单位 = **源 glb 单位**（不是米！见下）。
+# 🔴 门槛**逐资产显式给**，没有全局默认：must_L0 的判据是"分量包围对角线 ≥ 门槛"，而对角线
+# 住在源单位里（format.h 坐标系一节：产物未乘 scene.lua 的 scale）⟹ 同一个数字在 scale 不同的
+# 资产上是完全不同的物理尺寸。写一个全局默认 = 造一个隐式的资产相关参数（正是 P0 数 1b 首版
+# 踩过的坑，探针 `SIZE_BINS_M` 注释记着）。新模型进清单必须自己写一个数，或写 `|0` 关闭。
+#
+# ## bistro 为什么是 100
+# 100 源单位 × scene.lua 的 scale=0.01 = **世界 1m**，即"保住对角线 ≥1 米的独立遮挡体"这条
+# 产品口径（`docs/shadow_proxy_plan.md` §7.1 的目标）。
+# 🔴 **门槛低于 1m 时代价爆炸**（实测，别当线性外推）：0.3m → **1.99×** 三角、0.1m → **2.41×**
+# （机理 = 一个 L0 group 有 60.6% 跨 ≥5 个分量，门槛一低几乎每个 group 都含"必须保"的分量
+# ⟹ "整组钉 L0"退化成"全量"）。读数与曲线 = `docs/还债实测数据.md` §4.8 的「数 6」表（跑
+# `python3 tools/shadow_proxy_probe.py <产物> --glb-scale 0.01` 可复现），裁决记录 =
+# `docs/shadow_proxy_plan.md` §5「门槛低于 1m」那一行（**不做**）。
 set(RGL_MESHLET_MODELS
-    "${PROJECT_SOURCE_DIR}/assets/bistro_exterior.glb")
+    "${PROJECT_SOURCE_DIR}/assets/bistro_exterior.glb|100")
 
 # git-lfs 指针文件（~135B）与真 glb（数百 MB）的存在性阈值（判据见文件头）。
 set(RGL_MESHLET_MIN_GLB_BYTES 1048576)
@@ -38,7 +53,16 @@ set(RGL_MESHLET_MIN_GLB_BYTES 1048576)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/models")
 
 set(RGL_MESHLET_OUTPUTS "")
-foreach(glb IN LISTS RGL_MESHLET_MODELS)
+foreach(entry IN LISTS RGL_MESHLET_MODELS)
+    # `<glb>|<门槛>` 拆分。🔴 形态不对就 configure 期 FATAL：静默按 0 处理 = 产物悄悄没有
+    # MustL0 段，而 P2 会把"没有段"读成"这个资产没有要保的部件"——那是比构建红更坏的形态。
+    if(NOT entry MATCHES "^(.+)\\|([0-9]+(\\.[0-9]+)?)$")
+        message(FATAL_ERROR
+            "RglMeshlets: 清单条目 `${entry}` 不是 `<glb 路径>|<must-l0-diag 门槛（源单位）>` 形态；"
+            "关闭判定要显式写 `|0`（为什么门槛逐资产给 → 本文件头）")
+    endif()
+    set(glb "${CMAKE_MATCH_1}")
+    set(mustL0Diag "${CMAKE_MATCH_2}")
     get_filename_component(glbName "${glb}" NAME)
     set(out "${CMAKE_CURRENT_BINARY_DIR}/models/${glbName}.meshlets.bin")
     if(NOT EXISTS "${glb}")
@@ -58,9 +82,9 @@ foreach(glb IN LISTS RGL_MESHLET_MODELS)
     # 这条边需要它时才编）；$<TARGET_FILE:> 保证 COMMAND 指到构建出的可执行文件。
     add_custom_command(
         OUTPUT "${out}"
-        COMMAND $<TARGET_FILE:meshlet_pack> "${glb}" --out "${out}"
+        COMMAND $<TARGET_FILE:meshlet_pack> "${glb}" --out "${out}" --must-l0-diag "${mustL0Diag}"
         DEPENDS meshlet_pack "${glb}"
-        COMMENT "Packing ${glbName} -> ${glbName}.meshlets.bin (meshlet_pack)"
+        COMMENT "Packing ${glbName} -> ${glbName}.meshlets.bin (meshlet_pack, must-l0-diag=${mustL0Diag})"
         VERBATIM)
     list(APPEND RGL_MESHLET_OUTPUTS "${out}")
 endforeach()

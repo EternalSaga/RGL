@@ -1,6 +1,8 @@
 // serialize.cpp —— 按 format.h 的段表顺序落盘：头 → PrimTable → VertexPool → Clusters
-// → Tris → Remap → Groups → Nodes，段间 16B 对齐填充。内存态与磁盘态字段一一对应
+// → Tris → Remap → Groups → Nodes → MustL0，段间 16B 对齐填充。内存态与磁盘态字段一一对应
 // （PackedCluster→DiskCluster 等），verifyOrig 不落盘（对照面只活在进程里）。
+// MustL0 段（v2）**可缺省**：mustL0Count==0 时一个字节都不追加，此时 offMustL0 == 文件长度
+// ——这条不只是"干净"，它是"门槛 0 = 产物与 v1 逐位相同（除头部那三枚新字段）"的载体。
 #include "serialize.h"
 
 #include <cstdio>
@@ -37,6 +39,7 @@ void writeAsset(const std::string& path, const PackedAsset& a)
     h.nodeWidth = kHierarchyNodeWidth;
     h.l0TriangleCount = a.stats.l0Tris;
     h.totalTriangleCount = a.stats.totalTris;
+    h.mustL0Count = uint32_t(a.mustL0Ranges.size());
 
     uint64_t off = sizeof(FileHeader);
     h.offPrimTable = off; off = alignUp(off + a.prims.size() * sizeof(DiskPrim));
@@ -46,6 +49,10 @@ void writeAsset(const std::string& path, const PackedAsset& a)
     h.offRemap = off; off = alignUp(off + a.remap.size() * sizeof(uint32_t));
     h.offGroups = off; off = alignUp(off + a.groups.size() * sizeof(DiskGroup));
     h.offNodes = off; off = alignUp(off + a.nodes.size() * sizeof(DiskNode));
+    // 末段之后**不填充**：文件长度 == 末段末尾。这条不是省字节，是给读取侧留一条硬自证——
+    // tools/shadow_proxy_probe.py 拿「末段末尾 == 文件大小」判"字段表有没有错一位"，而
+    // DiskMustL0 是 12B（不是 16 的倍数），填充会把那条判据糊成"差 <16B 也算对"。
+    h.offMustL0 = off; off += a.mustL0Ranges.size() * sizeof(DiskMustL0);
 
     std::vector<uint8_t> buf(size_t(off), 0);
     const auto put = [&](uint64_t at, const void* src, size_t n) {
@@ -88,6 +95,9 @@ void writeAsset(const std::string& path, const PackedAsset& a)
         }
         put(h.offNodes, t.data(), t.size() * sizeof(DiskNode));
     }
+    // MustL0（v2）：内存态即磁盘态（无扩展字段），空表时**不追加任何字节**（见文件头）
+    if (!a.mustL0Ranges.empty())
+        put(h.offMustL0, a.mustL0Ranges.data(), a.mustL0Ranges.size() * sizeof(DiskMustL0));
 
     std::FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) throw std::runtime_error("无法打开输出文件: " + path);

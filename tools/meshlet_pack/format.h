@@ -15,10 +15,28 @@
 //   [Remap]          扁平 u32 流                逐簇 vertCount 个全局顶点下标
 //   [Groups]         groupCount × DiskGroup     36B/条（簇 LOD DAG 的 group 节点）
 //   [Nodes]          nodeCount × DiskNode       32B/条（clodBuildHierarchy 空间层级森林）
+//   [MustL0]         mustL0Count × DiskMustL0   12B/条（**v2 新增**，可缺省 = 0 条）
 //
 //   段内寻址：DiskCluster.triOffset = Tris 段内**字节**偏移；
 //            DiskCluster.remapOffset = Remap 段内**元素**偏移。
 //   全局顶点下标 = Remap[remapOffset + 局部索引]，恒指向 VertexPool。
+//   🔴 **末段之后不填充**：文件长度 == 末段末尾（DiskNode 是 32B 恒对齐，v2 的 DiskMustL0 是
+//   12B 会差出填充，故写侧对末段不 alignUp）。读取侧靠这条做"字段表错一位"的硬自证，
+//   见 tools/shadow_proxy_probe.py 的「偏移表闭合」。
+//
+// ## 版本史（🔴 抬版本 = 写侧 kFormatVersion 与读侧 kMeshletFormatVersionMax 一起抬）
+//
+//   **v1** ★0-a 首版八段布局（本文件旧版的全部描述）。
+//   **v2** shadow proxy 批次 N10 的 P1（docs/shadow_proxy_plan.md §7.2）：
+//     ① 尾部新增可选 [MustL0] 段（`offMustL0` / `mustL0Count` 从 reserved 里划出两枚 u32
+//        + 一枚 u64，头部**仍是 192B**，前 144B 字段序与 v1 逐位相同）；
+//     ② 每个 prim 的 depth==0 段内部按"是否必须 L0"做过一次 stable 二分重排（must_L0 的
+//        group 在前），于是**同一段簇的先后**与 v1 不同 —— 簇的**集合**、Tris/Remap 两段、
+//        groups 数组顺序全部不变（`refined` 存的是全局 group 下标，动不得）。
+//     🔴 读取侧的兼容口径：v2 = v1 + 尾部一段。不认识 MustL0 的读取器**照旧能画**（它只是
+//        少一张还没人消费的表），所以读侧把 Max 抬到 2 而不是拒读；反过来 v1 读取器读到 v2
+//        的产物不会崩（末段校验是 `Nodes 段尾 ≤ 文件长`，尾部多一段不触发），但**别指望**
+//        这个方向：布局一变就抬版本，抬版本就写清"旧读取器会怎样"。
 //
 // ## 与 docs/mdi_plan.md §7.2 数据面口径的对应
 //
@@ -40,6 +58,16 @@
 //   2,518 簇」——**那个读数错了**（口径方向没错，数字是脚本量错），已按实测改写。两条口径
 //   从此不再是散文断言：一致性由 `rgl/meshlet_lod.cppm` 的 **invariant 3** 机器钉住
 //   （分家即报错并点名 prim）。引擎口径 = `meshlet_ranges_impl.cppm::isL0Cluster`，照它。
+//
+//   **v2 的 L0 段内序**（shadow proxy N10 P1）：每个 prim 的 depth==0 段内部按"是否 must_L0"
+//   做过一次 stable 二分（must_L0 的 group 在前，两半内部保持 clodBuild 的产出序）。三条不破，
+//   每条都有打包侧 verify 与引擎侧 invariant 分别盯着：
+//     · 每 prim 的 depth 序列仍**单调不减**（只在同一段内部动）⟹ meshlet_lod invariant 2；
+//     · L0 簇仍是该 prim 簇区间的**前缀** ⟹ meshlet_ranges invariant 4；
+//     · 簇的**集合**与 Tris/Remap 两段逐位不变 ⟹ "画哪些三角"没变，只改了分组；而阴影段
+//       depthWrite + eLess 只存最近深度 ⟹ 图集内容相同（本批"动产物却不换锚"的全部依据）。
+//   ⚠ 将来 `meshlet.mode` 开成 switch/overlay 时要重测主渲染：簇的光栅顺序变了，而主 opaque
+//   段写 5 张 G-buffer、深度恰好相等的片元有先后歧义（`docs/mdi_plan.md` §5 风险 5）。
 //
 // ## 坐标系
 //
@@ -66,7 +94,7 @@
 namespace RGL::meshpack {
 
 inline constexpr char kMagic[8] = {'R', 'G', 'L', 'C', 'L', 'O', 'D', 0};
-inline constexpr uint32_t kFormatVersion = 1;  ///< 产物布局版本（本文件描述的布局）
+inline constexpr uint32_t kFormatVersion = 2;  ///< 产物布局版本（本文件描述的布局；版本史见头注）
 inline constexpr uint32_t kToolVersion = 1;    ///< 打包器版本（算法改动时抬）
 inline constexpr uint32_t kSectionAlign = 16;
 inline constexpr uint32_t kVertexStride = 48;  ///< ModelVertex 契约（model_schema.lua）
@@ -110,7 +138,9 @@ struct FileHeader {
     uint64_t l0TriangleCount;
     uint64_t totalTriangleCount;  ///< 全部 LOD 级三角合计
     uint64_t offPrimTable, offVertexPool, offClusters, offTris, offRemap, offGroups, offNodes;
-    uint32_t reserved[12];  ///< 头部扩位（凑满 192B = 16 的倍数；用掉一个减一个）
+    uint64_t offMustL0;     ///< v2：MustL0 段起始偏移（mustL0Count==0 时 = 文件尾，段不存在）
+    uint32_t mustL0Count;   ///< v2：MustL0 段条数（0 = 未判定 / 无被钉 group）
+    uint32_t reserved[9];   ///< 头部扩位（凑满 192B = 16 的倍数；用掉一个减一个）
 };
 static_assert(sizeof(FileHeader) == 192, "FileHeader 布局是产物契约，改字段必须抬 kFormatVersion");
 
@@ -156,5 +186,25 @@ struct DiskNode {
     uint32_t childOffset, childCount;
 };
 static_assert(sizeof(DiskNode) == 32);
+
+// v2 新增：must_L0 的区间表（shadow proxy N10 P1，判据本体见 components.h）。
+// 一条 = 一个 prim：该 prim 的 depth==0 段里，**最前面** clusterCount 个簇所属的 group 全部
+// 被整组钉 L0。语义（P2 的运行期读法，本批引擎侧**不读**）：这种 prim 至多发两条 draw ——
+// 本表指的这段簇区间选级钉死 0，其余照常走 D。
+//
+// 🔴 为什么记的是**簇区间**而不是 group 下标区间：重排只能搬 clusters 里的簇条目，groups 数组
+// 一个元素都动不得（`refined` 存的是它的下标）⟹ 被钉的那批 group 在 groups 里**天然不连续**
+// （must_L0 的判定与 group 下标无关，实测 bistro prim 1514 的被钉 group 是 {6733, 6737} 这种
+// 形态），"group 区间"在这份产物里根本表达不出来。而排序单位仍然是 group（一个 group 的簇必须
+// 连续），"排到最前面"这件事唯一可落盘的写法就是这段簇区间。
+// 🔴 表里也**不抄**该 prim 的 L0 段起点之外的任何派生量（prim 区间与各级簇序的唯一真相源是
+// Groups 段）：抄一份 = 造第二个会漂的真相（AGENTS 哲学第 1 条）。clusterOffset 保留是为了让
+// verify ⑨ 能机器核对"它确实等于该 prim depth==0 段的起点"——前缀性正是运行期取单条 draw 的前提。
+struct DiskMustL0 {
+    uint32_t prim;           ///< 归属 primitive（每 prim 至多一条，表内按 prim 升序）
+    uint32_t clusterOffset;  ///< 被钉簇区间起点（= 该 prim depth==0 段起点，⑨ 核对）
+    uint32_t clusterCount;   ///< 被钉簇数（≥1，区间内每个簇的 group 都是 must_L0）
+};
+static_assert(sizeof(DiskMustL0) == 12);
 
 }  // namespace RGL::meshpack

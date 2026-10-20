@@ -29,8 +29,10 @@ import rlstd;
  *
  * ## 布局口径（= format.h 的读取侧重述，改动必须同步两侧与 formatVersion）
  * `[FileHeader 192B][PrimTable][VertexPool][Clusters][Tris][Remap][Groups][Nodes]`，
- * 小端、段起始 16B 对齐、段间 0x00 填充；顶点池 48B/顶点 = ModelVertex 契约
- * （`rgl/shaders/model_schema.lua` 单一真相源，本模块**不解释顶点字段**，只给字节视图）。
+ * v2 起尾部还可有一段 `[MustL0]`（**本模块不读**，口径见上面版本范围那条；校验只保证它存在时
+ * 不骗过「末段段尾 ≤ 文件长」）。小端、段起始 16B 对齐、段间 0x00 填充；顶点池 48B/顶点 =
+ * ModelVertex 契约（`rgl/shaders/model_schema.lua` 单一真相源，本模块**不解释顶点字段**，
+ * 只给字节视图）。
  * **段字节数从 header 段表推导**（相邻偏移差 + 文件尾），本模块不硬编码任何绝对偏移；
  * 定长段的 `count × stride` 只用于**验证段表自洽**（段表容得下、不重叠、落在文件内）。
  * `count × stride` 本身在 uint64 下恒不溢出（count 是 uint32、stride ≤ 48，积 < 2^38），
@@ -50,9 +52,17 @@ namespace RGL {
 /** 产物 magic（8 字节，写侧 `format.h::kMagic` 的镜像；不匹配 = 不是簇产物文件）。 */
 export inline constexpr char kMeshletMagic[8] = {'R', 'G', 'L', 'C', 'L', 'O', 'D', 0};
 
-/** 引擎可读的 `formatVersion` 兼容范围（产物布局版本；布局改动写侧必须抬版本，本模块按此拒读）。 */
+/** 引擎可读的 `formatVersion` 兼容范围（产物布局版本；布局改动写侧必须抬版本，本模块按此拒读）。
+ *
+ *  🔴 **v2 = v1 + 尾部一段可选的 MustL0**（shadow proxy N10 P1，写侧 `format.h` 版本史）：
+ *  本模块**不读**那段（P2 才读），抬 Max 到 2 的全部理由是「不认识 ≠ 拒读」——v2 相对 v1 只多了
+ *  一张还没人消费的表，前 144B 字段序与七段布局逐位未动，照旧画得出来。反过来，若这里停在 1，
+ *  出厂默认态（`meshlet.assets=true`）会**整资产拒读** ⟹ 阴影段回落旧路径 ⟹ 截图变、红线 A 与
+ *  出厂锚一起飞。尾部多出来的字节由「末段（Nodes）段尾 ≤ 文件长」这条天然放过，不额外放宽判据。
+ *  ⚠ 这条兼容是**单向**的：v1 读取器读到 v2 不会崩，但别指望它画得对（v2 的 L0 段内簇序变了）；
+ *  布局一变就抬版本、抬版本就写清"旧读取器会怎样"，是 `format.h` 版本史那一节的职责。 */
 export inline constexpr uint32_t kMeshletFormatVersionMin = 1;
-export inline constexpr uint32_t kMeshletFormatVersionMax = 1;
+export inline constexpr uint32_t kMeshletFormatVersionMax = 2;
 
 /**
  * 引擎可读的 `toolVersion` 兼容范围（打包器版本 = 算法口径，非布局）。
@@ -108,8 +118,12 @@ export struct MeshletDiskHeader {
 	uint64_t totalTriangleCount;
 	/** 七段起始偏移（相对文件头；单调 + 不重叠 + 落在文件内由本模块校验）。 */
 	uint64_t offPrimTable, offVertexPool, offClusters, offTris, offRemap, offGroups, offNodes;
+	/** v2：MustL0 段起始偏移与条数。**本模块不读那段**（口径见上面版本范围那条注释），
+	 *  镜像它只为「两侧字段序逐位相同」这条镜像契约本身——不解释、不校验、不给视图。 */
+	uint64_t offMustL0;
+	uint32_t mustL0Count;
 	/** 头部扩位（写侧凑满 192B 用；读取侧不解释）。 */
-	uint32_t reserved[12];
+	uint32_t reserved[9];
 };
 static_assert(sizeof(MeshletDiskHeader) == 192, "FileHeader 是产物契约（对齐写侧 format.h 的 static_assert）");
 

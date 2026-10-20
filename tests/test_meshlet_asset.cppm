@@ -147,7 +147,9 @@ struct Mutation {
 };
 
 void mutMagic(BuiltAsset& b) { headerOf(b).magic[3] = 'X'; }
-void mutFormatVersion(BuiltAsset& b) { headerOf(b).formatVersion = 2; }
+// 🔴 必须是**范围外**的值：v2 起 kMeshletFormatVersionMax == 2（尾部多一段 MustL0，读取侧
+// 不读但照收），写死 2 会让这条变异退化成 no-op —— 反向用例假绿的最省写法，别再用字面量。
+void mutFormatVersion(BuiltAsset& b) { headerOf(b).formatVersion = kMeshletFormatVersionMax + 1; }
 void mutToolVersion(BuiltAsset& b) { headerOf(b).toolVersion = 99; }
 void mutTruncateTail(BuiltAsset& b) { b.bytes.resize(b.bytes.size() - 8); }
 void mutTruncateHeader(BuiltAsset& b) { b.bytes.resize(100); }
@@ -305,6 +307,36 @@ TEST_CASE("正向：最小合法合成缓冲解析成功，各段 count/stride/�
 	CHECK(tag == 0xC0000001u);
 	// sourceSha1 只作日志身份（裁决 1）：hex 化正确即可，不做任何校验。
 	CHECK(a.sourceSha1Hex == "000102030405060708090a0b0c0d0e0f10111213");
+}
+
+// 🔴 本用例钉的是「引擎**不拒读** v2」这条出厂默认态的命根子：v2 = v1 + 尾部一段本模块不读的
+// MustL0（shadow proxy N10 P1）。拒读 = 整资产回落旧路径 = 出厂默认态截图变（红线 A 与出厂锚
+// 一起飞）。反向的一半在变异表里（formatVersion 抬到范围外必须被拒）——两半合起来才同时挡住
+// "范围常量写太松"与"写太紧"两种失效，单独任何一半都是恒绿的一半。
+TEST_CASE("正向：v2 产物（尾部多一段 MustL0）照旧解析成功，七段视图不受影响") {
+	BuiltAsset b = makeValid();
+	// 写侧 v2 的形态：formatVersion=2 + 头部 @144 offMustL0 / @152 mustL0Count + 尾部一段
+	// 16B 对齐的 MustL0（DiskMustL0 = 12B/条，本模块不解释内容）。144/152 按 format.h 头注
+	// **手抄** = 本文件既有的"期望值独立出处"口径：镜像结构漂了，下面那两条 CHECK 先红。
+	const uint64_t tail = alignUp16(b.bytes.size());
+	b.bytes.resize(size_t(tail) + 12, std::byte{0});  // ⚠ resize 之后才能再取 header 指针
+	headerOf(b).formatVersion = kMeshletFormatVersionMax;
+	std::memcpy(b.bytes.data() + 144, &tail, 8);
+	const uint32_t one = 1;
+	std::memcpy(b.bytes.data() + 152, &one, 4);
+
+	auto r = parseMeshletAsset(std::move(b.bytes));
+	INFO("v2 解析错误: " << (r ? std::string() : r.error()));
+	REQUIRE(r.has_value());
+	CHECK(r->header.formatVersion == kMeshletFormatVersionMax);
+	CHECK(r->header.offMustL0 == tail);
+	CHECK(r->header.mustL0Count == 1);
+	// 七段视图与 v1 完全同形（尾部那段不吃掉任何一段的字节、也不把末段顶出文件）
+	CHECK(r->prims.size() == 1);
+	CHECK(r->clusters.size() == 2);
+	CHECK(r->groups.size() == 2);
+	CHECK(r->nodes.size() == 2);
+	CHECK(r->nodes[1].group == 1);
 }
 
 TEST_CASE("正向：loadMeshletAsset 磁盘往返成功；不存在的文件被拒且错误可归因") {

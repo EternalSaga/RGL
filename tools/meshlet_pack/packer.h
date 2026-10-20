@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "components.h"
 #include "format.h"
 #include "glb_source.h"
 
@@ -80,6 +81,12 @@ struct PackedAsset {
     std::vector<PackedGroup> groups;
     std::vector<PackedNode> nodes;
     PackStats stats;
+    // ─── shadow proxy N10 P1（判据本体见 components.h；除 mustL0Ranges 外都不落盘）───────
+    MustL0Stats mustL0;                        ///< 判据读数（--stats 打印面 + verify ⑤ 入参）
+    double mustL0Diag = 0.0;                   ///< 生效的门槛（源 glb 单位；0 = 关闭判定）
+    std::vector<DiskMustL0> mustL0Ranges;      ///< 落盘为 MustL0 段（v2），按 prim 升序
+    std::vector<PackedGroup> groupsBeforeReorder;      ///< 重排前快照（verify ⑦⑧ 的对照面）
+    std::vector<PackedCluster> clustersBeforeReorder;  ///< 同上（簇身份 = triOffset，唯一）
 
     uint32_t vertexCount() const { return uint32_t(vertexPool.size() / kVertexStride); }
     const float* vertexPos(uint32_t globalIndex) const;  // 池记录偏移 0 = position
@@ -89,8 +96,15 @@ struct PackedAsset {
 // →u32 位型），不哈希结构体裸内存（padding 不参与 = 跨编译器可复现的口径）。
 uint32_t configFingerprint();
 
-// 主流程：逐 prim clodBuild → 全局池/8bit 索引/重映射 → 全局层级。不抛「可恢复」错误：
-// 库返回的不变量被破坏（vertex_count 超限等）直接 abort——工具红了比产物悄悄错好。
-PackedAsset packAsset(const std::vector<SourcePrim>& prims, const uint8_t sourceSha1[20]);
+// 主流程：逐 prim clodBuild → 全局池/8bit 索引/重映射 → 全局层级 → **must_L0 判定 + L0 段
+// group 重排**（components.h）。不抛「可恢复」错误：库返回的不变量被破坏（vertex_count 超限等）
+// 直接 abort——工具红了比产物悄悄错好。
+// @param mustL0Diag 分量包围对角线下限（**源 glb 单位**，bistro 的 100 = 世界 1m）；
+//        **0 = 关闭判定**：仍算分量划分供 verify 用，但不排序、MustL0 段为空、簇序与 v1 逐位相同。
+//        🔴 它**不进** configFingerprint：那个指纹钉的是 clodConfig（改了 DAG 就换口径），而本
+//        门槛只改分组不改 DAG，且任务红线明写"configFingerprint 缓存键不能变"。构建期的缓存键
+//        另有其人 = ninja 的 COMMAND 里带着这个参数（改 RglMeshlets.cmake 那行即重跑打包）。
+PackedAsset packAsset(const std::vector<SourcePrim>& prims, const uint8_t sourceSha1[20],
+    double mustL0Diag = 0.0);
 
 }  // namespace RGL::meshpack
