@@ -313,14 +313,15 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     groups = [g for g in prod.by_prim[p]]
     per_level: dict[int, list[tuple]] = defaultdict(list)
     for _depth, _prim, off, cnt in groups:
-        for c in prod.clusters(off, off + cnt):
-            per_level[_depth].append(c)
-    l0 = [c for lv in sorted(per_level) for c in per_level[lv] if c[1] == -1]
+        for k, c in enumerate(prod.clusters(off, off + cnt)):
+            per_level[_depth].append((off + k, c))
+    l0 = [c for _gi, c in per_level[0]] if 0 in per_level else []
     if not l0:
         return {"prim": p, "empty": True}
 
     # ---- 第一遍：解码 L0 三角 + 在**逻辑顶点**上建并查集 ----
     l0_tris = [prod.cluster_global_tris(c) for c in l0]
+    l0_gi = [gi for gi, c in per_level[0]] if 0 in per_level else []
     ds = DisjointSet(n_logical)
     unions = 0
 
@@ -343,6 +344,29 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     for g in l0_tris:
         for i in range(0, len(g), 3):
             comp_l0[ds.find(logical(g[i]))] += 1
+
+    # ---- 纯度：逐簇跨几个分量（**分级算**，这是"要不要重排簇"的唯一判据）----
+    # 粗级必然跨分量（简化就是靠合并），所以真正要问的是：**受保护分量在它能活的那一级上，
+    # 是不是落在纯净簇里**。只有 L0 纯净 ⟹ 结论退化成"受保护分量恒 L0"，反而更简单更省。
+    purity: dict[int, Counter] = defaultdict(Counter)
+    comp_of_cluster: dict[int, set] = {}
+    for lv in sorted(per_level):
+        for gi, c in per_level[lv]:
+            g = prod.cluster_global_tris(c)
+            cs = {ds.find(logical(g[i])) for i in range(0, len(g), 3)}
+            purity[lv][len(cs)] += 1
+            comp_of_cluster[gi] = cs
+
+    # ---- 连续性：每个分量的 L0 簇形成几个连续段（= 需要的 draw 条数下限）----
+    runs_of_comp: dict[int, int] = {}
+    pos_of_cluster = {gi: i for i, gi in enumerate(l0_gi)}
+    comp_cluster_pos: dict[int, list] = defaultdict(list)
+    for gi in l0_gi:
+        for c in comp_of_cluster.get(gi, ()):
+            comp_cluster_pos[c].append(pos_of_cluster[gi])
+    for c, ps in comp_cluster_pos.items():
+        ps.sort()
+        runs_of_comp[c] = 1 + sum(1 for a, b in zip(ps, ps[1:]) if b != a + 1)
 
     # ---- 每分量包围盒对角线（源 glb 单位，未乘 scene.lua 的 scale）----
     # 门槛的正确形态是**空间尺寸**（"在阴影图里占不占得下一枚纹素"），不是三角数；这里两个都算，
@@ -378,7 +402,7 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
     comp_level: dict[int, dict[int, int]] = {c: {} for c in comp_l0}
     for lv in sorted(per_level):
         seen: Counter = Counter()
-        for c in per_level[lv]:
+        for _gi, c in per_level[lv]:
             g = prod.cluster_global_tris(c)
             for i in range(0, len(g), 3):
                 seen[ds.find(logical(g[i]))] += 1
@@ -408,7 +432,9 @@ def analyze_prim(prod: Product, p: int, weld_on: bool = True) -> dict:
             # 而 comps_detail 是丢 id 的列表，所以这里保留 id 索引的那一份。
             "comps_info": {c: (n, alive_level[c], diag(c)) for c, n in comp_l0.items()},
             "levels_present": sorted(per_level),
-            "comp_sizes": sorted(comp_l0.values(), reverse=True)}
+            "comp_sizes": sorted(comp_l0.values(), reverse=True),
+            "purity": {lv: dict(cnt) for lv, cnt in purity.items()},
+            "runs": {c: (runs_of_comp.get(c, 1), alive_level[c], diag(c)) for c in comp_l0}}
 
 
 def main() -> int:
@@ -668,6 +694,41 @@ def main() -> int:
         print(f"  {dmin * args.glb_scale:>6.2f}m {now5:>12,} {prim5:>12,} {cf5:>12,}"
               f"{cf5 / max(now5, 1):>10.2f}× {cf7:>12,} {d3:>12,}")
 
+    # ---- 数 5：簇纯度与连续性——"加对照表"够不够，还是必须重排簇 ----
+    print(f"\n== 数 5：**簇纯度**（一簇跨几个分量）与**连续性**（同分量的 L0 簇形成几段）==")
+    print(f"  这是「加一张对照表」与「重排簇」哪个够用的唯一判据：纯度 100% 的级上对照表就够；")
+    print(f"  纯度低的级上混装簇**物理拆不开**（同一张 8bit 索引表 + 同一份 remap），加什么索引都没用。")
+    print(f"  {'级':>3} {'簇数':>9} {'纯净=1分量':>11} {'跨2':>9} {'跨3+':>9} {'平均跨分量':>10}")
+    pur_tot = defaultdict(Counter)
+    for r in res:
+        for lv, cnt in r["purity"].items():
+            pur_tot[lv].update(cnt)
+    purity_rows = []
+    for lv in sorted(pur_tot):
+        cnt = pur_tot[lv]
+        tot = sum(cnt.values())
+        row = {"level": lv, "clusters": tot,
+               "pure_share": cnt.get(1, 0) / max(tot, 1),
+               "cross2": cnt.get(2, 0),
+               "cross3plus": sum(v for k, v in cnt.items() if k >= 3),
+               "avg_comps": sum(k * v for k, v in cnt.items()) / max(tot, 1)}
+        purity_rows.append(row)
+        print(f"  {lv:>3} {tot:>9,} {row['pure_share'] * 100:>10.1f}% {row['cross2']:>9,}"
+              f" {row['cross3plus']:>9,} {row['avg_comps']:>10.2f}")
+
+    dmin1 = 1.0 / args.glb_scale
+    prot = [v for r in res for v in r["runs"].values() if v[2] >= dmin1]
+    print(f"\n  受保护分量（对角线 ≥1m）共 {len(prot):,} 个：")
+    dh = Counter((min(d - 1, 0) if d < INF else -1) for _rn, d, _dg in prot)
+    print(f"    需要的选级（死亡级−1；-1 = 恒存活、不受限）：" +
+          "  ".join(f"{k}:{v}" for k, v in sorted(dh.items())))
+    rh = Counter(rn for rn, _d, _dg in prot)
+    print(f"    它的 L0 簇形成几段（1 = 一条 draw 就够）：" +
+          "  ".join(f"{k}段:{v}" for k, v in sorted(rh.items()) if k <= 5) +
+          f"  ｜ >5 段 {sum(v for k, v in rh.items() if k > 5)}")
+    print(f"    段数中位 = {sorted(rh.elements())[len(prot) // 2] if prot else 0}"
+          f"，最大 = {max(rh) if rh else 0}")
+
     # ---- 门槛的"看内容"对账：拒绝让门槛只由代价曲线决定 ----
     if args.list_affected > 0:
         T = args.list_affected
@@ -739,6 +800,7 @@ def main() -> int:
                        "entries_by_threshold": {str(k): v for k, v in entries_by_T.items()},
                        "size_curve": size_rows,
                        "component_level_curve": comp_rows,
+                       "cluster_purity_by_level": purity_rows,
                        "cost_rows": cost_rows,
                        "unions": unions, "seconds_analyze": t_an}, f, indent=2)
         print(f"\n读数已写 {args.json}")
