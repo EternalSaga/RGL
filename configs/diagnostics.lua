@@ -55,6 +55,15 @@ return {
     rpc = false,      -- Phase 10b HTTP POST RPC 调试通道（true=帧边界命令队列，仅绑 127.0.0.1；GET /state 发现参数，POST /camera /param /shot；独立于 imgui 门，headless 可用，见 docs/archive/phase10b_plan.md）
     rpc_port = 8788,  -- RPC 监听端口（bind 失败只降级关，不崩）
 
+    -- GPU fault masked 轮询（rgl/device_fault.cppm；查偶发 GPU hang 用，默认关）：
+    -- true = 每帧 vkGetDeviceFaultReportsKHR(timeout=0) 轮一次，把驱动**自己内部恢复掉、
+    -- 没上报 device lost** 的 masked fault 打成 ERROR。🔴 语义代价：启用该 feature 后驱动
+    -- **可以**选择内部恢复而不报 device lost —— 开这道门有可能把"炸给你看"变成"悄悄恢复 +
+    -- 一条 ERROR"。关 = 零 Vulkan 调用；device lost 之后那一次抓取**不受本门影响**（恒尝试）。
+    -- 生效前置 = 驱动有 VK_KHR_device_fault 且 deviceFaultReportMasked 位为真（本机 RADV
+    -- 实测两者都有；探测结果看启动日志 "Device device_fault:" 那行）。
+    fault_poll = false,
+
     -- 批 11.3 HFTS/FTIZB 硬阴影（docs/hfts_izb_plan.md）：izb_shadow / izb_grid / izb_dump_frame
     -- 已迁出 → configs/shadow.lua 的 izb = { on, grid, dump_frame }（N6a，见上方迁出注释）。
 

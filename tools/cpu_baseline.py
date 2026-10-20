@@ -137,6 +137,16 @@ ARMS: dict[str, tuple[str, list[tuple[str, str, str]]]] = {
 }
 DEFAULT_ARMS = "default,no-vvl,shadow-off,izb-off,scale-half"
 
+# ── device fault 诊断通路的开销臂（2026-10-20，MDI hang 归因批）───────────────────
+# 问的是"每帧一次 vkGetDeviceFaultReportsKHR(timeout=0) 要不要钱"。判据 = 与 default 臂的
+# frame_p50 / cpu.record 差值落在噪声带内（本工具 --repeat 5 的带宽口径），**不是**"看着差不多"。
+# 与 proxy-arm* 的区别：那组量 GPU pass 时间（阴影段），本臂量 CPU 侧录制路径（轮询是 CPU 调用）。
+ARMS["fault-poll"] = (
+    "diagnostics.fault_poll=true：每帧一次 masked fault 轮询（timeout=0 不阻塞）。与 default 之差"
+    " = 诊断通路自身的 CPU 成本；门关时连 Vulkan 调用都不发，所以这条量的就是'旁路到底多轻'",
+    [("diagnostics.lua", "fault_poll", "true")],
+)
+
 # ─── N10 P3 shadow proxy 四臂（整条线的生死判据）────────────────────────────────
 # 判据 = **arm2 vs arm0 的阴影逐 pass GPU 合计**（`gpu:shadow1..4`，p50）；arm1/arm3 只做
 # 归因，不许拿差值凑净账（任务书红线）。口径三条写在这里而不是抄进文档：

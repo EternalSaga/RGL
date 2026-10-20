@@ -8,6 +8,7 @@ import rllogger;
 import vulkan_utils;
 import queue_family_manager;
 import features;
+import device_fault;  // GPU fault 诊断通路的探测结论（feature 结构条件链 + getter 暴露）
 import vk_instance;
 import vkerror;
 
@@ -91,6 +92,10 @@ export class DeviceContext {
 	 * 旧版多出来的 compute/transfer 两个句柄恒被钳回同一条队列且零使用，已删
 	 *（判据与"将来怎么拿第二条队列"的形态 → `QueueFamilyManager` 类注释）。
 	 * @param vkInstance 实例层（读 raii Instance 枚举物理设备）
+	 * @param faultPollWanted 调用方**是否要** masked fault 轮询（= `diagnostics.fault_poll`）。
+	 *        🔴 传的是门，不是"驱动支持"：启用 `deviceFaultReportMasked` 后驱动可以内部恢复
+	 *        故障而不再报 device lost，默认开 = 可能把要查的 hang 变成"什么都没发生"。门不开
+	 *        = feature 位传 FALSE，通路仍在（device lost 后照样能查 fault）。
 	 * @note 失败路径：pickPhysicalDevice 失败 / precheckDevice 扩展或 feature 缺失抛
 	 *   std::runtime_error（describe() 带 [Code]）；raii Device / CommandPool 构造
 	 *   失败抛 vk::SystemError（createCommandPool 的 expected Error 分支是预留路径，
@@ -98,7 +103,7 @@ export class DeviceContext {
 	 *   时抛 bad_expected_access（打分制不查图形能力，故此路径理论可达；旧版此处是
 	 *   std::map::at 抛 out_of_range，语义相同、信息更少）
 	 */
-	DeviceContext(RGL::AppContext& vkInstance)
+	DeviceContext(RGL::AppContext& vkInstance, bool faultPollWanted = false)
 		: vkInstance(vkInstance),
 		  physicalDevices(vkInstance.getInstance()),
 	  physicalDevice([result = RGL::pickPhysicalDevice(physicalDevices)]() {
@@ -130,11 +135,18 @@ export class DeviceContext {
 	   * features.cppm presentTimingSupported——与扩展启用同源，任一缺 = 都不链接）。 */
 	  presentTimingFeature(initOptionalPresentTimingFeature(optionalFeatures)),
 	  presentId2Feature(initOptionalPresentId2Feature(optionalFeatures)),
+	  /** device fault 诊断通路的探测结论（🔴 必须先于下面两个 feature 结构——它们读它置位，
+	   *  门控后的 masked 决定只写在这一处，见 deriveDeviceFaultSupport）。 */
+	  deviceFaultSupport(RGL::deriveDeviceFaultSupport(*physicalDevice, optionalFeatures.deviceFaultKhr,
+	      optionalFeatures.deviceFaultExt,
+	      faultPollWanted && optionalFeatures.deviceFaultReportMaskedKhr)),
+	  deviceFaultKhrFeature(initDeviceFaultKhrFeature(deviceFaultSupport)),
+	  deviceFaultExtFeature(initDeviceFaultExtFeature(deviceFaultSupport)),
 	  /** 校验前移：必须在 raii::Device 构造（device 成员）之前——feature/extension
 	   * 不支持时 raii 构造器先抛 vk::SystemError（不透明），自定义 Error 路径不可达
 	   *（旧实现在构造体校验 = 失败路径死代码）。本成员只为钉死初始化顺序。 */
 	  checked(precheckDevice(*physicalDevice, featuresChain)),
-	  device(createDevice(*physicalDevice, queueManager, featuresChain, optionalFeatures, eds3Feature, depthClipBaseFeature, robustness2Feature, presentTimingFeature, presentId2Feature)),
+	  device(createDevice(*physicalDevice, queueManager, featuresChain, optionalFeatures, eds3Feature, depthClipBaseFeature, robustness2Feature, presentTimingFeature, presentId2Feature, deviceFaultSupport, deviceFaultKhrFeature, deviceFaultExtFeature)),
 		  graphicsQueue(queueManager.getQueue(device).value()),
 		  graphicsCommandPool(createCommandPool(device, queueManager.getFamilyIndex(),
 			  vk::CommandPoolCreateFlagBits::eResetCommandBuffer)
@@ -142,6 +154,13 @@ export class DeviceContext {
 		if (auto logger = RLLogger::getInstance()) {
 			logger->info("Device DGC support: graphicsIndirect={} computeIndirect={} staticGraphicsIndirect={}",
 				dgcSupport.graphicsIndirect, dgcSupport.computeIndirect, dgcSupport.staticGraphicsIndirect);
+			// device fault 探测结果**恒打一行**（含 no-op 那两种）：诊断通路"没启用"这件事
+			// 必须在日志里看得见，否则"日志里没有 fault 段"会被读成"启用了但没抓到"。
+			logger->info("Device device_fault: backend={} reportMasked={} maxFaultCount={} ({})",
+				deviceFaultSupport.backend == RGL::DeviceFaultBackend::none ? "none"
+				           : deviceFaultSupport.backend == RGL::DeviceFaultBackend::khr ? "khr" : "ext",
+				deviceFaultSupport.reportMasked, deviceFaultSupport.maxFaultCount,
+				RGL::describeDeviceFaultBackend(deviceFaultSupport.backend));
 		}
 	}
 
@@ -191,6 +210,10 @@ export class DeviceContext {
 	/** @return DGC 能力位（queryDgcSupport 派生；culling 子系统据此选 DGC 全路径 /
 	 * 读回重放回退，见 vk_indirect_commands 模块与 phase7_devlog 批次 5）。 */
 	const RGL::DgcSupport& getDgcSupport() const { return dgcSupport; }
+	/** @return device fault 诊断通路的探测结论（后端 / masked 是否启用 / maxFaultCount）。
+	 *  消费者：main 的 device lost 出口（`reportDeviceFaultOnLost`）与 ecs 帧循环的 masked
+	 *  轮询（`pollDeviceFaults`）——两者都在 `backend == none` 时零调用返回。 */
+	const RGL::DeviceFaultSupport& getDeviceFaultSupport() const { return deviceFaultSupport; }
 
    private:
 	/**
@@ -316,6 +339,33 @@ export class DeviceContext {
 	}
 
 	/**
+	 * device fault 的 KHR feature 结构初始化（读**已派生好**的探测结论，不重算门控）。
+	 *
+	 * 三个不请求的位各有理由：`deviceFaultVendorBinary` 本机 RADV 实测 false（请求 TRUE =
+	 * 启用一个驱动不支持的位）；`deviceFaultDeviceLostOnMasked` 会把 masked fault **升级**成
+	 * device lost——那是"让故障更响"，而本批要的是"让故障可见"，升级会改变提交语义（红线）。
+	 * @param support deriveDeviceFaultSupport 的结果（backend / reportMasked 已含门控）
+	 */
+	static vk::PhysicalDeviceFaultFeaturesKHR initDeviceFaultKhrFeature(const RGL::DeviceFaultSupport& support) {
+		vk::PhysicalDeviceFaultFeaturesKHR f{};
+		f.sType = vk::StructureType::ePhysicalDeviceFaultFeaturesKHR;
+		f.deviceFault = support.backend == RGL::DeviceFaultBackend::khr ? VK_TRUE : VK_FALSE;
+		f.deviceFaultVendorBinary = VK_FALSE;
+		f.deviceFaultReportMasked = support.reportMasked ? VK_TRUE : VK_FALSE;
+		f.deviceFaultDeviceLostOnMasked = VK_FALSE;
+		return f;
+	}
+
+	/** device fault 的 EXT 回落 feature 结构初始化（rev 2 只有两位，无 masked 上报）。 */
+	static vk::PhysicalDeviceFaultFeaturesEXT initDeviceFaultExtFeature(const RGL::DeviceFaultSupport& support) {
+		vk::PhysicalDeviceFaultFeaturesEXT f{};
+		f.sType = vk::StructureType::ePhysicalDeviceFaultFeaturesEXT;
+		f.deviceFault = support.backend == RGL::DeviceFaultBackend::ext ? VK_TRUE : VK_FALSE;
+		f.deviceFaultVendorBinary = VK_FALSE;
+		return f;
+	}
+
+	/**
 	 * 创建 raii Device：先按支持位条件链接 optional feature 结构进 required 链尾（见
 	 * 体内注释），再组装 DeviceCreateInfo（pNext = required 链头、queue create infos
 	 * 来自 QueueFamilyManager、扩展 = required 恒启用 + optional 按探测追加）并打日志，
@@ -330,6 +380,9 @@ export class DeviceContext {
 	 * @param robustness2Feature robustness2 feature 结构（两位支持位任一置位时链接）
 	 * @param presentTimingFeature present_timing feature 结构（组门置位时链接）
 	 * @param presentId2Feature present_id2 feature 结构（与 present_timing 同组门链接）
+	 * @param deviceFaultSupport device fault 探测结论（决定链接哪一个后端结构，none = 都不链）
+	 * @param deviceFaultKhrFeature device fault KHR feature 结构（backend==khr 时链接）
+	 * @param deviceFaultExtFeature device fault EXT feature 结构（backend==ext 时链接）
 	 * @return 创建好的 raii Device
 	 * @note 扩展/feature 支持须先经 precheckDevice（校验前移，见构造器）；raii 构造
 	 *   失败抛 vk::SystemError
@@ -342,7 +395,10 @@ export class DeviceContext {
 		vk::PhysicalDeviceDepthClipEnableFeaturesEXT& depthClipBaseFeature,
 		vk::PhysicalDeviceRobustness2FeaturesKHR& robustness2Feature,
 		vk::PhysicalDevicePresentTimingFeaturesEXT& presentTimingFeature,
-		vk::PhysicalDevicePresentId2FeaturesKHR& presentId2Feature) {
+		vk::PhysicalDevicePresentId2FeaturesKHR& presentId2Feature,
+		const RGL::DeviceFaultSupport& deviceFaultSupport,
+		vk::PhysicalDeviceFaultFeaturesKHR& deviceFaultKhrFeature,
+		vk::PhysicalDeviceFaultFeaturesEXT& deviceFaultExtFeature) {
 		// 条件链接 optional feature 结构进 required 链尾（spec：vkCreateDevice pNext 链只含
 		// "已启用扩展"的 feature 结构——FALSE 结构挂未启用扩展 = UB，RADV 实测启动后首次分配
 		// 即崩）。仅启用者链接；未启用 = 链尾保持 nullptr。扩展启用（getDeviceExtensions）
@@ -358,6 +414,18 @@ export class DeviceContext {
 		if (RGL::presentTimingSupported(optionalFeatures)) {  // Phase 9.3 整组（与扩展启用同门）
 			presentId2Feature.pNext = optHead; optHead = &presentId2Feature;
 			presentTimingFeature.pNext = optHead; optHead = &presentTimingFeature;
+		}
+		// device fault：按探测结论链接**其中一条**（none = 都不链）。判据与 features.cppm
+		// 的扩展启用同一个 backend，两处的"用哪条"不可能分叉。
+		switch (deviceFaultSupport.backend) {
+		case RGL::DeviceFaultBackend::khr:
+			deviceFaultKhrFeature.pNext = optHead; optHead = &deviceFaultKhrFeature;
+			break;
+		case RGL::DeviceFaultBackend::ext:
+			deviceFaultExtFeature.pNext = optHead; optHead = &deviceFaultExtFeature;
+			break;
+		case RGL::DeviceFaultBackend::none:
+			break;  // 整模块 no-op：不链任何结构
 		}
 		featuresChain.get<RGL::FeatureChainTail>().pNext = optHead;
 
@@ -464,6 +532,11 @@ export class DeviceContext {
 	vk::PhysicalDeviceRobustness2FeaturesKHR robustness2Feature;
 	vk::PhysicalDevicePresentTimingFeaturesEXT presentTimingFeature;  // Phase 9.3（presentTiming 组门置位才链接）
 	vk::PhysicalDevicePresentId2FeaturesKHR presentId2Feature;  // Phase 9.3（同组，与 presentTiming 整组同进退）
+	// device fault 诊断通路（纯旁路）：support 是探测结论（先初始化，两个 feature 结构读它置位），
+	// 两个结构按 backend **只链其一**（成员保活 = pNext 不悬空，AGENTS 生命周期红线）。
+	RGL::DeviceFaultSupport deviceFaultSupport;
+	vk::PhysicalDeviceFaultFeaturesKHR deviceFaultKhrFeature;
+	vk::PhysicalDeviceFaultFeaturesEXT deviceFaultExtFeature;
 	bool checked;  // 仅用于钉死初始化顺序：precheckDevice 先于 device 构造（见构造器）
 	vk::raii::Device device;  // raii Device（初始化列表由 createDevice 构造；扩展/feature 校验已前移到 checked）
 	vk::Queue graphicsQueue;  // 图形队列（vk::Queue C 句柄，按值）；主渲染队列，也是**唯一**队列

@@ -588,4 +588,103 @@ TEST_CASE("N10 P3 生效档：无钉段候选的形态与 P2 逐条同（行数/
 	}
 }
 
+// ─── 容量闭式与不等式方向（第三步审计落成的单测）─────────────────────────────
+
+/**
+ * 行表容量的**不等式方向**审计（2026-10-20 MDI hang 归因批）。
+ *
+ * 要证的命题（写成闭式才谈得上"方向"）：
+ *   需求 demand = (S + P) × C，  容量 capacity = sliceRows，  必须 demand ≤ capacity
+ *   S = 可切候选数（meshletPipeline 与 meshletMdiPipeline 都有效）
+ *   P = 其中带钉段的候选数（pinnedCount > 0；N10 P3 起每带钉段候选多占一行）
+ *   C = kActiveShadowCascades − 1（c0 恒旧路径）
+ * 反方向的后果不是崩溃而是**读未写过的行**：行数组按 sliceRows 分配，段与段在帧槽内首尾相接，
+ * 一旦某段越出自己的格子，GPU 读到的是相邻段/上一帧的残留 24B，其中 groupCountX 是任意值
+ * ⟹ DispatchMesh 一个天文数字 ⟹ CP 跑到天荒地老 = `ring gfx_0.0.0 timeout`。
+ * 所以本用例钉三件事：① 行数**恰等于**闭式（不是"≤"，等号才说明 reserve 够、span 不会因
+ * realloc 悬空）；② 各段区间两两不重叠且都落在 sliceRows 内；③ 边界——容量给到刚好时不回落、
+ * 少一行时必须回落（回落方向错了就是"宁可越界也要画"）。
+ */
+TEST_CASE("容量闭式：行数 == (S+P)×C 恰等，段区间互不重叠且 ≤ sliceRows，边界两侧各半") {
+	constexpr uint32_t C = kActiveShadowCascades - 1u;
+	// 手搭一批混合候选：可切+MDI / 可切无 MDI 宿主 / 不可切 / 带钉段
+	std::vector<ShadowCandidate> cands = {
+		cand(2u, 0.0f, kOldEntry, kClusterEntry, kMdiEntry, 4u, 3u),
+		cand(3u, 0.2f, kOldEntry, kClusterEntry, kInvalidPipelineIndex, 5u, 0u),
+		cand(4u, 0.4f, kOldEntry, kInvalidPipelineIndex, kInvalidPipelineIndex, 0u, 0u),
+		cand(5u, 2.5f, kOldEntry, kClusterEntry, kMdiEntry, 1u, 0u),
+		cand(9u, 4.5f, kOldEntry, kClusterEntry, kMdiEntry, 7u, 11u),
+	};
+	cands[0] = withPin(cands[0], 17u, 2u, 1.0f, 1.0f);  // A 带钉段
+	cands[2] = withPin(cands[2], 5u, 3u, 1.0f, 1.0f);   // D 带钉段但**不可切**（不该占行）
+
+	// 🔴 期望值独立重推（不调 mdiScanGate，它就是被测对象）。手写循环而不是
+	// std::ranges::count_if——本文件 GMF 只有 doctest，ranges 算法要真 STL 头（modules 坑）。
+	auto switchable = [](const ShadowCandidate& cd) {
+		return cd.meshletPipeline != kInvalidPipelineIndex
+		    && cd.meshletMdiPipeline != kInvalidPipelineIndex;
+	};
+	uint32_t S = 0, P = 0;
+	for (const auto& cd : cands) {
+		if (!switchable(cd))
+			continue;
+		++S;
+		P += cd.pinnedCount > 0u ? 1u : 0u;
+	}
+	const uint32_t perCascade = S + P;
+	CHECK(S == 3u);   // A、B、C（N 无 MDI 宿主、D 不可切都不算）
+	CHECK(P == 1u);   // 只有 A；D 的钉段被"不可切 = 无处可发"挡在 collect 侧
+
+	MdiFixture f;
+	f.ctx.sliceRows = perCascade * C;  // 刚好等于需求 = 最紧的合法容量（等号必须放行）
+	f.prepare(10u);
+	f.emit(std::span<const ShadowCandidate> { cands });
+
+	REQUIRE(f.segments.size() == C);
+	CHECK(f.rows.size() == perCascade * C);  // 恰等：多一行少一行都说明两侧判据分叉了
+	for (const auto& seg : f.segments) {
+		CHECK(seg.rowCount == perCascade);
+		// ② 段区间落在帧槽内（越界 = 踩进下一帧槽，录制期 upload 会拒但 draw 已发出）
+		CHECK(seg.firstRow + seg.rowCount <= f.ctx.sliceRows);
+		// span 必须真指进本帧 rows（realloc 过一次就指到旧缓冲 = 本次审计的头号嫌疑形态）
+		CHECK(seg.rows.data() == f.rows.data() + seg.firstRow);
+		CHECK(seg.rows.size() == seg.rowCount);
+	}
+	// ② 两两不重叠（段 i 的起点必须恰是段 i-1 的终点 = 首尾相接无缝无叠）
+	for (size_t i = 0; i < f.segments.size(); ++i)
+		CHECK(f.segments[i].firstRow == static_cast<uint32_t>(i) * perCascade);
+
+	// ③ 边界另一侧：少一行就必须整体回落（"宁可越界也要画"是这里唯一不可接受的失败形态）
+	MdiFixture tight;
+	tight.ctx.sliceRows = perCascade * C - 1u;
+	tight.prepare(10u);
+	tight.emit(std::span<const ShadowCandidate> { cands });
+	CHECK(tight.segments.empty());
+	CHECK(tight.rows.empty());
+	for (uint32_t c = 1u; c < kActiveShadowCascades; ++c)
+		CHECK(countMdi(tight.out[c]) == 0u);
+}
+
+/**
+ * 跨帧容量稳定性：行数组的容量在帧间**只增不减**（`clear()` 不缩容），所以第二帧的
+ * `reserve` 不会 realloc ⟹ 第一帧留下的 span 语义不会被静默改写。
+ * 这条钉的是"同一进程内换一批候选"的形态：需求变大时靠 reserve 扩容（发生在任何 span
+ * 发出之前，安全），需求变小时复用旧容量（也安全）。
+ */
+TEST_CASE("跨帧复用：连续两帧 emit，行存储不 realloc 且第二帧的段仍指进当前缓冲") {
+	MdiFixture f;
+	f.prepare(10u);
+	const auto small = makeCands();
+	f.emit(std::span<const ShadowCandidate> { small });
+	const auto* firstData = f.rows.data();
+	const size_t firstCap = f.rows.capacity();
+
+	f.emit(std::span<const ShadowCandidate> { small });  // 同规模第二帧
+	CHECK(f.rows.data() == firstData);            // 没换缓冲 = 第一帧的 span 也没悬空
+	CHECK(f.rows.capacity() == firstCap);
+	CHECK(f.rows.size() == 9u);  // 3 可切 × 3 段（makeCands 无钉段，与既有闭式一致）
+	for (const auto& seg : f.segments)
+		CHECK(seg.rows.data() == f.rows.data() + seg.firstRow);
+}
+
 }  // namespace RGL

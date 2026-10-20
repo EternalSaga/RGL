@@ -37,6 +37,10 @@ export struct GateEnv {
 	bool headless = false;                  ///< runtime.lua headless（输入探针/ imgui 的消费前提）
 	bool llmCapture = false;                ///< runtime.lua llm_debug（dump_gbuf 的消费方）
 	bool staticGraphicsIndirect = false;    ///< 设备能力（dgc_static 的门槛）
+	/** 设备能力：device fault 的 **masked 上报已启用**（= `VK_KHR_device_fault` +
+	 *  `deviceFaultReportMasked` + 本进程按 fault_poll 门请求过）。fault_poll 的生效前置，
+	 *  来源 = `DeviceContext::getDeviceFaultSupport().reportMasked`（探测事实，不是配置）。 */
+	bool deviceFaultMasked = false;
 };
 
 /** 一条 lint 结论（gate = 三个配置来源的键名拼写：diagnostics / shadow 回显表键名 +

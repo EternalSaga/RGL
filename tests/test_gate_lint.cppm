@@ -172,7 +172,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	for (const auto& k : runtimeConfigKnownKeys())
 		if (k.starts_with("meshlet."))
 			meshletKeys.push_back(k);
-	CHECK(rules.size() == 41u);       // 独立行（18 行 nullptr 挂号 + 23 行谓词；债-129 S2：
+	CHECK(rules.size() == 42u);       // 独立行（18 行 nullptr 挂号 + 24 行谓词；债-129 S2：
 	                                  // meshlet.debug/tint 三条 → meshlet.instrument 一条，
 	                                  // meshlet.switch 两条 → meshlet.mode 一条（互斥行整删）；
 	                                  // csm.slope_bias 批：预留空块的 `{"csm",…,nullptr}` 挂号行
@@ -180,7 +180,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	CHECK(blocks.size() == 7u);       // csm / pcss / evssm / 三探针 / meshlet
 	CHECK(blockKeys.size() == 22u);   // 2 + 3 + 4 + 2 + 2 + 2 + 7（csm 两块键：slope_bias + force_cascade；
 	                                  // meshlet 块 7 枚 = N10 P2 加 shadow_proxy）
-	CHECK(echo.size() == 30u);
+	CHECK(echo.size() == 31u);
 	CHECK(shadowEcho.size() == 14u);
 	CHECK(meshletKeys.size() == 9u);  // 整块 9 枚（债-106 红线：接管整块 = 一枚都不能少；
 	                                  // 债-129 S2 起 debug+tint 合并为 instrument、
@@ -198,7 +198,7 @@ TEST_CASE("gate_lint 覆盖率护栏：块条目 ∪ 独立行 == 三方来源�
 	// 去重门数钉在「独立行 ∪ 块条目」的并集上（= 三方来源键数之和）。
 	std::vector<std::string> unionGates = rules;
 	unionGates.insert(unionGates.end(), blockKeys.begin(), blockKeys.end());
-	CHECK(distinctGateCount(unionGates) == 53u);
+	CHECK(distinctGateCount(unionGates) == 54u);
 	// 反向：独立行与块条目吃的都必须是已知来源键（陈旧/拼错门名）。
 	auto known = [&](std::string_view k) {
 		return hasGate(echo, k) || hasGate(shadowEcho, k) || hasGate(meshletKeys, k);
@@ -1217,6 +1217,31 @@ TEST_CASE("gate_lint 金标准 harness：94 档全组合扫描（默认 = 校验
 	// 「env 未设就 return」的旧形态是 0 assertions（变异红线 ⑤ 的机器判据）。
 	CHECK_MESSAGE(goldenVerifiedFiles == 2, "校验模式必须逐份比对两份基线（份数 ≠ 2 = 校验没跑全）");
 #endif
+}
+
+TEST_CASE("gate_lint warn 组：fault_poll 开了但 masked 上报没启用（诊断门自己也会静默）") {
+	// device_fault 通路的生效前置是**驱动能力 + feature 启用**，不是配置键本身。三条用例
+	// 分别堵三个方向：该喊不喊（门开了没数据还不出声 = 用户以为在抓 fault）、不该喊乱喊
+	// （能力齐备还喊 = lint 常喊，本工具的失败模式）、出厂默认绝不喊。
+	const auto noLight = passesOfNoLightGraph();
+	{  // ① 门开 + 本 device 没启用 masked → 必须 warn
+		DiagnosticsConfig c;
+		c.faultPoll = true;
+		const auto fs = lint(c, noLight, kHappyEnv, kShadowNoLight);  // kHappyEnv.deviceFaultMasked = false
+		REQUIRE(find(fs, "fault_poll") != nullptr);
+		CHECK(find(fs, "fault_poll")->severity == GateSeverity::warn);
+	}
+	{  // ② 门开 + masked 已启用（本机 RADV 实测形态）→ 不喊
+		DiagnosticsConfig c;
+		c.faultPoll = true;
+		const GateEnv capable{.headless = false, .llmCapture = true,
+			.staticGraphicsIndirect = true, .deviceFaultMasked = true};
+		CHECK(find(lint(c, noLight, capable, kShadowNoLight), "fault_poll") == nullptr);
+	}
+	{  // ③ 门关（出厂默认）+ 能力缺失 → 不喊（没人在等这份数据）
+		DiagnosticsConfig c;
+		CHECK(find(lint(c, noLight, kHappyEnv, kShadowNoLight), "fault_poll") == nullptr);
+	}
 }
 
 }  // namespace RGL

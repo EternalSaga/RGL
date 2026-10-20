@@ -300,6 +300,8 @@ set(RGL_GFX_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/gpu_profiler_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkinstance.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkdevice.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/device_fault.cppm"      # GPU fault 诊断通路（要 VkDevice → rlgfx；纯旁路）
+    "${CMAKE_CURRENT_SOURCE_DIR}/device_fault_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkswapchain.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkresources.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkresources_impl.cppm"

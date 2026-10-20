@@ -162,6 +162,7 @@ static void applyScalarGates(sol::table& root, DiagnosticsConfig& cfg,
 	// checkMigratedShadowKeys 启动失败。
 	cfg.rpc = readBool("rpc", cfg.rpc);
 	cfg.rpcPort = readRpcPort(root, trace);
+	cfg.faultPoll = readBool("fault_poll", cfg.faultPoll);
 }
 
 /**
@@ -298,7 +299,7 @@ struct GateEcho {
  * tests/test_scene_config.cppm 的覆盖率护栏拦下（解析器读了而表里没有 → 红）。
  * 哨兵值出可读文本：texel_canary MAX = "off"、camera_probe.key 0 = "none"。
  */
-const std::array<GateEcho, 30> kGateEcho{{
+const std::array<GateEcho, 31> kGateEcho{{
 	{"no_vvl", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noVvl); }},
 	{"no_hdr", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noHdr); }},
 	{"no_present", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noPresent); }},
@@ -324,6 +325,7 @@ const std::array<GateEcho, 30> kGateEcho{{
 	// loader 自己那行（shadow_config_impl 打印 mode / izb.on / 各档数值）。
 	{"rpc", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.rpc); }},
 	{"rpc_port", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.rpcPort); }},
+	{"fault_poll", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.faultPoll); }},
 	{"picking_probe.frame", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeFrame); }},
 	{"picking_probe.x", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeX); }},
 	{"picking_probe.y", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeY); }},

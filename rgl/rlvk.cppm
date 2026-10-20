@@ -83,6 +83,14 @@ using vk::DeviceCreateInfo;
 using vk::DeviceDiagnosticsConfigCreateInfoNV;  // RGL_AFTERMATH 诊断（vkdevice 条件链入）
 using vk::DeviceDiagnosticsConfigFlagBitsNV;    // RGL_AFTERMATH 诊断
 using vk::DeviceDiagnosticsConfigFlagsNV;       // RGL_AFTERMATH 诊断
+using vk::DeviceFaultAddressInfoKHR;      // device_fault：fault 地址（KHR/EXT 共用同一 struct）
+using vk::DeviceFaultAddressTypeKHR;      // device_fault：读/写/取指枚举（翻译表的输入域）
+using vk::DeviceFaultCountsEXT;           // device_fault：EXT 两段式第一段
+using vk::DeviceFaultFlagBitsKHR;         // device_fault：KHR flags 逐位翻译
+using vk::DeviceFaultFlagsKHR;            // device_fault：KHR flags 位集
+using vk::DeviceFaultInfoEXT;             // device_fault：EXT 两段式第二段
+using vk::DeviceFaultInfoKHR;             // device_fault：KHR 单条报告
+using vk::DeviceFaultVendorInfoKHR;       // device_fault：厂商码/描述
 using vk::DeviceQueueCreateFlags;
 using vk::DeviceQueueCreateInfo;
 using vk::DeviceSize;
@@ -141,6 +149,9 @@ using vk::PhysicalDeviceDescriptorHeapPropertiesEXT;
 using vk::PhysicalDeviceDeviceGeneratedCommandsFeaturesEXT;
 using vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT;
 using vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT;
+using vk::PhysicalDeviceFaultFeaturesEXT;      // device_fault：EXT 回落路径的 feature 结构（vkdevice 成员）
+using vk::PhysicalDeviceFaultFeaturesKHR;      // device_fault：KHR 优先路径的 feature 结构（vkdevice 成员）
+using vk::PhysicalDeviceFaultPropertiesKHR;    // device_fault：maxDeviceFaultCount（轮询数组上界）
 using vk::PhysicalDeviceFeatures2;
 using vk::PhysicalDeviceMemoryProperties;
 using vk::PhysicalDeviceMeshShaderFeaturesEXT;

@@ -22,6 +22,7 @@ import diagnostics;     // texel_canary 诊断单例（configs/diagnostics.lua�
 import input_probe;     // 脚本化输入探针（2026-09-28 输入链回归护栏，帧循环 tick）
 import profiler;        // Phase 9 帧相 zone（frameBegin + 帧循环拦截点，docs/archive/phase9_plan.md）
 import gpu_canary;
+import device_fault;  // GPU fault masked 轮询（diagnostics.fault_poll 门，默认关 = 零调用）
 import param_registry;   // DebugPanelState（批 10.7 点选跳页请求位）
 import scene_context;
 import taa_jitter;  // 批 12.6 TAA：halton 抖动 / jitter→投影 / 跳切判据（纯函数层）
@@ -503,6 +504,33 @@ void texelCanaryOnce(bool& fired, uint64_t canaryFrame, uint32_t frame,
 		renderer.getGraphicsCommandPoolRef(), frame);
 }
 
+/** GPU fault masked 轮询一拍（device_fault；`diagnostics.fault_poll` 门在调用方读，
+ * 关时连 device 都不取 = 零 Vulkan 调用）。挂在 drawFrame 前 = 本帧之前所有已提交工作的
+ * fault 在这一拍收；timeout=0 不阻塞。抽成函数而非内联 if：renderSystem 的认知复杂度
+ * 已贴上限（style-check 点名），且"门 + 动作"这对语义本来就该有个名字。 */
+void faultPollTick(RGL::Renderer& renderer, bool faultPoll) {
+	if (!faultPoll)
+		return;
+	// zone = 本通路自身成本的量具：帧墙钟的 run-to-run 带 ~1ms（VVL 下 CPU-bound），
+	// 而一次 timeout=0 的查询是 µs 级，拿 frame_p50 的 A/B 永远"分辨不出"。profiler 的
+	// 逐 zone cpu= 列才量得动（`just cpu --arms fault-poll` + profiler 窗口）。
+	auto z = zone("faultPoll");
+	pollDeviceFaults(renderer.getDeviceContextRef().getDevice(),
+	    renderer.getDeviceContextRef().getDeviceFaultSupport());
+}
+
+/** device lost 时抓一次 GPU fault 报告（device_fault；调用点判据见 drawFrameChecked 内注释）。
+ * 与 faultPollTick 同属"诊断旁路"，区别只在门：轮询要 `diagnostics.fault_poll`，抓取**恒尝试**
+ * ——设备都丢了，这是唯一一次问到"当时在访问哪个地址"的机会，没有理由再设门。
+ * 通路未启用时它自己打一行 INFO 点名"没这能力"，不会静默。
+ * 🔴 这里**不许**先调一次 pollDeviceFaults：KHR 规定每条报告只返回一次（"Each individual
+ * fault report is returned exactly once"），先轮后抓 = 把报告吃掉，接着那条"报告为空 =
+ * 纯 hang"就会打成**假负读数**。两条出口只能取其一。 */
+void faultCaptureOnLost(RGL::Renderer& renderer, std::string_view context) {
+	const auto& device = renderer.getDeviceContextRef();
+	reportDeviceFaultOnLost(device.getDevice(), device.getDeviceFaultSupport(), context);
+}
+
 /** resize 处理 + 失败日志（文案原样）：转调 resizeSystem；失败打 "Resize 错误: {}"
  * 并把错误原样上抛（调用方 waitForIdle 后退出循环返回）。 */
 std::expected<void, Error> resizeChecked(entt::registry& rg, RGL::Swapchain& swapchain,
@@ -525,6 +553,13 @@ std::optional<Error> drawFrameChecked(RGL::Renderer& renderer, entt::registry& r
 	if (logger) {
 		logger->error("渲染错误: {}", result.error().describe());
 	}
+	// 🔴 device fault 抓取**只能在这里**，不能放到 main 的退出路径：设备 lost 之后收尾的
+	// waitIdle 会抛 vk::SystemError，异常展开时 DeviceContext 已析构，届时没有任何 device
+	// 可问（2026-10-20 实测踩到：hang 那次的日志停在「错误: vk::raii::Device::waitIdle:
+	// ErrorDeviceLost」，device_fault 模块一行未出）。本函数是帧循环所有 device-lost 来源
+	// （submit / present / fence wait / cull wait）汇流的唯一一点，且此刻 device 还活着。
+	if (result.error().code == RGL::ErrorCode::DeviceLost)
+		faultCaptureOnLost(renderer, result.error().message);
 	return result.error();
 }
 
@@ -628,6 +663,8 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 	// texel 回读金丝雀：帧号门控 + 单次触发标记（触发逻辑见 texelCanaryOnce）
 	const uint64_t canaryFrame = diagnostics().texelCanary;
 	bool canaryFired = false;
+	// GPU fault masked 轮询门（device_fault；默认关 = 每帧零 Vulkan 调用，见下面调用点）
+	const bool faultPoll = diagnostics().faultPoll;
 
 	// 帧时间统计（状态与打印见 FrameStatsTracker；tick 挂在帧尾）
 	FrameStatsTracker stats{diagnostics().frameStats};
@@ -717,6 +754,9 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 
 		// texel 金丝雀（本帧 drawFrame 前，waitForIdle 已在函数内排空 in-flight）
 		texelCanaryOnce(canaryFired, canaryFrame, frame, renderer, assets);
+
+		// GPU fault masked 轮询（默认关；判据与"为什么在 drawFrame 前"→ faultPollTick 注释）
+		faultPollTick(renderer, faultPoll);
 
 		// llm 帧捕获：drawFrame 前请求 → drawFrame → 真产物才消费（时序契约见 LlmCaptureFlow）
 		capture.requestBeforeDraw(renderer);

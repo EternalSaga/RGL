@@ -7,6 +7,7 @@ export module features;
 import rlstd;
 import rlvk;
 import vkerror;
+import device_fault;  // chooseDeviceFaultBackend（扩展启用与 feature 链/调用入口的同一优先级落点）
 import features_generated;
 
 export import features_generated;
@@ -133,6 +134,21 @@ export std::vector<const char*> getDeviceExtensions(const OptionalFeatureSupport
 		extensions.push_back(VK_KHR_PRESENT_ID_2_EXTENSION_NAME);
 		if (opt.calibratedTimestampsKhr)  // KHR 校准（present timing 时间域换算，与 EXT 同名异入口）
 			extensions.push_back(VK_KHR_CALIBRATED_TIMESTAMPS_EXTENSION_NAME);
+	}
+	// device fault 诊断通路（纯旁路，不改提交语义）：启用哪一条由
+	// `device_fault::chooseDeviceFaultBackend` 定（KHR 优先、EXT 回落、**只启用一条**）。
+	// 两个入参位由生成的探测给出 = "扩展可用 且 deviceFault feature 为真"，缺一即 false。
+	// 🔴 这里不自己写 if/else：三处消费者（本函数、vkdevice 的 feature 链、本模块的调用
+	// 入口）必须选同一条路，选歪 = 在未启用的扩展上调它的入口点。
+	switch (RGL::chooseDeviceFaultBackend(opt.deviceFaultKhr, opt.deviceFaultExt)) {
+	case RGL::DeviceFaultBackend::khr:
+		extensions.push_back(VK_KHR_DEVICE_FAULT_EXTENSION_NAME);
+		break;
+	case RGL::DeviceFaultBackend::ext:
+		extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+		break;
+	case RGL::DeviceFaultBackend::none:
+		break;  // 两条都不可用 = 整模块 no-op，一个扩展都不启用
 	}
 	return extensions;
 }

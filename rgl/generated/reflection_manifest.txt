@@ -173,7 +173,7 @@ fd860d75855ce27f4e8be53017b91cae8d3a7c4d  rgl/shaders/transparent.frag.slang
 ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.frag.slang
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
 cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
-de01fc38b71e62544fec716ee7415fea21775a58  rgl/features_config.json
+aaabe47bdfe3d494fab1b9fc4610a6d4f0a50135  rgl/features_config.json
 466d23d4488547c694a978f192043fda391ae176  tools/templates/features_cppm.inja
 56b0abc4169eeddac39f5aa8981642a583de52af  rgl/param_semantics.json
 bea192a811bf3d98992a548e32b9a5c3a23df225  tools/templates/param_semantics_cppm.inja

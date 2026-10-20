@@ -74,6 +74,17 @@ export struct DiagnosticsConfig {
 	uint32_t cameraProbeHold = 0;       // 按键保持帧数（<1 解析期回落 8）
 	bool rpc = false;                   // Phase 10b HTTP POST RPC 通道（只绑 127.0.0.1；独立于 imgui 门，headless 可用，docs/archive/phase10b_plan.md）
 	uint32_t rpcPort = 8788;            // RPC 监听端口（bind 失败 = 日志降级关，不崩）
+	/**
+	 * GPU fault **masked 轮询**（device_fault 模块；默认关）。
+	 *
+	 * 开 = 每帧 `vkGetDeviceFaultReportsKHR(timeout=0)` 轮一次，把驱动**自己内部恢复掉、
+	 * 没上报 device lost** 的 masked fault 打成 ERROR。🔴 语义代价（拍板前必读）：启用
+	 * `deviceFaultReportMasked` 后驱动**可以**选择内部恢复而不报 device lost —— 也就是
+	 * 说开这道门有可能把"炸给你看"变成"悄悄恢复 + 一条 ERROR"。这正是查偶发 hang 想要的
+	 * 数据，但它不是免费的，所以默认关、且 `deviceFaultDeviceLostOnMasked` 恒不请求。
+	 * 关 = 零 Vulkan 调用（device lost 后的那次抓取不受本门影响，恒尝试）。
+	 */
+	bool faultPoll = false;
 };
 
 /**

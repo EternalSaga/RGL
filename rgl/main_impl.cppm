@@ -22,6 +22,7 @@ import rlvk;  // vk::raii::CommandBuffer 等（imgui hook lambda 形参类型）
 import vulkan_window;
 import vk_instance;
 import vk_device;
+import device_fault;  // GPU fault 诊断通路（device lost 出口抓一次；纯旁路）
 import vk_swapchain;
 import vk_resources;
 import scene_data;  // SceneDataService（架构债务续账步骤 1）
@@ -293,6 +294,25 @@ void checkPushDataLimits(const DeviceContext& device) {
 		throw std::runtime_error(fmt::format(
 			"push data limit (maxPushConstantsSize={}, maxPushDataSize={}) < sizeof(DrawArgs) ({})",
 			maxPushConstants, maxPushData, sizeof(DrawArgs)));
+}
+
+/**
+ * 退出前的诊断收口（main 保持在 120 行红线内，本函数把三件"帧循环结束后才做"的事收一处）。
+ *
+ * 顺序有理由：① profiler dump 与 ② gpu profiler 解绑必须在 `gpuProfiler` 这个 main 栈对象
+ * 析构之前（Phase 9 / 9.2 既有契约）；③ 轮询账**成功退出也要打**——否则"跑完 600 帧一条
+ * masked 都没抓到"（结论）与"根本没开门"（配置）在日志里长得一样。
+ *
+ * 🔴 **device fault 的抓取不在这里**（曾在这里，2026-10-20 实测挪走）：设备 lost 之后收尾的
+ * `waitIdle` 会抛 vk::SystemError，异常展开时 `vkDevice` 已析构，本函数根本执行不到——
+ * hang 那次的日志停在「错误: vk::raii::Device::waitIdle: ErrorDeviceLost」而 device_fault
+ * 一行未出，就是证据。抓取点 = `ecs_impl` 的 `drawFrameChecked`（帧循环所有 device-lost
+ * 来源汇流的最早一点，且此刻 device 还活着）。
+ */
+void exitDiagnostics() {
+	RGL::profilerDump();       // Phase 9：trace/stats/摘要收口（profiler=0 = 静默 no-op）
+	bindGpuProfiler(nullptr);  // Phase 9.2：gpuProfiler 析构前解绑（帧循环已结束）
+	RGL::reportDeviceFaultPollSummary();
 }
 
 /** Phase 5.5 IBL 风格契约检查（validateEnvironmentContract）已随刀②.2 删除，理由见
@@ -607,6 +627,8 @@ void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 	gateEnv.headless = runtime.headless;
 	gateEnv.llmCapture = runtime.llm.enabled;
 	gateEnv.staticGraphicsIndirect = device.getDgcSupport().staticGraphicsIndirect;
+	// device fault 的 masked 上报是否**真的启用了**（探测事实，fault_poll 的生效前置）
+	gateEnv.deviceFaultMasked = device.getDeviceFaultSupport().reportMasked;
 	// 三份配置各带一份出厂默认（第二份 = 「只报偏离出厂值的门」的比对基准）；
 	// shadow 侧与 diagnostics 侧同为「启动期单例」口径（loadAllConfigs 已回灌），
 	// runtime 侧的基准 = `RuntimeConfig{}`（meshlet 块出厂态 assets + shadow_lod = 5，债-106）。
@@ -726,7 +748,9 @@ int main() {
 		wireTuningContexts(registry, configs.runtime);
 
 		AppContext vkInstance(pre.window.get(), pre.headless);
-		DeviceContext vkDevice(vkInstance);
+		// 第二参 = diagnostics.fault_poll（masked fault 轮询门）。🔴 传的是**门**不是"驱动支持"：
+		// 启用 deviceFaultReportMasked 后驱动可以内部恢复故障而不报 device lost，默认不开。
+		DeviceContext vkDevice(vkInstance, diagnostics().faultPoll);
 		checkPushDataLimits(vkDevice);
 		// 末位 = 内部渲染分辨率倍率（批 14.3，默认 1.0 = 交付路径逐位不变）
 		Swapchain vkSwapchain(vkDevice, pre.window.get(), pre.headless, pre.headlessW,
@@ -912,8 +936,7 @@ int main() {
 				return RGL::writeCapturePng(r, *pre.llm);
 			},
 			onFrame);
-		RGL::profilerDump();  // Phase 9：trace/stats/摘要收口（profiler=0 = 静默 no-op）
-		bindGpuProfiler(nullptr);  // Phase 9.2：gpuProfiler 析构前解绑（帧循环已结束）
+		exitDiagnostics();
 		if (!renderResult) {
 			auto* logger = RLLogger::getInstance();
 			if (logger) logger->error("错误: {}", renderResult.error().describe());
