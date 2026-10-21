@@ -7,6 +7,7 @@ module;
 export module texture_pool;
 
 import rlstd;
+import rlvk;  // vk::Format（env faces 回落 SH 的 sRGB 口径判据，2026-10-21）
 import rllogger;
 import image_codec;  // 图片解码（PNG/JPEG → RGBA8，替代旧 stb_image）
 import diagnostics;  // texture_force_* 诊断单例（configs/diagnostics.lua）
@@ -414,25 +415,61 @@ inline std::array<glm::vec4, 9> projectRadianceSH9(const DecodedImageF& src) {
 	return sh;
 }
 
-/** PNG faces 回落路径的 SH 近似：6 面 RGBA8（sRGB 编码）→ 逐面 texel 中心方向投影，
- * 立体角按面内 [−1,1] 坐标的 cube 近似权重 1/(1+x²+y²)^{3/2}（fallback 精度够用）。 */
+/** sRGB EOTF 查表（字节 → 线性）。与 cube 默认上传格式 eR8G8B8A8Srgb 的采样解码同式；
+ *  上传被策略/DIAG 降到 UNORM 时调用方传 srgb=false（口径跟**实际格式**走，见调用点）。 */
+inline std::array<float, 256> srgbByteToLinearTable() {
+	std::array<float, 256> table{};
+	for (int i = 0; i < 256; ++i) {
+		const float c = static_cast<float>(i) / 255.0f;
+		table[static_cast<size_t>(i)] =
+			c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+	}
+	return table;
+}
+
+/** PNG faces 回落路径的 SH 近似：6 面 RGBA8 → 逐 texel 按面内坐标的 cube 立体角投影。
+ * 🔴 2026-10-21 修两处标定（**缺 HDR 素材时"贴图全白"的根因**，与 mdi_shadow / 驱动无关）：
+ *  ① **每 texel 立体角必须含 (2/size)² 归一**——只写 1/(1+s²+t²)^{3/2} 是**相对**权重，
+ *     512² 面下把 SH 整体放大 ~6.5 万倍，漫反射 IBL 直接把 albedo 乘爆成白面；乘
+ *     (2/size)² 后 Σw = 4π，与 projectRadianceSH9（等距柱状 dΩ 求和同为 4π）同尺度。
+ *  ② 源是 sRGB 编码、cube 上传为 eR8G8B8A8Srgb（GPU 采样时解码）⟹ CPU 侧必须做同式
+ *     sRGB→线性；按裸字节当线性会再亮 ~2–4 倍。
+ *  面内坐标 (s,t) 与 `cubeFaceDir` 同式（2·(x+0.5)/size − 1），立体角用 (s,t) 而不是
+ *  归一化方向的 x,y——后者角向衰减偏平，corner texel 另有 ~1.5× 误差。
+ *  @param srgb 源字节是否为 sRGB 编码（= 上传格式是 eR8G8B8A8Srgb） */
 inline std::array<glm::vec4, 9> projectFacesSH9(const std::array<const uint8_t*, 6>& faces,
-	uint32_t size) {
+	uint32_t size, bool srgb) {
 	std::array<glm::vec3, 9> acc{};
-	const float toLinear = 1.0f / 255.0f;
+	const float inv255 = 1.0f / 255.0f;
+	const auto srgbLut = srgbByteToLinearTable();
+	const float solidAngleScale = 4.0f / (static_cast<float>(size) * static_cast<float>(size));
+	const auto channel = [&](uint8_t byte) {
+		return srgb ? srgbLut[byte] : static_cast<float>(byte) * inv255;
+	};
+	float wSum = 0.0f;  // 自检累积：见循环后的 4π 判据
 	for (uint32_t face = 0; face < 6; ++face)
 		for (uint32_t y = 0; y < size; ++y)
 			for (uint32_t x = 0; x < size; ++x) {
 				const glm::vec3 dir = glm::normalize(cubeFaceDir(face, x, y, size));
 				const size_t idx = (static_cast<size_t>(y) * size + x) * 4;
-				const glm::vec3 rgb(static_cast<float>(faces[face][idx + 0]) * toLinear,
-					static_cast<float>(faces[face][idx + 1]) * toLinear,
-					static_cast<float>(faces[face][idx + 2]) * toLinear);
-				const float r2 = 1.0f + dir.x * dir.x + dir.y * dir.y;  // 面内近似
-				const float w = 1.0f / (r2 * std::sqrt(r2));
+				const glm::vec3 rgb(channel(faces[face][idx + 0]),
+					channel(faces[face][idx + 1]), channel(faces[face][idx + 2]));
+				const float s = 2.0f * (static_cast<float>(x) + 0.5f) / static_cast<float>(size) - 1.0f;
+				const float t = 2.0f * (static_cast<float>(y) + 0.5f) / static_cast<float>(size) - 1.0f;
+				const float r2 = 1.0f + s * s + t * t;
+				const float w = solidAngleScale / (r2 * std::sqrt(r2));
+				wSum += w;
 				const auto basis = shBasis(dir);
 				for (int i = 0; i < 9; ++i) acc[i] += rgb * basis[i] * w;
 			}
+	// 🔴 机器判据（2026-10-21）：权重按定义必须求和 = 4π（cube 覆盖全立体角）。这正是上面 ①
+	//   的护栏——漏乘 (2/size)² 时 Σw ≈ 6·size²·0.5（512² 下约 78 万），启动期当场炸，
+	//   而不是渲染成白屏让大家当"曝光风格"看着。实测 size=512 比例 1.000001。
+	constexpr float kFourPi = 12.566370614f;
+	if (std::abs(wSum - kFourPi) > 0.02f * kFourPi)
+		throw std::runtime_error(fmt::format(
+			"env faces SH: 立体角权重和 {} ≠ 4π（{}）——每 texel 的 (2/size)² 归一丢了？",
+			wSum, kFourPi));
 	std::array<glm::vec4, 9> sh;
 	for (int i = 0; i < 9; ++i) sh[i] = glm::vec4{acc[i], 0.0f};
 	return sh;
@@ -517,8 +554,15 @@ export [[nodiscard]] std::expected<void, Error> loadEnvCubeMapHdr(RGL::Resources
 	}
 	std::array<const uint8_t*, 6> ptrs;
 	for (uint32_t face = 0; face < 6; ++face) ptrs[face] = pixels[face].data();
-	env.setIrradianceSH(projectFacesSH9(ptrs, size));  // Phase 8 ④a：回落面近似 SH
-	return uploadCubeMap(resources, env, device, ptrs, size, name);
+	// 先上传拿到**实际生效格式**（sRGB 优先 / UNORM 回落 / DIAG 强制 UNORM），SH 再按它决定
+	// 要不要做 sRGB→线性——两处口径同源，避免"GPU 解码了、CPU 没解码"的分家（2026-10-21）。
+	auto uploaded = uploadCubeMap(resources, env, device, ptrs, size, name);
+	if (!uploaded)
+		return std::unexpected(std::move(uploaded).error());
+	const auto* asset = env.get();
+	const bool srgb = asset && asset->viewCreate.format == vk::Format::eR8G8B8A8Srgb;
+	env.setIrradianceSH(projectFacesSH9(ptrs, size, srgb));  // Phase 8 ④a：回落面近似 SH
+	return {};
 }
 
 }  // namespace RGL

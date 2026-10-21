@@ -52,7 +52,7 @@
 |---|---|
 | `vkCreateIndirectCommandsLayoutEXT` / `vkDestroyIndirectCommandsLayoutEXT` | layout 生命周期 |
 | `vkCreateIndirectExecutionSetEXT` / `vkDestroyIndirectExecutionSetEXT` | execution set 生命周期 |
-| `vkUpdateIndirectExecutionSetShaderEXT` | 向 set 的 slot 写入 `VkShaderEXT`（启动时一次性填充各 material 的 shader；**改动后必须重查 memory requirements**） |
+| `vkUpdateIndirectExecutionSetShaderEXT` | 向 set 的 slot 写入 `VkShaderEXT`（启动时一次性填充 **cull 候选条目**的 shader；**改动后必须重查 memory requirements**）。🔴 成员受 VUID-...-11148 约束：每个 fragment shader 必须与初始态**输出接口逐位相同** ⟹ 不能把整张管线表写进去（shadow/izb_mask 输出 `[]`、全屏 pass 1 个输出），判据 = `DgcCommands::createExecutionSet` 的 `spvFragmentOutputSignature` 硬检（2026-10-21 NVIDIA 实测修，见 `docs/债140_跨驱动与上游取证.md` §8.8） |
 | `vkGetGeneratedCommandsMemoryRequirementsEXT` | `VkGeneratedCommandsMemoryRequirementsInfoEXT{set, layout, maxSequenceCount, maxDrawCount}` → `VkMemoryRequirements2`（preprocess buffer 大小） |
 
 ### 命令缓冲入口
@@ -178,6 +178,15 @@ indirectStride = 120B（≥ 各 token 数据总长；NVIDIA 无上限；RADV 上
 ```
 
 **Execution set（shader object 模式）**：`vkCreateIndirectExecutionSetEXT{type=SHADER_OBJECTS, info.pShaderInfo{pInitialShaders, maxShaderCount=min(条目数×2, maxIndirectShaderObjectCount)}}`；**每个管线条目占 2 个 slot（2j=frag, 2j+1=mesh）**——`VkWriteIndirectExecutionSetShaderEXT` 只有 `{index, shader}` 无 stage 字段，唯一 index（VU）约束下按"每 stage-bit 一位"排布；`pipelineLayout = VK_NULL_HANDLE`（descriptor heap 已启用）。注意：shader object 的 binding mapping（`VkDescriptorSetAndBindingMappingEXT`）仍按 `shader.cppm` 现有方式在各 shader 创建时设置，execution set 不改变这一点。
+
+🔴 **成员集 = 序列可引用集（cull 候选条目），不是整张管线表**（2026-10-21 修，VUID-...-11148）：
+初始 shader 取**首个候选条目**，随后只写 `GpuCull::entries()` 里出现的 `pipelineIndex` 槽；其余槽
+保持初始态（永不被序列引用）。原因：set 内每个 fragment shader 必须与初始态**输出接口逐位相同**
+（`Locations` 集合 + 类型），而管线表里还有 shadow（`[]`）/ izb_mask（`[]`）/ 透明族与全屏 pass
+（1 个输出）等别的 pass 的条目——旧实现全表写入，NVIDIA 每轮报 10 条 VUID（VVL duplicate 上限
+截断，真实更多），且 ANV/RADV 因走 CPU 回放从未调用这条 API、看不见。建集期硬判据 =
+`spvFragmentOutputSignature`（`PipelineEntry.fragOutputSig`）不一致即抛异常 → main 回落重放；
+热重载 `updateShaderPair` 用同一份候选位图准入（否则第一次热重载就复发）。
 
 **帧流程**（culling → 执行，实施版）：
 

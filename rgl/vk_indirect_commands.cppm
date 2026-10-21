@@ -39,18 +39,25 @@ export class DgcCommands {
 	/**
 	 * 构建 DGC 命令生成子系统（启动期一次性，管线表建完 + GpuCull 表定后）：
 	 * layout（3 token）+ execution set（SHADER_OBJECTS，容量 = 2×管线表条目，初始态 =
-	 * 首条目 frag+mesh，全槽 2j=frag / 2j+1=mesh 建后 update 写入）+ preprocess buffer
-	 * （内存需求按 maxSequenceCount 查询，memoryTypeBits 严格匹配分配；**按帧槽 ×
+	 * **首个候选条目** frag+mesh，然后**只把候选条目**按 2j=frag / 2j+1=mesh 写入）+ preprocess
+	 * buffer（内存需求按序列容量查询，memoryTypeBits 严格匹配分配；**按帧槽 ×
 	 * framesInFlight**——VUID-...-preprocessAddress-11142：同一 preprocess 区不得被
 	 * 一条以上 execute 复用，隐式路每帧 execute 都写它）。
+	 *
+	 * 🔴 **execution set 成员 = 序列可能引用的条目**（`candidates` 的 pipelineIndex 集），
+	 * 不是整张管线表：VUID-vkUpdateIndirectExecutionSetShaderEXT-None-11148 要求 set 里每个
+	 * fragment shader 与初始态**输出接口逐位相同**，而管线表里还有 shadow（输出 []）/
+	 * izb_mask / 透明 / 全屏 pass（输出 1 个）等别的 pass 的条目——早先"全条目一次写入"
+	 * 在 NVIDIA 上每轮报 10 条 VUID-11148（VVL duplicate 上限截断，真实条数更多）。
 	 * @param device 设备层（layout/execution set 创建 + 内存查询 + physical device 内存属性）
-	 * @param registry 管线表（execution set 容量与 shader 句柄来源）
-	 * @param maxSequenceCount 序列容量（= GpuCull::candidateCount，非紧凑）
+	 * @param registry 管线表（execution set 容量/shader 句柄/输出接口签名来源）
+	 * @param candidates cull 候选表（GpuCull::entries()：execSlot 的 pipelineIndex 唯一来源）
 	 * @param framesInFlight preprocess buffer 槽数（= FrameSession::kFramesInFlight）
-	 * @note 容量超 maxIndirectShaderObjectCount 抛 std::runtime_error（main 据此回落重放路）
+	 * @note 容量超 maxIndirectShaderObjectCount、候选为空、或候选间 fragment 输出接口不一致
+	 *       抛 std::runtime_error（main 据此回落重放路）
 	 */
 	DgcCommands(RGL::DeviceContext& device, const RGL::ShaderRegistry& registry,
-		uint32_t maxSequenceCount, uint32_t framesInFlight);
+		std::span<const RGL::CullEntry> candidates, uint32_t framesInFlight);
 	/** 析构：销毁 preprocess buffer/内存 + execution set + layout（main 栈对象，析构先于 DeviceContext）。 */
 	~DgcCommands();
 	/** 禁止拷贝（GPU 资源句柄独占，main 栈对象唯一持有）。 */
@@ -74,7 +81,10 @@ export class DgcCommands {
 	 * **前置契约 = GPU idle（waitForIdle 后调）**——execution set 不得被 in-flight
 	 * execute 引用时更新（VU 9322 族）；新句柄须带 INDIRECT_BINDABLE（本管线表恒带，
 	 * VUID-VkWriteIndirectExecutionSetShaderEXT-shaderHandle-09329）。
-	 * entryIndex 超出启动期固化槽数（sky/light 等 DGC 后增条目 = 非 candidate）= 忽略。
+	 * entryIndex 超出容量 或 **不是 cull 候选条目**（shadow/light/全屏 pass 等别的 pass
+	 * 条目 = 从未写进 set，也不属于序列可引用集）= 忽略。🔴 后半条是 VUID-...-11148 的
+	 * 防线：热重载会遍历整张管线表，若让非候选条目写进 set，启动期修好的接口一致性
+	 * 会在第一次热重载后复发。
 	 */
 	void updateShaderPair(uint32_t entryIndex, vk::ShaderEXT fragHandle, vk::ShaderEXT meshHandle);
 	/**
@@ -90,8 +100,9 @@ export class DgcCommands {
    private:
 	/** ① 创建 3-token layout（EXECUTION_SET + PUSH_DATA + DRAW_MESH_TASKS）。 */
 	void createLayout();
-	/** ② 创建 execution set（SHADER_OBJECTS）并写入全 2N 槽初始 shader 对。 */
-	void createExecutionSet(const RGL::ShaderRegistry& registry, uint32_t capacity);
+	/** ② 创建 execution set（SHADER_OBJECTS）并写入**候选条目**的 shader 对（接口一致性在此断言）。 */
+	void createExecutionSet(const RGL::ShaderRegistry& registry,
+		std::span<const RGL::CullEntry> candidates, uint32_t capacity);
 	/** ③ 按 memReq 严格匹配 memoryType 分配 preprocess buffer（×framesInFlight 槽）。 */
 	void createPreprocessBuffer(const RGL::DeviceContext& vkDevice, uint32_t framesInFlight);
 
@@ -109,8 +120,9 @@ export class DgcCommands {
 	VkDevice device = VK_NULL_HANDLE;  // 原始句柄（dtor 销毁 layout/execution set/buffer）
 	VkIndirectCommandsLayoutEXT layout = VK_NULL_HANDLE;
 	VkIndirectExecutionSetEXT executionSet = VK_NULL_HANDLE;
-	std::array<VkShaderEXT, 2> initialShaders{};  // execution set 初始态（slot0=frag slot1=mesh）
-	uint32_t execSlotCapacity = 0;  // 已写槽数（= 启动期 2×条目数，热重载 updateShaderPair 界内检查）
+	std::array<VkShaderEXT, 2> initialShaders{};  // execution set 初始态（首个候选条目；slot0=frag slot1=mesh）
+	std::vector<uint8_t> candidateEntry;  // 条目下标 → 是否 cull 候选（execution set 写入/热重载的准入判据）
+	uint32_t execSlotCapacity = 0;  // 槽号上界（= 2×管线表条目数；稀疏写入，未写槽保持初始态）
 	VkBuffer preprocessBuffer = VK_NULL_HANDLE;  // preprocess 工作缓冲（driver 读写，地址进 info）
 	VkDeviceMemory preprocessMem = VK_NULL_HANDLE;
 	VkDeviceAddress preprocessAddress = 0;

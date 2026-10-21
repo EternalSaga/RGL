@@ -101,11 +101,14 @@ namespace RGL {
 		// 条目名先落局部（批 M：RenderPipeline 的 warn/throw 消息要带条目名定位）
 		const std::string entryName = fmt::format("{}.v{}.t{}.n{}.o{}.e{}", specName, vertexSlot,
 			textureSlot, normalSlot, ormSlot, emissiveSlot);
+		// SPV 只读一次：建 pipeline 与取 fragment 输出签名（DGC execution set 准入判据）
+		// 同源，杜绝"验的是另一份码流"。
+		const RGL::ShaderEffect effect = loadShaderEffect(*spec);
 		auto entry = PipelineEntry{
 			.name = entryName,
-			.pipeline = RGL::RenderPipeline(device.getDevice(), loadShaderEffect(*spec), b,
-				entryName),
-			.spec = *spec, .bindings = b, .modelEntry = true};
+			.pipeline = RGL::RenderPipeline(device.getDevice(), effect, b, entryName),
+			.spec = *spec, .bindings = b, .modelEntry = true,
+			.fragOutputSig = spvFragmentOutputSignature(effect.fragStageSpv)};
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		modelEntryBySlot[key] = index;

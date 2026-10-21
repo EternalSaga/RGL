@@ -186,19 +186,25 @@ using std::ofstream;
 }  // namespace std
 
 // libstdc++ internals：std 容器迭代器实体（__normal_iterator）定义于 __gnu_cxx，
-// 其比较运算符是 __gnu_cxx 作用域自由函数模板——不导出则 `it != c.end()` 无候选
-// （C++20 重写机制：导出 == 与 <=>，!=/<=/> 等自动可用）。
+// 其比较/算术运算符是 __gnu_cxx 作用域自由函数模板——不导出则 `it != c.end()` 或
+// `it - c.begin()` 无候选（跨模块 import 后调用点看不到 GMF 里的声明；C++20 重写机制
+// 只救 ==/</<=/> 等比较，`operator-`/`operator+` 必须显式导出）。
 // ⚠ libstdc++ 16（本机 2026-10-05 系统升级 GCC 16.2.1 后实测）把 __normal_iterator
-//   的比较运算符改成**类内 hidden friend**（bits/stl_iterator.h 的 friend operator==/
+//   的运算符改成**类内 hidden friend**（bits/stl_iterator.h 的 friend operator==/
 //   <=>），命名空间作用域查无此名 → using 声明编译红。hidden friend 经 ADL 在调用点
-//   本就可找到（__normal_iterator 可达即可），无需导出——实测 GCC 16 下删掉这两条
+//   本就可找到（__normal_iterator 可达即可），无需导出——实测 GCC 16 下删掉这些
 //   using 后全库 + tests 无一处「no match for operator」。
 //   版本闸门：_GLIBCXX_RELEASE < 16 才保留旧导出；非 libstdc++（MSVC STL 无 __gnu_cxx）
 //   同样跳过（此前该形态在 Windows 上本编不过，闸门顺带修这条潜在坑）。
+//   2026-10-21 补 operator-/operator+：本机（GCC 15 系统头）上 `it - v.begin()` 在
+//   import rlstd 的模块里报 invalid operands（两个操作数类型逐字符相同也匹配不上），
+//   7 处索引换算同时红——正是本条注释说的「BMI 不带自由运算符」。
 #if defined(__GLIBCXX__) && _GLIBCXX_RELEASE < 16
 export namespace __gnu_cxx {
 using __gnu_cxx::operator==;
 using __gnu_cxx::operator<=>;
+using __gnu_cxx::operator-;
+using __gnu_cxx::operator+;
 }  // namespace __gnu_cxx
 #endif
 

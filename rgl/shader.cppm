@@ -375,6 +375,22 @@ export std::string spvInterfaceSignature(const std::vector<uint32_t>& spv);
 export std::optional<std::set<uint32_t>> spvDeclaredBindings(const std::vector<uint32_t>& spv);
 
 /**
+ * fragment 阶段的**输出接口签名**（VUID-vkUpdateIndirectExecutionSetShaderEXT-None-11148 的
+ * 机器判据）：SPV 里每个 storage class = Output 的 OpVariable，采 `Location` 装饰 + 指向类型
+ * 展开，按 (location, type) 排序拼接。
+ *
+ * 空串 = **没有带 Location 的输出**（depth-only frag 的合法形态，语义 = 输出接口为空）；
+ * `SPV_CORRUPT` = 码流解析失败（哨兵，与任何真实签名都不相等）。
+ *
+ * 为什么单独一个函数而不复用 spvInterfaceSignature：后者是热重载的"整条管线兼容"判据
+ * （含 Input/binding/执行模式），比本 VUID 宽得多——拿它当 execution set 成员判据会把
+ * 合法的同族变体（仅 binding 声明不同）误杀。
+ * @param spv SPV 码流（word 数组）
+ * @return 规范化签名（`loc{N}:{type};...`，声明序无关）
+ */
+export std::string spvFragmentOutputSignature(const std::vector<uint32_t>& spv);
+
+/**
  * 动态状态（Dynamic State）：与 shader object 解耦的"pass 状态"值集合。
  * 从 RenderPipeline 移出（原 recordRenderCommands 内烘焙），由调用点（Renderer）
  * 按 pass 传入——同一 mesh shader 可在不同 pass 用不同状态（Phase 7 G-buffer 多 pass）。

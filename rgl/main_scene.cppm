@@ -819,14 +819,17 @@ RenderBackEnd assembleBackEnd(DeviceContext& device, Swapchain& swapchain, Resou
 
 	// Phase 7b：DGC 命令生成（NVIDIA 路）：仅 graphicsIndirect 能力时构造（RADV =
 	// compute only → null → Renderer 读回重放路）。管线表定后建（execution set
-	// 容量 = 2×entries）；构造异常（容量超设备上限等）回落重放路
+	// 容量 = 2×entries，成员 = **候选条目**——判据与理由见 DgcCommands 构造注释）；
+	// 构造异常（容量超设备上限 / 候选间 fragment 输出接口不一致等）回落重放路
 	//（lambda 独立计分）
 	auto makeDgc = [&]() -> std::unique_ptr<DgcCommands> {
 		if (!device.getDgcSupport().graphicsIndirect || !cull->active())
 			return nullptr;
 		try {
-			return std::make_unique<DgcCommands>(device, pipelines,
-				cull->candidateCount(), 2);  // framesInFlight=2（preprocess 槽 ×2，11142）
+			// 候选表即序列 pipelineIndex 的唯一来源（execSlot = 2×pipelineIndex）——把同一份
+			// 表交给 DGC，而不是让它在整张管线表里猜哪些条目会被序列引用。
+			return std::make_unique<DgcCommands>(device, pipelines, cull->entries(),
+				2);  // framesInFlight=2（preprocess 槽 ×2，11142）
 		} catch (const std::exception& e) {
 			if (auto* logger = RLLogger::getInstance())
 				logger->warn("dgc: 构造失败回落读回重放: {}", e.what());

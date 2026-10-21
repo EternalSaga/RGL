@@ -39,6 +39,8 @@ constexpr uint32_t kOpVariable = 59;
 // SPIR-V decoration 号（spvDeclaredBindings 判据用；签名解析器按设计不硬编码 decoration
 // 语义——原始集相等即语义相等，本函数要的是 Binding 号本身，仅此一处点名）
 constexpr uint32_t kDecorationBinding = 33;
+/** Location 装饰号（fragment 输出接口判据 = spvFragmentOutputSignature；同上一处，语义单点）。 */
+constexpr uint32_t kDecorationLocation = 30;
 
 /** 指令流一遍切分的产物（类型/常量定义表 + decoration 表 + 接口变量清单）。 */
 struct SpvModule {
@@ -287,6 +289,43 @@ std::optional<std::set<uint32_t>> spvDeclaredBindings(const std::vector<uint32_t
 		}
 	}
 	return bindings;
+}
+
+/** spvFragmentOutputSignature 定义（契约见接口注释）。只收 storage class = Output(3) 且带
+ *  Location(30) 的变量：BuiltIn 输出（FragDepth 等）无 Location，不参与 fragment output
+ *  interface 匹配；无 OpTypePointer 的坏结构落 BADPTR（必不与任何合法签名相等）。 */
+std::string spvFragmentOutputSignature(const std::vector<uint32_t>& spv) {
+	SpvModule mod;
+	std::vector<std::string> tokens;  // 本函数不消费签名 token，仅满足 spvSplit 出参
+	if (!spvSplit(spv, mod, tokens))
+		return "SPV_CORRUPT";
+	std::vector<std::string> outs;
+	for (const auto& v : mod.variables) {
+		// OpVariable：字 1 = 结果类型、字 2 = 结果 id、字 3 = storage class（3 = Output）
+		if (v.size() < 4 || v[3] != 3)
+			continue;
+		std::optional<uint32_t> location;
+		if (auto dIt = mod.decs.find(v[2]); dIt != mod.decs.end())
+			for (const auto& [decKind, operands] : dIt->second)
+				if (decKind == kDecorationLocation && !operands.empty())
+					location = operands[0];
+		if (!location)
+			continue;
+		auto pIt = mod.defs.find(v[1]);
+		const std::string type = (pIt != mod.defs.end()
+			&& (pIt->second[0] & 0xFFFFu) == kOpTypePointer && pIt->second.size() >= 4)
+			? spvTypeToken(mod, pIt->second[3], 0)
+			: "BADPTR";
+		outs.push_back("loc" + std::to_string(*location) + ":" + type);
+	}
+	std::sort(outs.begin(), outs.end());
+	std::string sig;
+	for (const auto& t : outs) {
+		if (!sig.empty())
+			sig += ";";
+		sig += t;
+	}
+	return sig;
 }
 
 namespace {

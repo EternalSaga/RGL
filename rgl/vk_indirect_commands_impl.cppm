@@ -19,7 +19,7 @@ namespace RGL {
 // 系统头 v357 字段（docs/device_generated_commands_research.md 逐条对照，5d 入册）。
 
 DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry& registry,
-	uint32_t vkMaxSequenceCount, uint32_t framesInFlight)
+	std::span<const RGL::CullEntry> candidates, uint32_t framesInFlight)
 	: pfnCreateLayout(reinterpret_cast<PFN_vkCreateIndirectCommandsLayoutEXT>(
 		  vkGetDeviceProcAddr(*vkDevice.getDevice(), "vkCreateIndirectCommandsLayoutEXT"))),
 	  pfnDestroyLayout(reinterpret_cast<PFN_vkDestroyIndirectCommandsLayoutEXT>(
@@ -35,7 +35,7 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 	  pfnCmdExecute(reinterpret_cast<PFN_vkCmdExecuteGeneratedCommandsEXT>(
 		  vkGetDeviceProcAddr(*vkDevice.getDevice(), "vkCmdExecuteGeneratedCommandsEXT"))),
 	  device(*vkDevice.getDevice()),
-	  seqCapacity(vkMaxSequenceCount) {
+	  seqCapacity(static_cast<uint32_t>(candidates.size())) {  // 序列容量 = 候选数（非紧凑，同 GpuCull）
 	// 入口点缺失 = 驱动声明了 feature 却没有实现（spec 违例）——fail-fast 回落重放路
 	if (!pfnCreateLayout || !pfnDestroyLayout || !pfnCreateSet || !pfnDestroySet ||
 	    !pfnUpdateSetShader || !pfnGetMemReq || !pfnCmdExecute)
@@ -50,11 +50,12 @@ DgcCommands::DgcCommands(RGL::DeviceContext& vkDevice, const RGL::ShaderRegistry
 			capacity, dgc.maxIndirectShaderObjectCount));
 
 	createLayout();
-	createExecutionSet(registry, capacity);
+	createExecutionSet(registry, candidates, capacity);
 	createPreprocessBuffer(vkDevice, framesInFlight);
 	if (auto logger = RLLogger::getInstance())
-		logger->info("dgc: layout + execution set (capacity {}) + preprocess buffer ({}B ×{} slots) ready",
-			capacity, preprocessSize, preprocessSlots);
+		logger->info("dgc: layout + execution set (capacity {} / candidates {}) + preprocess buffer "
+			"({}B ×{} slots) ready",
+			capacity, candidates.size(), preprocessSize, preprocessSlots);
 }
 
 void DgcCommands::createLayout() {
@@ -97,19 +98,49 @@ void DgcCommands::createLayout() {
 		throw std::runtime_error("DgcCommands: vkCreateIndirectCommandsLayoutEXT failed");
 }
 
-void DgcCommands::createExecutionSet(const RGL::ShaderRegistry& registry, uint32_t capacity) {
+void DgcCommands::createExecutionSet(const RGL::ShaderRegistry& registry,
+		std::span<const RGL::CullEntry> candidates, uint32_t capacity) {
 	// ② execution set（SHADER_OBJECTS；容量 = 2×条目；2j = entry j 的 frag、2j+1 = mesh——
 	// 与序列 execSlot 约定（writeSequenceStaging）同源）
 	// 两条 VUID 联合约束（NVIDIA 实测 2026-09-10，RADV 走不到此路故此前从未暴露）：
 	//   - shaderCount-arraylength：初始 shader 数必须 >0（不允许空建）
 	//   - stage-11023：pInitialShaders 各元素 stage 必须唯一（不能逐条目重复 mesh/frag）
-	// → 初始 = 首条目 frag+mesh 一对（即"初始 shader 态"，execute 前绑到 CB 满足 11053），
-	//   全 2N 槽建好后 vkUpdateIndirectExecutionSetEXT 一次写入
+	// → 初始 = **首个候选条目** frag+mesh 一对（即"初始 shader 态"，execute 前绑到 CB 满足
+	//   11053），随后只把候选条目一次写入。
 	const auto& entries = registry.entriesView();
 	if (entries.empty())
 		throw std::runtime_error("DgcCommands: no pipeline entries (execution set needs initial shaders)");
+	if (candidates.empty())
+		throw std::runtime_error("DgcCommands: no cull candidates (execution set needs initial shaders)");
+	// 🔴 成员集 = 候选条目集（序列的 pipelineIndex 唯一来源 = GpuCull::entries()）。
+	// 为什么不是整张管线表：VUID-vkUpdateIndirectExecutionSetShaderEXT-None-11148 要求 set 里
+	// 每个 fragment shader 与初始态**输出接口逐位相同**；管线表同时住着 shadow（输出 []）/
+	// izb_mask（[]）/ 透明族（1 个）/ 全屏 pass（1 个）等别的 pass 的条目，写进来必违例
+	// （2026-10-21 NVIDIA 实测每轮 10 条 = VVL duplicate 上限，真实条数被截断）。
+	candidateEntry.assign(entries.size(), 0);
+	uint32_t firstCandidate = 0;
+	bool hasCandidate = false;
+	for (const auto& candidate : candidates) {
+		if (candidate.pipelineIndex >= entries.size())
+			throw std::runtime_error(fmt::format(
+				"DgcCommands: candidate pipelineIndex {} out of range (entries {})",
+				candidate.pipelineIndex, entries.size()));
+		candidateEntry[candidate.pipelineIndex] = 1;
+		if (!hasCandidate) {
+			firstCandidate = candidate.pipelineIndex;
+			hasCandidate = true;
+		}
+	}
+	// 初始态也必须落在候选集内（VU-11148 比较的基准就是它——初始 shader 是别的 pass
+	// 的接口时，全部候选都会"不一致"）。
+	const std::string& baseOutputSig = entries[firstCandidate].fragOutputSig;
+	if (baseOutputSig.empty())
+		throw std::runtime_error(fmt::format(
+			"DgcCommands: candidate entry {} ({}) has no fragment output signature",
+			firstCandidate, entries[firstCandidate].name));
 	std::vector<VkShaderEXT> initialPair{
-		entries[0].pipeline.fragShaderHandle(), entries[0].pipeline.meshShaderHandle()};
+		entries[firstCandidate].pipeline.fragShaderHandle(),
+		entries[firstCandidate].pipeline.meshShaderHandle()};
 	VkIndirectExecutionSetShaderInfoEXT shaderInfo{};
 	shaderInfo.sType = VK_STRUCTURE_TYPE_INDIRECT_EXECUTION_SET_SHADER_INFO_EXT;
 	shaderInfo.shaderCount = static_cast<uint32_t>(initialPair.size());
@@ -128,15 +159,28 @@ void DgcCommands::createExecutionSet(const RGL::ShaderRegistry& registry, uint32
 			"DgcCommands: vkCreateIndirectExecutionSetEXT failed: {} (shaderCount={} maxShaderCount={})",
 			vk::to_string(static_cast<vk::Result>(setResult)), shaderInfo.shaderCount, shaderInfo.maxShaderCount));
 	std::vector<VkWriteIndirectExecutionSetShaderEXT> writes;
-	writes.reserve(capacity);
+	writes.reserve(candidates.size() * 2);
 	for (uint32_t j = 0; j < entries.size(); ++j) {
+		if (!candidateEntry[j])
+			continue;  // 别的 pass 的条目（shadow/izb_mask/透明/全屏）不属于本 set
+		// 接口一致性硬判据（VU-11148 的可执行形态）：不同族混入 = 启动期拒绝，而不是交给
+		// VVL 在 NV 上刷屏、或在没装 VVL 的机器上静默产生未定义行为。
+		if (entries[j].fragOutputSig != baseOutputSig)
+			throw std::runtime_error(fmt::format(
+				"DgcCommands: entry {} ({}) fragment output interface differs from initial entry {} "
+				"({}): [{}] vs [{}] — VUID-vkUpdateIndirectExecutionSetShaderEXT-None-11148",
+				j, entries[j].name, firstCandidate, entries[firstCandidate].name,
+				entries[j].fragOutputSig, baseOutputSig));
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_INDIRECT_EXECUTION_SET_SHADER_EXT, nullptr,
 			2 * j, entries[j].pipeline.fragShaderHandle()});
 		writes.push_back({VK_STRUCTURE_TYPE_WRITE_INDIRECT_EXECUTION_SET_SHADER_EXT, nullptr,
 			2 * j + 1, entries[j].pipeline.meshShaderHandle()});
 	}
 	pfnUpdateSetShader(device, executionSet, static_cast<uint32_t>(writes.size()), writes.data());
-	execSlotCapacity = static_cast<uint32_t>(writes.size());
+	execSlotCapacity = capacity;  // 槽号上界（未写槽保持初始态；序列只引用候选槽）
+	if (auto* logger = RLLogger::getInstance())
+		logger->info("dgc: execution set 成员 {} 条（管线表 {} 条，输出接口 [{}]；initial = 条目 {}）",
+			writes.size() / 2, entries.size(), baseOutputSig, firstCandidate);
 	initialShaders[0] = initialPair[0];
 	initialShaders[1] = initialPair[1];
 }
@@ -144,7 +188,14 @@ void DgcCommands::createExecutionSet(const RGL::ShaderRegistry& registry, uint32
 void DgcCommands::updateShaderPair(uint32_t entryIndex, vk::ShaderEXT fragHandle, vk::ShaderEXT meshHandle) {
 	if (!active() || 2 * entryIndex + 1 >= execSlotCapacity) {
 		if (auto* logger = RLLogger::getInstance())
-			logger->info("hot_reload DGC: entry {} 无 execution set 槽（非 candidate 条目），跳过",
+			logger->info("hot_reload DGC: entry {} 超出 execution set 槽号上界，跳过", entryIndex);
+		return;
+	}
+	// 非候选条目（shadow/izb_mask/透明/全屏 pass）从未写进 set，也不属于序列可引用集——
+	// 放行它们会把启动期修好的 fragment 输出接口一致性（VU-11148）在热重载后重新打破。
+	if (entryIndex >= candidateEntry.size() || !candidateEntry[entryIndex]) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->info("hot_reload DGC: entry {} 不是 cull 候选条目（别的 pass），不写 execution set",
 				entryIndex);
 		return;
 	}

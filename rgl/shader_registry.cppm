@@ -97,6 +97,12 @@ export struct PipelineEntry {
 	RGL::PipelineSpec spec;                       // SPV 规格路径（源 .slang 名 = basename 换扩展）
 	RGL::PipelineBindings bindings;               // 烘焙 mapping 参数（heap 槽/形态位/extra）
 	bool modelEntry = false;                      // addModelEntry 建的模式位（picking 克隆范围判据 = mesh 接口是 ModelVertexOutput）
+	/** fragment 输出接口签名（`spvFragmentOutputSignature` 产物；空 = 未采集）。
+	 *  🔴 DGC execution set 的**准入判据**：成员必须与 set 初始 shader 逐位同接口
+	 *  （VUID-vkUpdateIndirectExecutionSetShaderEXT-None-11148），判据在
+	 *  `DgcCommands::createExecutionSet` 构造期执行——不同族的条目（shadow 空输出 /
+	 *  全屏 pass 单输出）混进去就是那条 VUID。 */
+	std::string fragOutputSig;
 };
 
 /**
