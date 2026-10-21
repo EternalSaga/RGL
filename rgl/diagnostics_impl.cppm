@@ -28,6 +28,103 @@ DiagnosticsConfig& diagnostics() {
 /** setDiagnostics 定义：整体赋值到单例。 */
 void setDiagnostics(const DiagnosticsConfig& cfg) { diagnostics() = cfg; }
 
+/** gpuPoisonWordAt 定义（契约与"为什么不是常量"见接口注释）。 */
+uint32_t gpuPoisonWordAt(uint64_t byteOffset) {
+	const uint32_t word = kGpuPoisonBaseWord + static_cast<uint32_t>(byteOffset / 4u);
+	// 🔴 回绕守卫：`base + idx` 在 idx = 0x2152'4111（= 0x1_0000_0000 − base，字节偏移
+	//    ≈ 2.08 GiB）处回绕成 0，而 0 与"从未写过的内存"同形 ⟹ 毒判据恰好在这一格静默失效。
+	//    改口回基准字，保住"非零"契约。单测反向用例 = 直接喂那个偏移，删掉本守卫必须红。
+	//    （本机最大毒面对象是几十 MB 量级，走不到这一格——守卫买的是"函数是全定义域纯函数"
+	//    这个承诺，不是当前调用点的安全垫；所以它必须由单测钉住，不能靠"反正到不了"省掉。）
+	return word == 0u ? kGpuPoisonBaseWord : word;
+}
+
+/**
+ * fillGpuPoison 定义。
+ *
+ * 写法上两个刻意的选择：① **不用 memcpy**——本模块 GMF 没 include `<cstring>`，
+ * 靠 sol/fmt 头 transitively 带进来能用，但那是巧合受益者（rlstd 纪律里点过同类坑）；
+ * ② **显式小端**逐字节写，而不是把 uint32 存进内存——毒值最终是被 gfx 按小端读的，
+ * 写死小端 ⟹ 单测的期望字节序列与宿主字节序无关，换大端宿主也不会"测试红了但代码没错"。
+ */
+void fillGpuPoison(void* dst, size_t bytes) {
+	if (dst == nullptr || bytes == 0)
+		return;
+	auto* base = static_cast<std::byte*>(dst);
+	for (size_t off = 0; off < bytes; off += 4) {
+		const uint32_t word = gpuPoisonWordAt(off);
+		for (size_t i = 0; i < 4 && off + i < bytes; ++i)
+			base[off + i] = static_cast<std::byte>((word >> (8u * i)) & 0xFFu);
+	}
+}
+
+/** poisonActiveFor 定义：门 + 范围的综合判据（穷尽 switch，**不写 default**）。 */
+bool poisonActiveFor(PoisonTarget target) {
+	const auto& d = diagnostics();
+	if (!d.poisonGpuMem)
+		return false;
+	// 启动期 applyPoisonScopeKey 已对同一字符串 fail-fast，走到这里解析必成功；
+	// 真失败（例如单例被绕过直接赋值）按"不毒"处理并出声——静默不毒是本实验最怕的假负。
+	const auto scope = parsePoisonScope(d.poisonScope);
+	if (!scope) {
+		if (auto* logger = RLLogger::getInstance())
+			logger->error("poison: poison_scope \"{}\" 解析失败，本次**不铺任何毒值**（读数无效）: {}",
+				d.poisonScope, scope.error().message);
+		return false;
+	}
+	switch (target) {
+		case PoisonTarget::heap: return scope->heap;
+		case PoisonTarget::rowTable: return scope->rowTable;
+		case PoisonTarget::cullChain: return scope->cullChain;
+	}
+	return false;  // 不可达：上面是无 default 的穷尽 switch，新增枚举值会先编译失败
+}
+
+/** parsePoisonScope 定义（键名集合与 configs/diagnostics.lua 的注释**必须同集合**）。 */
+std::expected<PoisonScope, Error> parsePoisonScope(std::string_view spec) {
+	auto trim = [](std::string_view s) {
+		const char* ws = " \t\r\n";
+		const size_t b = s.find_first_not_of(ws);
+		if (b == std::string_view::npos)
+			return std::string_view{};
+		return s.substr(b, s.find_last_not_of(ws) - b + 1);
+	};
+	PoisonScope out;
+	std::string_view rest = trim(spec);
+	// 🔴 空 spec 单独判（而不是靠循环里的空 token 检查）：错误消息要说清是"整条为空"，
+	// 而空 token 检查说的是"某个名字为空"——两种拼错的修法不一样，消息必须能分开它们。
+	if (rest.empty())
+		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+			"diagnostics config: poison_scope must not be empty (use \"all\" or a subset of "
+			"heap / rowtable / cull)"});
+	// `while (true)` + 循环内判空，**不是** `while (!rest.empty())`：后者会在尾逗号处
+	// （`"heap,"` → 消费完逗号后 rest 变空串）直接退出，把尾逗号**静默接受**。单测 ④ 钉这条。
+	while (true) {
+		const size_t comma = rest.find(',');
+		const std::string_view tok = trim(rest.substr(0, comma));
+		if (tok.empty())
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+				fmt::format("diagnostics config: poison_scope has an empty name (got \"{}\")", spec)});
+		if (tok == "all")
+			out = {.heap = true, .rowTable = true, .cullChain = true};
+		else if (tok == "heap")
+			out.heap = true;
+		else if (tok == "rowtable")
+			out.rowTable = true;
+		else if (tok == "cull")
+			out.cullChain = true;
+		else
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
+				fmt::format("diagnostics config: poison_scope unknown name \"{}\" (allowed: all / "
+					"heap / rowtable / cull, comma separated)",
+					tok)});
+		if (comma == std::string_view::npos)
+			break;
+		rest = trim(rest.substr(comma + 1));
+	}
+	return out;
+}
+
 /**
  * cullReplayName 定义：三态 ↔ `cull_replay` 配置名的唯一映射（回显与告警共用）。
  * 与 applyCullReplayKey 的解析表**必须同集合**——tests/test_scene_config.cppm 的
@@ -165,6 +262,33 @@ static void applyScalarGates(sol::table& root, DiagnosticsConfig& cfg,
 	cfg.faultPoll = readBool("fault_poll", cfg.faultPoll);
 	cfg.gpuavCompat = readBool("gpuav_compat", cfg.gpuavCompat);
 	cfg.heapSlotAudit = readBool("heap_slot_audit", cfg.heapSlotAudit);
+	cfg.poisonGpuMem = readBool("poison_gpu_mem", cfg.poisonGpuMem);
+}
+
+/**
+ * `poison_scope` 字符串门读取段（债-140 H3 分 buffer 归因用）。
+ *
+ * 为什么单独成函数而不是塞进 applyScalarGates：它要 fail-fast，而 applyScalarGates
+ * 返回 void（先例 = applyCullReplayKey / applyAaKey）。为什么必须 fail-fast：拼错一个
+ * 名字（`row_table` / `cullchain`）就少毒一块，而"没毒到"与"毒到了没炸"在 fault 地址
+ * 读数上**完全同形** ⟹ 静默回落会把实验做成假负，还是查不出来的那种。
+ * @param root diagnostics.lua 顶层表
+ * @param cfg  写入目标（仅在键存在时被写）
+ * @param path 仅用于错误消息
+ * @param trace 键轨迹（缺键也记）
+ * @return nullopt = 合法（含缺键）；有值 = 错误消息
+ */
+[[nodiscard]] static std::optional<std::string> applyPoisonScopeKey(const sol::table& root,
+	DiagnosticsConfig& cfg, std::string_view path, DiagnosticsKeyTrace& trace) {
+	trace.read.emplace_back("poison_scope");
+	sol::optional<std::string> raw = root["poison_scope"];
+	if (!raw)
+		return std::nullopt;
+	// 值本身先落 cfg（回显要显示"文件里写了什么"，哪怕它非法），再验；非法即启动失败。
+	cfg.poisonScope = *raw;
+	if (auto parsed = parsePoisonScope(cfg.poisonScope); !parsed)
+		return fmt::format("{}: {}", path, parsed.error().message);
+	return std::nullopt;
 }
 
 /**
@@ -301,7 +425,7 @@ struct GateEcho {
  * tests/test_scene_config.cppm 的覆盖率护栏拦下（解析器读了而表里没有 → 红）。
  * 哨兵值出可读文本：texel_canary MAX = "off"、camera_probe.key 0 = "none"。
  */
-const std::array<GateEcho, 33> kGateEcho{{
+const std::array<GateEcho, 35> kGateEcho{{
 	{"no_vvl", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noVvl); }},
 	{"no_hdr", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noHdr); }},
 	{"no_present", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noPresent); }},
@@ -330,6 +454,8 @@ const std::array<GateEcho, 33> kGateEcho{{
 	{"fault_poll", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.faultPoll); }},
 	{"gpuav_compat", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.gpuavCompat); }},
 	{"heap_slot_audit", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.heapSlotAudit); }},
+	{"poison_gpu_mem", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.poisonGpuMem); }},
+	{"poison_scope", [](const DiagnosticsConfig& c) { return c.poisonScope; }},
 	{"picking_probe.frame", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeFrame); }},
 	{"picking_probe.x", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeX); }},
 	{"picking_probe.y", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeY); }},
@@ -510,6 +636,9 @@ static void collectPresentKeys(const sol::table& root, DiagnosticsKeyTrace& trac
 		applyProbeAndNumericGates(table, cfg, *trace);
 		// 字符串枚举门（fail-fast：笔误不静默回落，见 applyCullReplayKey 注释）
 		if (auto err = applyCullReplayKey(table, cfg, path, *trace); err)
+			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, std::move(*err)});
+		// 毒化范围（同上：未知名不静默回落，理由见 applyPoisonScopeKey）
+		if (auto err = applyPoisonScopeKey(table, cfg, path, *trace); err)
 			return std::unexpected(Error{ErrorCode::ConfigLoadFailed, std::move(*err)});
 
 		// 未知键 lint（普查附带收获：diagnostics.lua 里拼错的键**今天完全静默**）

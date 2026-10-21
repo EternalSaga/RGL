@@ -195,6 +195,23 @@ std::expected<MeshletShadowArgsRing, Error> createMeshletShadowArgsRing(
 	// 没有确定读数（gcX=0 的空转行也会被 shader 读走那两个字段）。清 0 之后「没写过的行」
 	// 才是可判据的事实（设备级用例把它当反向锚点）。
 	std::memset(mapped, 0, static_cast<size_t>(capacity));
+	// 债-140 H3 毒化（门 `diagnostics.poison_gpu_mem` + scope 含 `rowtable`；门关 = 上面那句
+	// 逐位不变）。**在清 0 之后**铺毒：毒要覆盖刚写的 0，而门关时这里一条指令都不执行。
+	//
+	// 🔴 本处毒化的真正判据（读代码推出来的，不是猜的）：未写行在**现状**下是
+	// `{gcX=0, gcY=0, gcZ=0, objectIndex=0, clusterStart=0, meshGroupCount=0}`，而 task 着色器
+	// （shadow_meshlet.task.slang）无条件 Load 三个 word 后 `DispatchMesh(meshGroupCount,…)`
+	// = **发 0 个 mesh 组** ⟹ 未写行被读到也**不产生任何访存**，H1 在现状下结构上无法解释
+	// fault@0。铺毒后 meshGroupCount/objectIndex 变成天文数字 ⟹ mesh 真被发起来并拿毒 objectIndex
+	// 去 readObjectClusterRange 越界读 ⟹ **fault 地址离开 0x0**。所以本格的读数是：
+	//   变了 = 确有"读未写行"（且此前完全静默，是一条新事实）；不变 = H1 对本 fault 出局。
+	if (poisonActiveFor(PoisonTarget::rowTable)) {
+		fillGpuPoison(mapped, static_cast<size_t>(capacity));
+		if (auto* logger = RLLogger::getInstance())
+			logger->warn("poison[rowtable]: 行表 ring 铺毒值 {} 字节（sliceRows={} × {} 片，"
+						 "stride={}B；基准字 {:08X}）",
+				capacity, sliceRows, slices, kMdiShadowRowStride, kGpuPoisonBaseWord);
+	}
 	// 先取地址、先 flush，再 move——move 之后 created 内的句柄被清空（防二次销毁），
 	// allocatorBlock/allocation/deviceAddress 都读不到了（`uploadSection` 同款顺序）。
 	const vk::DeviceAddress address = created->deviceAddress;

@@ -55,6 +55,7 @@ set(RGL_TEST_SOURCES
     test_compute_bindings.cppm    # B2-1″ compute binding 名→号 接口表：调用点七枚逐条阳性锚 + 反向 + 覆盖锚（9 枚）+ 三类报错可归因
     test_compute_hazard.cppm      # B2-2 compute hazard 机器派生 + 双源对账：判据四条各配反向 + 按类去重 + 🔴 人工半边↔反射互锁 + 数量锚 5 + 全产品面复算
     test_scene_config.cppm      # 四份配置解析契约
+    test_gpu_poison.cppm        # 债-140 H3 毒化实验的纯函数面：毒值恒非零 + 逐字节小端 + 尾部不留洞不越界 + scope fail-fast + 🔴 门关三目标全 false（"门关=逐位不变"的唯一机器判据）
     test_render_scale.cppm      # 批 14.3 渲染倍率纯算术：1.0 档逐像素红线 / 取整 / 钳制 / 非退化
     test_velocity_field.cppm    # 批 14.4 逐像素速度场：显式相机基参考 / 旋转光流闭式 / 天空与无效判据
     test_camera.cppm            # 相机数学

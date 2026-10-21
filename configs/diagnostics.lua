@@ -86,6 +86,23 @@ return {
     -- 🔴 生效前置 = MDI 行表载体存在（`meshlet.mdi_shadow=true`）；关着时零调用，gate_lint 会 warn。
     heap_slot_audit = false,
 
+    -- **GPU 内存分配时毒化**（债-140 H3 实验，docs/债140_跨驱动与上游取证.md §13.5；默认关）。
+    -- true = 三类 GPU 内存在**分配那一刻**整片填可辨识非零毒值（子集见 poison_scope）：
+    --   heap     = bindless 描述符堆（resource + sampler 两个 heap 的**用户槽区**，避开驱动
+    --              reserved 槽——那段是驱动的，host 写它是 UB）
+    --   rowtable = MDI 行表（persistent-mapped 的 ring×2）
+    --   cull     = cull 数据链（candidate_table / sequences / sequence_count / entry_streams）
+    -- 判据为什么成立：毒只在**从未被写过**的地方活到 GPU 读取那一刻（CPU 全量写的 buffer 毒会被
+    -- 覆盖 = 对它是 no-op；GPU 每帧写满的 buffer 同理）。于是 fault 地址从 `0x0` 变成毒值形态
+    -- = 「读了从未写过的槽/行」当场定罪；毒字按四字组下标递增，地址可反解出是哪个四字组。
+    -- 🔴 只做**分配时**毒化，不做逐帧重毒（逐帧会改掉 ring 的复用语义，那是 v2）。
+    -- 🔴 门开时的任何像素/性能读数都不代表交付形态；门关 = 一条 if 都不进（逐位不变）。
+    poison_gpu_mem = false,
+    -- 毒化范围（分 buffer 归因用，改这键**不用重编**）："all" 或 heap / rowtable / cull 的
+    -- 逗号子集（如 "heap"、"rowtable,cull"）。🔴 未知名 = 启动失败，不静默回落：拼错一个名字
+    -- 就少毒一块，而"没毒到"与"毒到了没炸"在 fault 地址读数上**完全同形**（同 cull_replay 纪律）。
+    poison_scope = "all",
+
     -- 批 11.3 HFTS/FTIZB 硬阴影（docs/hfts_izb_plan.md）：izb_shadow / izb_grid / izb_dump_frame
     -- 已迁出 → configs/shadow.lua 的 izb = { on, grid, dump_frame }（N6a，见上方迁出注释）。
 

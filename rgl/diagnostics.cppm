@@ -114,7 +114,101 @@ export struct DiagnosticsConfig {
 	 * 只在 MDI 行表载体存在时才有对象（`meshlet.mdi_shadow=false` 时零调用，gate_lint 出 warn）。
 	 */
 	bool heapSlotAudit = false;
+	/**
+	 * **GPU 内存分配时毒化**（债-140 H3 实验，docs/债140_跨驱动与上游取证.md §13.5；默认关）。
+	 *
+	 * 开 = 以下三类 GPU 内存**分配那一刻**整片填可辨识的非零毒值（子集由 `poisonScope` 选）：
+	 *   ① bindless 描述符堆（resource + sampler heap 的**用户槽区**，避开驱动 reserved 槽）
+	 *   ② MDI 行表（persistent-mapped 的 ring×2）
+	 *   ③ cull 数据链（candidate_table / sequences / sequence_count / entry_streams）
+	 *
+	 * 判据为什么成立：毒只在**从未被写过**的地方活到 GPU 读取那一刻——CPU 全量写的 buffer
+	 * 毒会被 memcpy 覆盖（对它是 no-op），GPU 每帧写满的 buffer 同理。于是"fault 地址从
+	 * `0x0` 变成毒值形态"就是「读了从未写过的槽/行」的当场定罪；毒字按偏移递增
+	 * （`gpuPoisonWordAt`）故地址还能反解出**是哪个四字组**。
+	 *
+	 * 🔴 只做**分配时**毒化，不做逐帧重毒：逐帧重毒会改掉 ring 的复用语义（那是 v2，本批不碰）。
+	 * 门开时的任何像素/性能读数都不代表交付形态；门关 = 一条 `if` 都不进（逐位不变，出厂锚亲验）。
+	 */
+	bool poisonGpuMem = false;
+	/**
+	 * 毒化范围（分 buffer 归因用，改这个键**不用重编**）：`"all"` 或
+	 * `heap` / `rowtable` / `cull` 的逗号子集。
+	 *
+	 * 🔴 未知名 = 启动失败（`cull_replay` 同一条纪律）：拼错一个名字就少毒一块，而
+	 * "没毒到"与"毒到了没炸"在 fault 地址读数上**完全同形**，静默回落等于把实验做成假负。
+	 */
+	std::string poisonScope = "all";
 };
+
+/**
+ * 毒值基准字（债-140 H3）。为什么是 `0xDEADBEEF` 而不是全 1 / 全 0：
+ * **全 0 与"从未写过的内存"同形**——而本案要抓的正是它，填 0 等于什么都没做；
+ * 全 1 会把硬件描述符的所有位域一次性点亮（含 stride / DSPCC / 类型位），
+ * 失效形态难归因。`0xDEADBEEF` 非零、可辨识、且高位不全 1。
+ */
+export constexpr uint32_t kGpuPoisonBaseWord = 0xDEADBEEFu;
+
+/**
+ * 字节偏移处的毒值字 = `kGpuPoisonBaseWord + 四字组下标`（**纯函数**，无设备依赖）。
+ *
+ * 为什么不是常量：常量毒值只能说"读到了毒"，递增毒值还能说"**读到的是第几个四字组**"。
+ * 描述符堆步长 32B ⟹ `(fault 低 32 位 − kGpuPoisonBaseWord) × 4` = 堆内字节偏移。
+ * 🔴 回绕成 0 的那一格必须改口（0 = 与未写内存同形 = 判据静默失效），守卫由单测反向用例钉。
+ * @param byteOffset 目标起点的字节偏移（非 4 的倍数时向下取整到四字组）
+ * @return 该处的毒值字，**恒非零**
+ */
+export [[nodiscard]] uint32_t gpuPoisonWordAt(uint64_t byteOffset);
+
+/**
+ * 按毒值填充 `[dst, dst+bytes)`（尾部不足一字的按字内字节序补齐——**不留未毒字节**，
+ * 否则尾部那几字节仍是"与未写内存同形"，毒面出现判据盲区）。
+ *
+ * 🔴 "有没有毒到"的判据是**字级不是字节级**：`base + idx` 会产出 `0xDEADBF00` 这种含
+ * `0x00` 字节的字（idx 从 0x11 起就有）。肉眼在 hexdump 里看到 0 字节**不等于**没毒到，
+ * 要按 4 字节组读；这也正是 GPU 侧唯一可能的读粒度（`ByteAddressBuffer.Load` 取 4B）。
+ * @param dst  目标首地址；nullptr = 直接返回（不崩、不越界写）
+ * @param bytes 字节数；0 = 直接返回
+ */
+export void fillGpuPoison(void* dst, size_t bytes);
+
+/**
+ * 毒化目标（`poisonActiveFor` 的入参）。用 `enum class` 而非字符串：调用点写
+ * `poisonActiveFor(PoisonTarget::heap)`，拼错是**编译错误**；字符串分派的未知名会静默
+ * 返回"不毒"，正好复刻本实验最怕的假负。新增枚举值时实现里的穷尽 switch（**无 default**）
+ * 会编译失败逼人补上——这是"让错的东西编不过"，不是注释里写"记得同步"。
+ */
+export enum class PoisonTarget {
+	heap,      ///< bindless 描述符堆（resource + sampler 两个 heap 的用户槽区）
+	rowTable,  ///< MDI 行表（persistent-mapped 的 ring×2）
+	cullChain, ///< cull 数据链四张 buffer
+};
+
+/**
+ * 综合判据：门 `poisonGpuMem` 开着**且** `poisonScope` 含本目标？三处分配点共用这一个
+ * 判据，避免"门开了但某处忘了看 scope"。每次调用重解析 scope 字符串（分配期各调一次，
+ * 成本可忽略），换来配置面只有一个真相源。
+ * @param target 待判目标
+ * @return true = 该分配点应铺毒值
+ */
+export bool poisonActiveFor(PoisonTarget target);
+
+/**
+ * 毒化范围（`poisonScope` 的解析结果）。用三个独立布尔而非位掩码：调用点写成
+ * `if (scope.heap)` 就够，位掩码要额外造 `operator|` 且写错位没人拦。
+ */
+export struct PoisonScope {
+	bool heap = false;       ///< ① bindless 描述符堆（resource + sampler 两个 heap）
+	bool rowTable = false;   ///< ② MDI 行表 ring×2
+	bool cullChain = false;  ///< ③ cull 数据链四张 buffer
+};
+
+/**
+ * 解析 `poison_scope`（**纯函数**，无设备依赖）。
+ * @param spec `"all"`，或 `heap` / `rowtable` / `cull` 的逗号子集（大小写敏感，空格容忍）
+ * @return 解析结果；空串 / 空 token / 未知名 = unexpected（启动失败，不回落）
+ */
+export [[nodiscard]] std::expected<PoisonScope, Error> parsePoisonScope(std::string_view spec);
 
 /**
  * 单例访问器（main setDiagnostics 后，深栈点 diagnostics() 只读）。

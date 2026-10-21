@@ -241,6 +241,33 @@ const GateRule kGateRules[]{
 		"根本不建、一个槽都没得审（零调用、零读数）。要抓 fault@0 就把 meshlet.mdi_shadow 打开——"
 		"注意那正是债-140 会挂的配置，本门是给挂了之后能归因而设的",
 		[](const Ctx& c) { return c.cfg.heapSlotAudit && !c.runtime.meshletMdiShadow; }},
+	{"poison_gpu_mem", GateSeverity::warn,
+		"债-140 H3 毒化实验开着 ⟹ 描述符堆用户槽 / MDI 行表 / cull 链被铺非零毒值，"
+		"**像素与性能读数一律不代表交付形态**；且门开时 gpu_cull 的 sequence_count 与 entry_streams "
+		"两张 buffer 会多带一个 eTransferDst（理论上可影响驱动的内存类型选择 = 本实验自知的混淆项，"
+		"铺毒处日志同步 warn）。读数只用于归因，别拿它当交付基线",
+		[](const Ctx& c) { return c.cfg.poisonGpuMem; }},
+	{"poison_scope", GateSeverity::warn,
+		"poison_scope 写了值而总门 poison_gpu_mem 关着 ⟹ **一个字节都不会被毒**（三处分配点的判据"
+		"第一个条件就是那道门）。这是本实验最容易自己踩出的假负：fault 地址纹丝不动会被读成"
+		"「H1/H2 出局」，真相是毒根本没铺。要么开 poison_gpu_mem，要么把这行删掉",
+		[](const Ctx& c) {
+			if (c.cfg.poisonGpuMem)
+				return false;
+			const auto s = parsePoisonScope(c.cfg.poisonScope);
+			// 默认值 "all" 不算"写了值"（文件里本来就写着这行）；偏离默认才算
+			return s && c.cfg.poisonScope != "all";
+		}},
+	{"poison_scope", GateSeverity::warn,
+		"poison_scope 含 rowtable，但 meshlet.mdi_shadow 关着 ⟹ MDI 行表载体**根本不建**"
+		"（rgl/meshlet_shadow_args 那张 ring 不分配），那一块一个字节都毒不到 ⟹ H1 那条读数会是"
+		"**假负**。要测 H1 就把 meshlet.mdi_shadow 打开（那正是债-140 会挂的配置）",
+		[](const Ctx& c) {
+			if (!c.cfg.poisonGpuMem || c.runtime.meshletMdiShadow)
+				return false;
+			const auto s = parsePoisonScope(c.cfg.poisonScope);
+			return s && s->rowTable;
+		}},
 	{"cull_replay", GateSeverity::warn,
 		"cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay=\"gpu_sync\"，见 docs/cpu_perf_plan.md §4）",
 		[](const Ctx& c) { return c.cfg.dgcStatic && c.cfg.cullReplay != CullReplayMode::gpuSync; }},

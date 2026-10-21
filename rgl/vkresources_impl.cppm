@@ -15,6 +15,7 @@ import vk_device;
 import vk_swapchain;
 import vkerror;
 import slot_ledger;  // samplerSlots 成员的构造（SlotLedger 构造非默认，须在初始化列表给基址/容量）
+import diagnostics;  // 债-140 H3 毒化实验（poisonActiveFor / fillGpuPoison），rlbase 单向向下
 
 namespace RGL {
 
@@ -104,6 +105,38 @@ vk::ImageViewCreateInfo Resources::buildDepthView(VkImage image) {
 	}
 
 /**
+ * 债-140 H3：给 descriptor heap 的**用户槽区**铺毒值（门 `diagnostics.poison_gpu_mem`
+ * 且 scope 含 `heap`；语义与判据原理 → `DiagnosticsConfig::poisonGpuMem` 注释）。
+ *
+ * 🔴 只毒 `[reservedSlots, capacity)`：字节 `[0, reservedSlots*stride)` 是厂商保留区
+ * （契约见 VmaBuffer.cppm 的 VmaDescriptorHeap 类注释），host 写它是 UB —— 毒保留区等于
+ * 自己制造一个不可归因的崩溃，那会污染本案唯一还在说话的取证面。
+ * 已被引擎写过的槽随后被正常写覆盖 ⟹ **活到 GPU 读取那一刻的毒 = 从未上传的槽**（H2 形态）。
+ *
+ * 只走公开访问器（getSlotCpuAddress / getReservedSlots / getCapacity / getDescriptorSize），
+ * 不碰 pMappedData 私有量：偏移算术已经由 getSlotCpuAddress 负责，再算一遍就是第二份真相源。
+ * @param heap 刚建好的 heap（host 常驻映射）
+ * @param name 仅用于日志点名（resource heap / sampler heap 是两个对象，别混成一条）
+ */
+static void poisonHeapUserSlots(RGL::VmaDescriptorHeap& heap, std::string_view name) {
+	if (!poisonActiveFor(PoisonTarget::heap))
+		return;
+	const uint32_t first = heap.getReservedSlots();
+	if (first >= heap.getCapacity())
+		return;  // 没有用户槽（容量全被保留区吃掉）——本引擎配置下不会发生，静默跳过即可
+	const auto addr = heap.getSlotCpuAddress(first);
+	if (!addr)
+		return;  // 越界已由 getSlotCpuAddress 报 Error；这里不重复出声
+	const size_t bytes = static_cast<size_t>(heap.getCapacity() - first) * heap.getDescriptorSize();
+	fillGpuPoison(*addr, bytes);
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("poison[heap]: {} 用户槽 [{}, {}) × {}B = {} 字节铺毒值（基准字 {:08X}，"
+					 "反解：(fault 低 32 位 − {:08X}) × 4 = 用户区字节偏移）",
+			name, first, heap.getCapacity(), heap.getDescriptorSize(), bytes,
+			kGpuPoisonBaseWord, kGpuPoisonBaseWord);
+}
+
+/**
  * 容量构成与槽位分区契约见接口注释。实现：运行时查询
  * VkPhysicalDeviceDescriptorHeapPropertiesEXT——统一步长 = max(bufferDescriptorSize,
  * imageDescriptorSize)（image 描述符（SAMPLED_IMAGE）比 buffer 描述符宽：RADV 64B > 16B，
@@ -130,16 +163,17 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createDescriptorHeap() {
 			logger->info("descriptor heap: bufferDesc={}B imageDesc={}B stride={}B reservedSlots={} alignment={}B capacity={}",
 				bufferSize, imageSize, descriptorSize, reservedSlots, resourceHeapAlignment, capacity);
 
-		return allocator.createDescriptorHeap(
+		auto heap = allocator.createDescriptorHeap(
 			vkDevice.getDevice(),
 			capacity, descriptorSize,
 			vk::BufferUsageFlagBits::eDescriptorHeapEXT,
 			reservedSlots,
 			resourceHeapAlignment,
 			"resources/descriptor_heap");
-	}
-
-/**
+	if (heap)
+		poisonHeapUserSlots(*heap, "resource");
+	return heap;
+	}/**
  * 背景与容量构成见接口注释。实现：步长 = samplerDescriptorSize（运行时查询）；
  * reservedSlots = ceil(minSamplerHeapReservedRange / 步长)（NVIDIA = 512B → 16 槽 @32B，
  * RADV/Intel = 0）；capacity = reserved + 8（固定小裕量：用户槽由 `Resources::claimSamplerSlot`
@@ -157,13 +191,16 @@ std::expected<RGL::VmaDescriptorHeap, Error> Resources::createSamplerHeap() {
 			logger->info("sampler heap: samplerDesc={}B reservedSlots={} alignment={}B capacity={}",
 				samplerSize, reservedSlots, heapProps.samplerHeapAlignment, capacity);
 
-		return allocator.createDescriptorHeap(
+		auto heap = allocator.createDescriptorHeap(
 			vkDevice.getDevice(),
 			capacity, samplerSize,
 			vk::BufferUsageFlagBits::eDescriptorHeapEXT,
 			reservedSlots,
 			heapProps.samplerHeapAlignment,
 			"resources/sampler_heap");
+	if (heap)
+		poisonHeapUserSlots(*heap, "sampler");
+	return heap;
 	}
 
 /**

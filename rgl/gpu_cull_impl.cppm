@@ -19,6 +19,8 @@ import offgraph_sync;  // 批次 B1b：8 条 barrier 的参数由 usage 词表�
 import VmaRaii;
 import material_types_generated;
 import compute_push_types_generated;  // FanoutPush（compute-push 反射产物，布局有出处）
+import diagnostics;   // 债-140 H3 毒化实验（poisonActiveFor / fillGpuPoison）
+import vulkan_utils;  // submitCmdBufferAndWait（一次性 staging copy 的现成提交路）
 
 namespace RGL {
 
@@ -38,6 +40,63 @@ namespace RGL {
 // 理由与判据见 gpu_cull.cppm 文件头）。本文件自此**零字节字面量**：步长 = sizeof(CullSequence)，
 // 字段落点 = 成员访问，buffer 尺寸 = nCandidates × sizeof(元素)。
 
+/**
+ * 债-140 H3：把毒值一次性拷进一张 **device-local** cull buffer（门
+ * `diagnostics.poison_gpu_mem` 且 scope 含 `cull`；语义 → `DiagnosticsConfig::poisonGpuMem`）。
+ *
+ * 为什么不能像 heap / 行表那样直接 memset：这三张是 `VMA_MEMORY_USAGE_AUTO` 的 device-local
+ * 分配，host 不可映射。⚠ VMA 的 `vmaCopyMemoryToAllocation` **也帮不上**——它的实现就是
+ * `Map + memcpy + Unmap + Flush`（vk_mem_alloc.h 的 `VmaAllocator_T::CopyMemoryToAllocation`），
+ * 不做 staging，对不可映射分配直接失败。⟹ 只能自己走一次性 staging copy，机制复用
+ * texture_upload / cubemap 的现成路（`vulkan_utils::submitCmdBufferAndWait`，启动期无并发）。
+ *
+ * 🔴 前置：目标必须带 `eTransferDst`。`sequenceBuffer` 本来就有；`countBuffer` 与
+ * `streamsBuffer` 没有 ⟹ **门开时给它们补上**（门关 = usage 位逐位不变）。补 usage 理论上
+ * 可能影响驱动的内存类型选择，这是本实验自知的混淆项 ⟹ 已写进日志，读数时连带读。
+ *
+ * 失败 = 抛（不静默跳过）：诊断路径没铺上毒，读数就是一条假负，而"配置写了、什么都没发生"
+ * 正是本项目最忌的失效形态。构造器本就在分配失败处 throw，口径一致。
+ */
+static void poisonDeviceLocalBuffer(const RGL::VmaAllocatorRAII& allocator,
+	vk::raii::Device& device, VkQueue queue, const vk::raii::CommandPool& pool,
+	RGL::VmaBuffer& target, size_t bytes, const char* name) {
+	if (bytes == 0)
+		return;  // 空表（无候选）——没有可毒的字节，不是漏铺
+
+	// 一次性 staging：host-visible + 常驻映射，填毒后整片拷进目标，函数尾随作用域析构。
+	vk::BufferCreateInfo si{};
+	si.size = static_cast<vk::DeviceSize>(bytes);
+	si.usage = vk::BufferUsageFlagBits::eTransferSrc;
+	VmaAllocationCreateInfo sa{};
+	sa.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	sa.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+	VmaAllocationInfo sad{};
+	auto stagingResult = allocator.createBuffer(si, sa, &sad, "gpu_cull/poison_staging");
+	if (!stagingResult)
+		throw std::runtime_error(fmt::format("poison[cull]: {} 的 staging 分配失败 — {}", name,
+			stagingResult.error().describe()));
+	auto staging = std::move(*stagingResult);
+	if (sad.pMappedData == nullptr)
+		throw std::runtime_error(fmt::format("poison[cull]: {} 的 staging 没映射（MAPPED_BIT 没被兑现？）", name));
+	fillGpuPoison(sad.pMappedData, bytes);
+
+	auto cmdAlloc = device.allocateCommandBuffers(
+		vk::CommandBufferAllocateInfo{pool, vk::CommandBufferLevel::ePrimary, 1});
+	auto cmd = std::move(cmdAlloc[0]);
+	cmd.begin(vk::CommandBufferBeginInfo{});
+	VkBufferCopy region{0, 0, static_cast<VkDeviceSize>(bytes)};
+	::vkCmdCopyBuffer(*cmd, *staging, *target, 1, &region);
+	cmd.end();
+	if (auto submitted = submitCmdBufferAndWait(device, cmd, queue, "cull poison", name); !submitted)
+		throw std::runtime_error(fmt::format("poison[cull]: {} 的毒值拷贝提交失败 — {}", name,
+			submitted.error().describe()));
+
+	if (auto* logger = RLLogger::getInstance())
+		logger->warn("poison[cull]: {} 铺毒值 {} 字节（staging copy；基准字 {:08X}，"
+					 "⚠ 门开时该 buffer 多带了 eTransferDst）",
+			name, bytes, kGpuPoisonBaseWord);
+}
+
 // 构造器 / recordCullPass / readCullResult 实现（契约见接口声明）。
 
 GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
@@ -51,6 +110,23 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 	  nEntryStreams(vkEntries.empty() ? 0u : entryStreamCount) {
 	auto& device = vkDevice.getDevice();
 	createCullBuffers(device);
+	// 债-140 H3：三张 device-local 的 cull buffer 铺毒（门 + scope 含 `cull`；门关 = 一次
+	// 判据都不通过）。必须在任何 GPU 用它们之前，故紧跟 createCullBuffers；host-mapped 的
+	// candidate_table 已在 createCullBuffers 内直接 memset 铺过。
+	if (poisonActiveFor(PoisonTarget::cullChain)) {
+		auto& allocator = resources.getAllocator();
+		poisonDeviceLocalBuffer(allocator, device, vkDevice.getGraphicsQueue(),
+			vkDevice.getGraphicsCommandPool(), sequenceBuffer,
+			static_cast<size_t>(nCandidates) * sizeof(CullSequence), "gpu_cull/sequence");
+		poisonDeviceLocalBuffer(allocator, device, vkDevice.getGraphicsQueue(),
+			vkDevice.getGraphicsCommandPool(), countBuffer, kCullCountBytes,
+			"gpu_cull/sequence_count");
+		if (nEntryStreams > 0)
+			poisonDeviceLocalBuffer(allocator, device, vkDevice.getGraphicsQueue(),
+				vkDevice.getGraphicsCommandPool(), streamsBuffer,
+				static_cast<size_t>(nEntryStreams) * nCandidates * sizeof(CullSequence),
+				"gpu_cull/entry_streams");
+	}
 	createHostRings();
 	allocRuntimeSlots();
 	writeHeapDescriptors(device);
@@ -66,6 +142,12 @@ GpuCull::GpuCull(RGL::DeviceContext& vkDevice, RGL::Resources& vkResources,
 
 void GpuCull::createCullBuffers(vk::raii::Device& device) {
 	auto& allocator = resources.getAllocator();
+
+	// 债-140 H3：门开时给 device-local 的 cull buffer 补 eTransferDst（毒值靠一次性 staging
+	// copy 铺进去，见 poisonDeviceLocalBuffer）。门关 = 空 flag ⟹ usage 位逐位不变。
+	const auto poisonTransferDst = poisonActiveFor(PoisonTarget::cullChain)
+		? vk::BufferUsageFlagBits::eTransferDst
+		: vk::BufferUsageFlagBits{};
 
 	// 静态表 buffer（host-visible + BDA + eStorageBuffer；启动期 memcpy 一次，
 	// 每帧可见性由 recordCullPass 的 heap barrier（eHost→eAllGraphics）覆盖）
@@ -83,6 +165,11 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 		if (!tableResult)
 			throw std::runtime_error(tableResult.error().describe());
 		tableBuffer = std::move(*tableResult);
+		// 债-140 H3：先铺毒再 memcpy。candidate_table 是 CPU **全量**写的，所以本行在正确
+		// 前提下是 no-op（毒随即被覆盖）——留着它不是装饰：一旦哪天写入量小于 ti.size（比如
+		// 改成增量上传），尾部就会露出毒值，而"表尾部从未写过"正是本实验要找的形态。
+		if (poisonActiveFor(PoisonTarget::cullChain))
+			fillGpuPoison(tableBuffer.getMappedData(), static_cast<size_t>(ti.size));
 		std::memcpy(tableBuffer.getMappedData(), entryTable.data(),
 			static_cast<size_t>(ti.size));
 	}
@@ -108,7 +195,7 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 		ci.usage = vk::BufferUsageFlagBits::eStorageBuffer |
 			vk::BufferUsageFlagBits::eShaderDeviceAddress |
 			vk::BufferUsageFlagBits::eIndirectBuffer |  // DGC sequenceCountAddress 源（VUID-11072）
-			vk::BufferUsageFlagBits::eTransferSrc;
+			vk::BufferUsageFlagBits::eTransferSrc | poisonTransferDst;  // 毒化用（门关 = 0）
 		auto cntResult = allocator.createBufferWithAddress(device, ci, sa, nullptr, "gpu_cull/sequence_count");
 		if (!cntResult)
 			throw std::runtime_error(cntResult.error().describe());
@@ -122,7 +209,8 @@ void GpuCull::createCullBuffers(vk::raii::Device& device) {
 		fi.size = static_cast<vk::DeviceSize>(nEntryStreams) * nCandidates * sizeof(CullSequence);
 		fi.usage = vk::BufferUsageFlagBits::eStorageBuffer |  // fanout kernel 写（heap binding）
 			vk::BufferUsageFlagBits::eShaderDeviceAddress |
-			vk::BufferUsageFlagBits::eIndirectBuffer;  // DGC execute indirectAddress（VUID-12407）
+			vk::BufferUsageFlagBits::eIndirectBuffer |  // DGC execute indirectAddress（VUID-12407）
+			poisonTransferDst;  // 毒化用（门关 = 0）
 		VmaAllocationCreateInfo fa{};
 		fa.usage = VMA_MEMORY_USAGE_AUTO;
 		auto streamResult = allocator.createBufferWithAddress(device, fi, fa, nullptr, "gpu_cull/entry_streams");
