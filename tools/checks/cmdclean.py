@@ -21,18 +21,34 @@ import shlex
 import time
 
 
+def at_missing_is_fatal(entry):
+    """@response（.modmap）缺失**是否算"构建产物未就绪"**——`expand_at` 与 `dep_paths`
+    共用这一处判据，别在调用点各写一遍（2026-10-21 实测：`dep_paths` 漏了这条例外，
+    于是 `expand_at` 的例外**从来没生效过**）。
+
+    背景（坑 4b + 批次 A 的例外）：@response 是构建产物，clean 后不存在 ⟹ 判未就绪、
+    跳过 libclang 解析。但 imgqa 不用 modules，它的 .modmap 实测是 **0 字节空文件**——
+    "不存在"与"存在但为空"对 libclang 完全等价；而 imgqa 是 EXCLUDE_FROM_ALL
+    （`just build` 不编它），若照坑 4b 一律判未就绪，工具侧样式护栏就在**最常见的调用
+    形态**（每次构建都跑 checks、imgqa 从没编过）下静默空转。故此类单元（打了
+    `entry["at_optional"]`）缺 @response 时照常解析。
+    带 modules 的单元**绝不许**打这个标记——它们的 modmap 里就是 -fmodule-file 本体。
+
+    🔴 判据漏到 `dep_paths` 之外的代价（实测）：不存在的 @response 被当依赖去 stat ⟹
+    `bmi_stable` 恒 False ⟹ 每个 TU 白烧 1+2+4s 退避，并把"从没编过"误报成"疑似并发
+    构建中"（改前 `just checks` 1m58s / 64 条误报；改后 41.8s / 0 条且真解析）。
+    @param entry compile_commands 条目
+    @return True = 缺失即未就绪（该单元跳过）；False = 缺失可容忍（照常解析）
+    """
+    return not entry.get("at_optional")
+
+
 def expand_at(entry):
     """展开命令里的 @response file（modmap）→ raw token 列表。
 
     @response file 是构建产物；clean 后尚未编译时不存在 → 返回 None（未就绪），
-    调用方据此跳过而非崩溃（坑 4b）。
-
-    **例外 `entry["at_optional"]`（批次 A：工具侧）**：imgqa 不用 modules，它的
-    @response（.modmap）实测是 **0 字节空文件**——"不存在"与"存在但为空"对 libclang
-    完全等价。而 imgqa 是 EXCLUDE_FROM_ALL（`just build` 不编它），若照坑 4b 一律判
-    未就绪，工具侧样式护栏就在**最常见的调用形态**（每次构建都跑 checks、imgqa 从没
-    编过）下静默空转。故此类单元缺 @response 时丢弃该 token 继续解析。
-    带 modules 的单元**绝不许**打这个标记——它们的 modmap 里就是 -fmodule-file 本体。"""
+    调用方据此跳过而非崩溃（坑 4b）。例外判据 = `at_missing_is_fatal`（含 imgqa 的
+    `at_optional` 豁免，理由与实测教训见该函数）。"""
     raw = []
     for a in shlex.split(entry["command"], posix=os.name != "nt"):
         if a.startswith("@"):
@@ -40,7 +56,7 @@ def expand_at(entry):
             if not os.path.isabs(rf):
                 rf = os.path.join(entry["directory"], rf)
             if not os.path.exists(rf):
-                if entry.get("at_optional"):
+                if not at_missing_is_fatal(entry):
                     continue
                 return None
             with open(rf, encoding="utf-8") as f:
@@ -86,17 +102,23 @@ def bmi_ready(entry):
 
 def dep_paths(entry):
     """本编译单元读取的全部构建产物路径（@response 文件 + 其内/命令内的
-    -fmodule-file BMI），绝对化去重。供稳定性双采样用（坑 4c）。"""
+    -fmodule-file BMI），绝对化去重。供稳定性双采样用（坑 4c）。
+
+    🔴 缺失的 @response 是否算依赖，走 `at_missing_is_fatal` —— 与 `expand_at` **同一处**
+    判据（imgqa 那类 `at_optional` 单元缺 .modmap 是常态，不是"半写"；把它当依赖去 stat
+    会让 `bmi_stable` 恒 False，退避重试全烧空并把护栏变成误报，实测教训见该函数）。"""
     out = []
     raw = []
     for a in shlex.split(entry["command"], posix=os.name != "nt"):
         if a.startswith("@"):
             rf = a[1:] if os.path.isabs(a[1:]) else os.path.join(entry["directory"], a[1:])
-            out.append(rf)
             if os.path.exists(rf):
+                out.append(rf)
                 with open(rf, encoding="utf-8") as f:
                     raw.extend(shlex.split(f.read().strip()))
             else:
+                if at_missing_is_fatal(entry):
+                    out.append(rf)  # 真缺产物：留在依赖里，让 bmi_stable 判未就绪
                 raw.append(a)  # 未就绪：保留原 token（下方 -fmodule-file 扫不到即可）
         else:
             raw.append(a)
@@ -118,16 +140,22 @@ def _stat_all(paths):
 
 
 def bmi_stable(entry, settle=0.08):
-    """产物稳定性双采样（坑 4c）：全部存在且两次 stat 全等 → True。
+    """产物稳定性双采样（坑 4c）：全部存在且两次 stat 全等 → 稳定。
 
+    🔴 **返回 `(稳定, 缺失清单)` 而不是单个 bool**：「依赖缺失（没构建）」与「依赖存在但
+    两次 stat 变了（并发构建半写）」是两件事，合成一个 bool 后调用点只能说"不稳定"，
+    于是 2026-10-21 那次把"imgqa 从没编过"报成了"疑似并发构建中"——**误报的代价是让人
+    去查一个不存在的竞态**（本项目为此连跑了多轮 checks）。
     @param settle 两次采样间隔秒数
+    @return (是否稳定, 缺失的依赖路径清单)
     """
     paths = dep_paths(entry)
     sig = _stat_all(paths)
-    if any(s[1] is None for s in sig):
-        return False
+    missing = [p for p, size, _ns in sig if size is None]
+    if missing:
+        return False, missing
     time.sleep(settle)
-    return sig == _stat_all(paths)
+    return sig == _stat_all(paths), []
 
 
 def clean_cmd(entry, full, scratch_dir, resdir):

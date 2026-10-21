@@ -63,8 +63,13 @@ def _worker_task(rel_entry):
     for wait in _RETRY_WAITS:
         if wait:
             time.sleep(wait)
-        if not bmi_stable(entry):
-            last_err = "BMI/modmap 写入不稳定（疑似并发构建中）"
+        stable, missing = bmi_stable(entry)
+        if not stable:
+            # 🔴 两种"未就绪"分开报（合成一条会把人带去查不存在的竞态，2026-10-21 实测）：
+            #  缺失 = 这份产物根本没构建过（imgqa 是 EXCLUDE_FROM_ALL，`just build` 不编它）
+            #  变化 = 撞上并发构建的半写文件，退避重试才是对的对策
+            last_err = ("构建产物缺失（该单元未构建，非并发竞态）: " + os.path.basename(missing[0])
+                        if missing else "BMI/modmap 写入不稳定（疑似并发构建中）")
             continue
         try:
             m = analyze_file(_W["lib"], _W["cxindex"], entry, full,
