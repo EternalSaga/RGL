@@ -291,6 +291,11 @@ target_compile_definitions(rgl_tests PRIVATE
 # d5cb02b 改门名 izb→izb.on 没重生成，committed golden 静默陈旧无人验。env
 # RGL_GATE_LINT_GOLDEN=<dir> 保留为重生成模式。定位机制先例 = 上面两条源树路径宏）。
 target_compile_definitions(rgl_tests PRIVATE RGL_GATE_LINT_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/tests/golden")
+# 债-140 mesh 自证的 **latch-once 结构护栏**要读 .slang 源本体（shader 里的"验的就是用的那一份"
+# 是源码级性质，编译产物判不了）。定位机制与上面源树路径宏同源。
+# 🔴 测试**运行时**读源文件 ⟹ 变异 .slang 不需要重编就能生效（也正因为如此，变异 harness 对这条
+#    必须跳过构建，否则改的是 SPV 生效前的源、量的却是重编后的产物，读数会自相矛盾）。
+target_compile_definitions(rgl_tests PRIVATE RGL_SHADER_SRC_DIR="${CMAKE_SOURCE_DIR}/rgl/shaders")
 # 引擎 SPV 由 rgl 目标的 slang 规则产出：rgl_tests 直接依赖它，否则 `just test-gpu`
 # 单测目标时拿到陈旧 SPV（"改完 shader 没重建就报全通过"的 modules 环境坑同款）。
 add_dependencies(rgl_tests rgl)

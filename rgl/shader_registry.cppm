@@ -737,13 +737,16 @@ export class ShaderRegistry {
 			{"shadow_meshlet_mdi", "generated_shaders/shadow_meshlet.mesh_MDI_SHADOW.spv",
 				"generated_shaders/shadow.frag.spv",
 				"generated_shaders/shadow_meshlet.task.spv"},
-			// 债-140 **A2 着色器自证**变体（门 `diagnostics.shader_selfcheck`）：mesh/frag 与上面
-			// 那条**逐字相同**，只换 task SPV = 同一 .slang 的 -DSHADOW_SELFCHECK 产物。
-			// 🔴 为什么另开一条 spec 而不是改上面那条：门关必须选今天这份原版 SPV（实测原版
-			// 与自证变体逐字节不同的唯一原因就是那份 #ifdef 代码），而 spec 是静态默认表——
-			// 改表就等于把出厂形态换掉了。选哪条由 `addShadowMeshletMdiEntry` 按门决定。
+			// 债-140 **A2 着色器自证**变体（门 `diagnostics.shader_selfcheck`）：frag 与上面
+			// 那条**逐字相同**，task 与 mesh 各换成自证变体 SPV。
+			// 🔴 mesh 也必须换：上一批的摄像头只装在 task（链的**首端**），而故障发生在链的
+			//    **末端**（mesh 拿 range/clusterStart/条目内段偏移去解引用）⟹ 只换 task 等于
+			//    装了个看不见案发现场的摄像头。本批起两 stage 同时带自证。
+			// 🔴 为什么另开一条 spec 而不是改上面那条：门关必须选今天那份原版 SPV（实测原版
+			//    与自证变体逐字节不同的唯一原因就是那份 #ifdef 代码），而 spec 是静态默认表——
+			//    改表就等于把出厂形态换掉了。选哪条由 `addShadowMeshletMdiEntry` 按门决定。
 			{"shadow_meshlet_mdi_selfcheck",
-				"generated_shaders/shadow_meshlet.mesh_MDI_SHADOW.spv",
+				"generated_shaders/shadow_meshlet.mesh_MDI_SHADOW_SHADOW_SELFCHECK.spv",
 				"generated_shaders/shadow.frag.spv",
 				"generated_shaders/shadow_meshlet.task_SHADOW_SELFCHECK.spv"},
 			{"izb_mask", "generated_shaders/izb_mask.mesh.spv",

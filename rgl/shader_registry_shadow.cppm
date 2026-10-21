@@ -139,8 +139,13 @@ namespace RGL {
 		// 日志一行不多（出厂锚的前提之一是日志面也不受影响）。
 		if (diagnostics().shaderSelfcheck) {
 			if (auto* logger = RLLogger::getInstance())
-				logger->info("pipeline entry: shadow_meshlet_mdi 用 **A2 自证变体**，task SPV = {}",
-					spec->taskSpv);
+				logger->info(
+					"pipeline entry: shadow_meshlet_mdi 用 **A2 自证变体**，task SPV = {}，"
+					"mesh SPV = {}",
+					// 🔴 两个 stage 都要打进这行：本批自证从 task 单侧扩到 task + mesh 双侧，
+					//    只报 task 的话"mesh 侧那份没换上"在日志里完全静默，而 mesh 侧才是
+					//    取址链末端（fault@0 的现场）。生效指纹缺一半 = 半个没验。
+					spec->taskSpv, spec->meshSpv);
 		}
 		return index;
 	}

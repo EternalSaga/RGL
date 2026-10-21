@@ -149,6 +149,72 @@ std::string describeShadowRowViolations(uint32_t bits) {
 	return out.empty() ? "unknown_bits" : out;  // 有位但没名字 = 位段与描述分家，出声
 }
 
+uint32_t meshChainViolations(const MeshChainCheckInput& in) {
+	// 🔴 这七条与 shadow_meshlet.mesh.slang 的 SHADOW_SELFCHECK 分支**逐条同拼写**，
+	//    理由同 shadowRowViolations（shader 里的判据没法单测，写错了读数就是"零违例"）。
+	// 🔴 全部算术走 64 位：32 位下 `triOffset + 3*triCount`、`(remapOffset+localIdx)*4`、
+	//    `vb + stride` 都可能**回绕成小值**，把"越界"判成"没越界" = 假阴（本案最怕的失效形态）。
+	uint32_t bits = kMeshViolNone;
+	if (in.objectIndex >= in.objectCapacity)
+		bits |= kMeshViolObjectIndexOob;  // P0：mesh 两次解引用对象表（range 表 + 矩阵表）
+	if (in.clusterStart >= in.rangeCount) {
+		bits |= kMeshViolClusterStartOob;  // P1：起点本身就出区间（覆盖面清单第 1 条，本批补上）
+	}
+	else if (static_cast<uint64_t>(in.clusterStart) + in.intraCluster >= in.rangeCount) {
+		// P2：起点在区间内，是**派发序号**把它推出去的（×2 / 选级算术错）。与 P1 互斥，
+		//      这样归因才干净：P1 = 行表给的值坏，P2 = 行表值好但 groupCount 算错。
+		bits |= kMeshViolClusterPastRange;
+	}
+	// P3：簇条目整体必须落在簇表内。引擎**已有**这道守卫，但它 `SetMeshOutputCounts(0,0)`
+	//     静默早退 ⟹ 越界时"一块不画"而没有任何信号。本判据不是新增防线，是把已有防线**接上声音**。
+	const uint64_t cBase = static_cast<uint64_t>(in.clusterIdx) * in.clusterStride;
+	// 🔴 P8：引擎原码算的是 **32 位** `clusterIdx * kClusterStride`，一旦回绕，那道守卫
+	//    （`cBase + stride > clustersBytes`）**判不出来** = 守卫可被绕过。镜像算 64 位并与
+	//    32 位能表示的范围比对，把这条"防线自身失效"单独钉一个位（与 P3 分开才归因得清）。
+	if (cBase > 0xFFFFFFFFull)
+		bits |= kMeshViolClusterBaseWrapped;
+	const bool entryReadable = cBase + in.clusterStride <= in.clustersBytes;
+	if (!entryReadable)
+		bits |= kMeshViolClusterEntryOob;
+	// 段级两判只在条目可读时评（与 shader 控制流同形，见接口注释）。
+	if (entryReadable) {
+		if (static_cast<uint64_t>(in.triOffset) + 3ull * in.triCount > in.trisBytes)
+			bits |= kMeshViolTriSectionOob;  // P4：原码**无守卫**
+		if ((static_cast<uint64_t>(in.remapOffset) + in.vertCount) * 4ull > in.remapBytes)
+			bits |= kMeshViolRemapSectionOob;  // P5：原码**无守卫**
+	}
+	if (in.vertexValid) {
+		if (in.localIdx >= in.vertCount)
+			bits |= kMeshViolLocalIdxPastCluster;  // P7：产物契约破，它决定 remap 读哪个元素
+		if (static_cast<uint64_t>(in.vb) + in.vertexStride > in.vertexPoolBytes)
+			bits |= kMeshViolVertexPoolOob;  // P6：下一次 Load3 就是 fault@0 的那一次读
+	}
+	return bits;
+}
+
+std::string describeMeshChainViolations(uint32_t bits) {
+	if (bits == kMeshViolNone)
+		return "none";
+	std::string out;
+	const auto add = [&](const char* name, uint32_t bit) {
+		if (!(bits & bit))
+			return;
+		if (!out.empty())
+			out += '|';
+		out += name;
+	};
+	add("object_index_oob", kMeshViolObjectIndexOob);
+	add("cluster_start_oob", kMeshViolClusterStartOob);
+	add("cluster_past_range", kMeshViolClusterPastRange);
+	add("cluster_entry_oob", kMeshViolClusterEntryOob);
+	add("tri_section_oob", kMeshViolTriSectionOob);
+	add("remap_section_oob", kMeshViolRemapSectionOob);
+	add("vertex_pool_oob", kMeshViolVertexPoolOob);
+	add("local_idx_past_cluster", kMeshViolLocalIdxPastCluster);
+	add("cluster_base_wrapped", kMeshViolClusterBaseWrapped);
+	return out.empty() ? "unknown_bits" : out;  // 有位但没名字 = 位段与描述分家，出声
+}
+
 namespace {
 
 /**

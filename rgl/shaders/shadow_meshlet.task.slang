@@ -111,12 +111,33 @@ void main(uint drawID : SV_DrawIndex)
     // 🔴 row = rowBase + drawID（§3 的统一公式；push.word0 在 MDI 变体下语义 = rowBase）。
     // 行序 = 候选序（构建器契约）；不可见行 gcX = 0 根本不发射 ⟹ 被调度到的行恒为可见行，
     // 而可见行的 meshGroupCount 必 > 0（构建器不变量 2 保证）⟹ 这里不会 DispatchMesh(0)。
+#ifdef SHADOW_SELFCHECK
+    // 🔴 **latch-once**（本批补的纪律）：两个输入各读**一次**进局部，之后地址算术、行表读取、
+    //    判据、printf **全部只用这几份拷贝**。原版（下面 #else 那支）逐字节不动。
+    //
+    //    为什么这算洞：上一版自证里的 `row` 是把 `mdiTaskPush.rowBase + drawID` **又算了一遍**，
+    //    而不是复用算 `rowBytes` 时那份值。两次读之间若不一致（编译器把 intrinsic 重新
+    //    materialize、或 push 内容本身在两次读之间变了），**判据校验的行与实际取数的行就不是
+    //    同一行** ⟹ "零违例"可能只说明"我校验的那一行本来就好"。这是 TOCTOU 型自证失效，
+    //    而且它**不会报错、只会让摄像头安静地看错地方**。
+    const uint latchedRowBase = mdiTaskPush.rowBase;
+    const uint latchedDrawId = drawID;
+    const uint row = latchedRowBase + latchedDrawId;
+    const uint rowBytes = row * kMdiShadowRowStrideBytes;
+    const uint meshGroupCount = mdiShadowArgs.Load(rowBytes + kMdiShadowMeshGroupCountByteOffset);
+    const uint latchedObjectIndex = mdiShadowArgs.Load(rowBytes + kMdiShadowObjectIndexByteOffset);
+    const uint latchedClusterStart = mdiShadowArgs.Load(rowBytes + kMdiShadowClusterStartByteOffset);
+    MdiShadowPayload p;
+    p.objectIndex = latchedObjectIndex;   // 🔴 payload 交出去的就是这份拷贝
+    p.clusterStart = latchedClusterStart; // 🔴 判据验的也是这份拷贝
+#else
     const uint rowBytes = (mdiTaskPush.rowBase + drawID) * kMdiShadowRowStrideBytes;
     const uint meshGroupCount = mdiShadowArgs.Load(rowBytes + kMdiShadowMeshGroupCountByteOffset);
 
     MdiShadowPayload p;
     p.objectIndex = mdiShadowArgs.Load(rowBytes + kMdiShadowObjectIndexByteOffset);
     p.clusterStart = mdiShadowArgs.Load(rowBytes + kMdiShadowClusterStartByteOffset);
+#endif
 
 #ifdef SHADOW_SELFCHECK
     // ---- 债-140 **A2 着色器自证**（只在 -DSHADOW_SELFCHECK 变体里存在）----
@@ -147,15 +168,15 @@ void main(uint drawID : SV_DrawIndex)
     const uint gcX = mdiShadowArgs.Load(rowBytes + kMdiShadowGroupCountXByteOffset);
     const uint gcY = mdiShadowArgs.Load(rowBytes + kMdiShadowGroupCountYByteOffset);
     const uint gcZ = mdiShadowArgs.Load(rowBytes + kMdiShadowGroupCountZByteOffset);
-    const uint row = mdiTaskPush.rowBase + drawID;  // 绝对行号（只进输出，不参与判据：谓词 1 用相对口径）
+    // 🔴 `row` 不再在这里重算 —— 它是在上面 latch 的那一份（见 SHADOW_SELFCHECK 的 latch-once 段）。
     uint bits = 0u;
-    if (drawID >= rowsWritten)
+    if (latchedDrawId >= rowsWritten)
         bits |= 1u;   // 谓词 1：间接计数与已上传行数分家（🔴 两边同为**段内相对**口径）
     if (gcX != 1u)
         bits |= 2u;   // 谓词 2：不变量 3b（每可见行恰一枚 task）
     if (meshGroupCount == 0u)
         bits |= 4u;   // 谓词 3：不变量 2（不发空 DispatchMesh）
-    if (p.objectIndex >= objectCapacity)
+    if (latchedObjectIndex >= objectCapacity)
         bits |= 8u;   // 谓词 4：mesh 侧 readObjectClusterRange 直接越界 = fault@0 通路
     if (gcY != 1u || gcZ != 1u)
         bits |= 16u;  // 谓词 5：行读歪（步长/偏移漂移的当场指纹）
@@ -166,8 +187,9 @@ void main(uint drawID : SV_DrawIndex)
         // **submit 序**（每 submit 一批、按帧序打）—— 黑匣子那侧这四个数全有。
         printf("SHADOW_SELFCHECK bits=%u cascade=%u draw_id=%u row=%u row_base=%u rows_written=%u "
                "gcx=%u gcy=%u gcz=%u obj=%u cstart=%u mgc=%u obj_cap=%u\n",
-               bits, mdiTaskPush.cascadeIndex, drawID, row, mdiTaskPush.rowBase, rowsWritten,
-               gcX, gcY, gcZ, p.objectIndex, p.clusterStart, meshGroupCount, objectCapacity);
+               bits, mdiTaskPush.cascadeIndex, latchedDrawId, row, latchedRowBase, rowsWritten,
+               gcX, gcY, gcZ, latchedObjectIndex, latchedClusterStart, meshGroupCount,
+               objectCapacity);
     }
 #endif
 

@@ -345,4 +345,76 @@ export [[nodiscard]] uint64_t blackboxNowNs();
  * 门读取扩散到 main，且"第一帧就开不成"与"启动就开不成"在归因上等价，日志都在最前面。
  */
 
+/**
+ * mesh 取址链自证的位段（**第二批摄像头**，覆盖面清单里"最疼的两条"就在这里）。
+ *
+ * 🔴 为什么必须下移到 mesh：task 只把行表三个 word 抄进 payload 就完事，它**读不到**
+ * `ObjectClusterRange`（没声明 binding 33），所以"clusterStart 的真上界"在 task 里根本判不了；
+ * 而真正拿这些值去解引用的是 mesh —— `range.base + clusterStart + 簇内序` → 簇条目 →
+ * 条目**内部**的 `triOffset` / `remapOffset` → 顶点池。故障发生在链的末端，上一批的摄像头
+ * 装在链的首端。
+ *
+ * 与 task 那五条的关键区别：**这七条全是真上界，没有一条是恒不成立的哨兵。**
+ * mesh 手里就有四张 buffer 的 `GetDimensions` 和它自己要用的那个 `range`，界是拿得到的。
+ */
+export inline constexpr uint32_t kMeshViolNone = 0u;
+export inline constexpr uint32_t kMeshViolObjectIndexOob = 1u << 0;  ///< objectIndex ≥ 对象表容量（mesh 两次解引用对象表）
+export inline constexpr uint32_t kMeshViolClusterStartOob = 1u << 1;  ///< 🔴 clusterStart ≥ range.count（本批补上的"真上界"，覆盖面清单第 1 条）
+export inline constexpr uint32_t kMeshViolClusterPastRange = 1u << 2;  ///< clusterStart 本身在区间内，但派发序号把它推出区间（×2/选级算术错）
+export inline constexpr uint32_t kMeshViolClusterEntryOob = 1u << 3;  ///< 簇条目越过簇表尾（引擎**已有**这道守卫，但它静默早退 = 不画也不出声）
+export inline constexpr uint32_t kMeshViolTriSectionOob = 1u << 4;  ///< 🔴 条目里的 triOffset + 本簇三角段越过 Tris buffer（原码**无守卫**）
+export inline constexpr uint32_t kMeshViolRemapSectionOob = 1u << 5;  ///< 🔴 条目里的 remapOffset + vertCount 越过 Remap buffer（原码**无守卫**）
+export inline constexpr uint32_t kMeshViolVertexPoolOob = 1u << 6;  ///< 🔴 vb + 顶点步长越过顶点池 = fault@0 最直接的一条（原码**无守卫**）
+export inline constexpr uint32_t kMeshViolLocalIdxPastCluster = 1u << 7;  ///< 三角局部索引 ≥ vertCount（产物契约破；它决定 remap 读哪个元素）
+export inline constexpr uint32_t kMeshViolClusterBaseWrapped = 1u << 8;  ///< 🔴 `clusterIdx × 44` 在 32 位下**回绕**——引擎那道簇表守卫是 32 位算术，回绕会让它判不出来（守卫可被绕过本身就是要抓的东西）
+
+/**
+ * mesh 取址链一条链上的全部被验值（CPU 镜像的输入；字段与 shader 里的**latch 后局部**一一对应）。
+ *
+ * 🔴 段级两判（Tris / Remap）的开关**不是装饰而是控制流**：shader 只有在簇条目**在表内**时
+ * 才读得到 `triCount`/`triOffset`/`remapOffset`，条目越界时那些值根本不存在（读它是未定义）。
+ * 镜像因此内部按"条目可读"门控这两判（= P3 不成立才评），与 shader 的控制流**同形**；
+ * 若不加门控，条目越界时会拿一堆 0 去判段越界，要么恒判成违例、要么与 shader 判得不一样。
+ */
+export struct MeshChainCheckInput {
+	uint32_t objectIndex = 0u;      ///< payload 带来的对象槽号
+	uint32_t objectCapacity = 0u;   ///< 对象表容量（push word2 高 16 位）
+	uint32_t rangeCount = 0u;       ///< 🔴 `ObjectClusterRange::count` = 本对象簇区间长度（真上界）
+	uint32_t clusterStart = 0u;     ///< payload 带来的区间内起点
+	uint32_t intraCluster = 0u;     ///< 派发派生 = `latchedSlot >> 1`（latch 后的 groupID.x）
+	uint32_t clusterIdx = 0u;       ///< `range.base + clusterStart + intraCluster`
+	uint32_t clusterStride = 0u;    ///< 44（DiskCluster），由调用方给，本模块不抄
+	uint32_t clustersBytes = 0u;    ///< `meshletClusters.GetDimensions`
+	uint32_t triOffset = 0u;        ///< 条目 word@16：Tris 段**字节**偏移
+	uint32_t triCount = 0u;         ///< 条目 word@8
+	uint32_t trisBytes = 0u;        ///< `meshletTris.GetDimensions`
+	uint32_t remapOffset = 0u;      ///< 条目 word@20：Remap 段**元素**偏移
+	uint32_t vertCount = 0u;        ///< 条目 word@12
+	uint32_t remapBytes = 0u;       ///< `meshletRemap.GetDimensions`
+	uint32_t vertexPoolBytes = 0u;  ///< `meshletVertexPool.GetDimensions`
+	uint32_t vertexStride = 0u;     ///< 48（ModelVertex），由调用方给，本模块不抄
+	bool vertexValid = false;       ///< 是否带逐顶点那两判（mesh 循环内才评）
+	uint32_t localIdx = 0u;         ///< 三角的局部顶点索引（来自 Tris 段的 u8）
+	uint32_t vb = 0u;               ///< remap 换算出的顶点池**字节**偏移 = 下一次 Load3 的地址
+};
+
+/**
+ * mesh 取址链七条判据的 **CPU 镜像**（**纯函数**；shader 侧是同一判据的第二份拼写）。
+ *
+ * 🔴 算术一律走 64 位：`triOffset + 3*triCount`、`(remapOffset + localIdx)*4`、`vb + stride`
+ *    在 32 位下都可能**回绕成小值**，于是"越界"被判成"没越界"——那是假阴，正是本案最怕的
+ *    失效形态（上一批 `encodeSelfCheckPush` 的"超限不截断"是同一条纪律）。
+ *
+ * @param in 链上各跳的被验值（latch 后的那一份）
+ * @return `kMeshViol*` 的按位或
+ */
+export [[nodiscard]] uint32_t meshChainViolations(const MeshChainCheckInput& in);
+
+/**
+ * mesh 链违例位段 → 可归因短串（**纯函数**）。
+ * @param bits `meshChainViolations` 的返回
+ * @return 形如 `cluster_start_oob|vertex_pool_oob`；无位 = `none`；有位无名 = `unknown_bits`
+ */
+export [[nodiscard]] std::string describeMeshChainViolations(uint32_t bits);
+
 }  // namespace RGL

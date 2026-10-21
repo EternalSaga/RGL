@@ -81,6 +81,13 @@ rgl_shader(shadow_meshlet.mesh SHADOW_MESHLET_MESH_SPV scene scene_tables)
 # ★M-1b（docs/mdi_plan.md §19.2 D2）真 MDI 变体：门 = 选 SPV 变体（同 MESHLET_DEBUG_OFFSET 先例），
 # 门关用的还是上面那份原版 SPV、那条原管线条目，一字节不动 = 逐位不变构造性保证。
 rgl_shader_defined(shadow_meshlet.mesh SHADOW_MESHLET_MDI_MESH_SPV MDI_SHADOW scene scene_tables)
+# 债-140 **mesh 取址链自证**变体（门 `diagnostics.shader_selfcheck`，与 task 侧同一枚门）：
+# 双定义 MDI_SHADOW + SHADOW_SELFCHECK → shadow_meshlet.mesh_MDI_SHADOW_SHADOW_SELFCHECK.spv。
+# 🔴 必须双定义而不是只加 SHADOW_SELFCHECK：自证读的是 MDI 才有的 payload，且 latch 支挂在
+#    `#if defined(MDI_SHADOW) && defined(SHADOW_SELFCHECK)` 下；只带 SHADOW_SELFCHECK 编出来的
+#    是非 MDI 形态，与自证条目对不上。门关选上面那份 MDI 原版（实测逐字节不变）。
+rgl_shader_defined2(shadow_meshlet.mesh SHADOW_MESHLET_MDI_SELFCHECK_MESH_SPV MDI_SHADOW
+                    SHADOW_SELFCHECK scene scene_tables)
 # ★M-3T-a（docs/mdi_plan.md §19.16）：DrawIndex 的声明处从 mesh 入口搬进 **task** 入口
 # ——§19.9 实测它在 mesh 入口毒化 gfx1151 的后续 mesh draw，§19.15 实测声明在 task 入口不触发。
 # 🔴 必须独立编译：slang#10123（task 与 mesh 同模块时 payload 变量被复制成两份，NV 实测越界读）。

@@ -23,16 +23,21 @@ module;
  * 五条谓词每条都要"最小违例 + 相邻合法界"两半。只测违例侧，`>=` 改成 `>` 不会红；
  * 只测 gcY 不测 gcZ，把 `||` 写成 `&&` 也不会红（skill：对称判据的每一半边各要一条）。
  *
- * ## 变异红线声明（**2026-10-21 实测，11 条全部抓到，11/11**；
- * 原文读数 = `/home/robin/program/ab/blackbox/mutate_results.txt`，
- * harness = `/home/robin/program/ab/blackbox/mutate_blackbox.py`。本文件共 **8** 条 TEST_CASE，编号 ①–⑦ + ④b）
+ * ## 变异红线声明（**两批合计 21 条，全部抓到，21/21**）
+ *
+ * 上一批（task 侧 + 黑匣子编码）**11/11**，2026-10-21 实测：原文读数 =
+ * `ab/blackbox/mutate_results.txt`，harness = `ab/blackbox/mutate_blackbox.py`。
+ * 本批（mesh 取址链 + latch-once）**10/10**，同日晚些：原文读数 =
+ * `ab/meshcheck/mutate_results.txt`，harness = `ab/meshcheck/mutate_mesh.py`。
+ * 本文件共 **11** 条 TEST_CASE（编号 ①–⑩，含 ④b）。
+ *
  * 方法学六条防线（skill `rgl-test-discipline`）全部落在 harness 里：`shutil.copyfile`
  * （**不带 mtime**）+ 还原后 `touch`；显式 `cmake --build build --target rgl_tests`
  * （tests/ 是 EXCLUDE_FROM_ALL，`just build` 不编它）并核对**构建自身**返回码
  * （构建红 ≠ 判据红，单列 BUILD-FAIL 计数并立刻停）；**每条还原后重跑基线断言全绿**
- * （实测 11 次还原全部 ✅ 全绿）；禁 `git checkout`（工作树有本批未提交的实现体）；
- * 启动时自愈遗留 `.mutbak`（后台任务被回收时源码正带变异）；谓词类变异只改运算符不删参数
- * （`return false` 会撞 `-Werror=unused-parameter`，拿到的是编译失败而不是判据红）。
+ * （两批合计 21 次还原全部 ✅ 全绿）；禁 `git checkout`（工作树有本批未提交的实现体）；
+ * 启动时自愈遗留 `.mbak` / `.mutbak`（后台任务被回收时源码正带变异）；谓词类变异只改
+ * 运算符不删参数（`return false` 会撞 `-Werror=unused-parameter`，拿到的是编译失败而不是判据红）。
  *
  * | # | 变异 | 实测红在 |
  * |---|---|---|
@@ -47,12 +52,30 @@ module;
  * | S3 | 谓词 4 `>=` → `>` | 🔯 ⑥ |
  * | S4 | 谓词 5 `||` → `&&` | 🔯 ⑥ |
  * | D1 | `describeShadowRowViolations` 漏 `object_index_oob` 的名字 | 🔯 ⑦ |
+ * | M1 | P1 `clusterStart >= rangeCount` → `>`（相邻合法界漂移）| 🔯 ⑧ |
+ * | M2 | P2 丢掉 `clusterStart` 项（只看派发序号，本地看似合理）| 🔯 ⑧ |
+ * | M3 | P3 簇条目守卫少加一个步长（off-by-stride）| 🔯 ⑧ |
+ * | M4 | P6 顶点池判据丢掉顶点步长（少判一整条顶点）| 🔯 ⑧ |
+ * | M5 | P8 回绕阈值 32 位 → 40 位（回绕判据形同不存在）| 🔯 ⑧ |
+ * | M6 | 去掉段级两判的「条目可读」门控（与 shader 控制流脱钩）| 🔯 ⑧ |
+ * | M7 | `describeMeshChainViolations` 漏 `vertex_pool_oob` 的名字 | 🔯 ⑨ |
+ * | L1 | 🔴 mesh 自证的 `clusterIdx` 改回直读 `groupID.x` | 🔯 ⑩ |
+ * | L2 | 🔴 mesh 自证的 `half` 改回直读 `groupID.x` | 🔯 ⑩ |
+ * | L3 | 🔴 task 谓词 1 改回直读 `drawID`（判据与取数可能不同行）| 🔯 ⑩ |
  *
- * 🔴 读数里值得注意的两点：① **每条变异都只红一条用例**（红用例数恒 =1），说明八条用例
+ * 🔴 读数里值得注意的四点：① **每条变异都只红一条用例**（红用例数恒 =1），说明各条用例
  * 之间没有互相兜底——去掉哪条判据就只有那条用例响，这既是好事（归因干净）也意味着
  * **删用例不会立刻让别的用例变红**，后来人精简测试时没有网兜着。
- * ② S1/S3 这两条"相邻合法界漂移"能红，完全靠 ⑥ 里每条谓词都配了 `界-1 合法 / 界 违例`
- * 的成对断言——只测违例侧的话这两条会全绿（skill 的对称判据半边规则，本批实测有效）。
+ * ② S1/S3/M1 这三条"相邻合法界漂移"能红，完全靠 ⑥⑧ 里每条谓词都配了
+ * `界-1 合法 / 界 违例` 的成对断言——只测违例侧的话这三条会全绿（对称判据半边规则，实测有效）。
+ * ③ 🔴 **两类变异的构建要求相反**，harness 因此给每条变异单独配 `build` 开关而不是全局一刀切：
+ * C++ 变异（M/D/S 类）**必须重编**否则量的是旧二进制；latch 变异（L 类）**必须不重编**——
+ * ⑩ 是**运行时读 `.slang` 源**的结构护栏，若这里也去 build，就把"改源即生效"这条性质
+ * 掩盖掉了（后来人会以为要重编，进而去掉运行时读源的设计）。L1–L3 实测**不重编即红**，
+ * 这同时是 ⑩ 自身有效性的证据。
+ * ④ M6 是这批最该有的一条：段级两判在镜像里是**按"条目可读"门控**的（与 shader 控制流同形
+ * ——条目越界时那些值根本不存在，不能拿 0 去判）。去掉门控后镜像会在 shader 不判的地方判，
+ * 于是反向用例红。这条变异证明"门控"不是可有可无的写法偏好，而是判据的一部分。
  */
 
 #include <cstdint>
@@ -82,6 +105,34 @@ ShadowRowCheckInput cleanInput() {
 		.drawId = 5u, .rowsWritten = 10u, .groupCountX = 1u, .groupCountY = 1u, .groupCountZ = 1u,
 		.objectIndex = 7u, .meshGroupCount = 3u, .objectCapacity = 4096u,
 	};
+}
+
+/**
+ * mesh 链的**合法基准态**（⑧ 的每一条都在它之上只动一个字段）。
+ * 数值量级取自实机黑匣子：obj 1590 / cstart 11 / 簇步长 44 / 顶点步长 48。
+ */
+MeshChainCheckInput meshClean() {
+	MeshChainCheckInput in;
+	in.objectIndex = 1590u;
+	in.objectCapacity = 4096u;
+	in.rangeCount = 12u;
+	in.clusterStart = 11u;
+	in.intraCluster = 0u;
+	in.clusterIdx = 100u;
+	in.clusterStride = 44u;
+	in.clustersBytes = 100000u;
+	in.triOffset = 5000u;
+	in.triCount = 20u;
+	in.trisBytes = 20000u;
+	in.remapOffset = 300u;
+	in.vertCount = 15u;
+	in.remapBytes = 8000u;
+	in.vertexPoolBytes = 100000u;
+	in.vertexStride = 48u;
+	in.vertexValid = true;
+	in.localIdx = 3u;
+	in.vb = 480u;
+	return in;
 }
 
 /** 数子串出现次数（④ 用它对账键是否存在，避免把整行 JSON 塞进断言）。 */
@@ -384,6 +435,220 @@ TEST_CASE("⑦ describeShadowRowViolations 四种出口两两不同且可归因"
 	// 五条都要有名字（漏一条 = 该位单独出现时被读成 unknown，且与"未知位"同形）
 	for (uint32_t bit : {1u << 0, 1u << 1, 1u << 2, 1u << 3, 1u << 4})
 		CHECK(describeShadowRowViolations(bit) != "unknown_bits");
+}
+
+/**
+ * ⑧ **mesh 取址链七判的 CPU 镜像**（本批主判据之一）。
+ *
+ * 与 ⑥ 同一条纪律：每条都要"最小违例 + 相邻合法界"两半，只测违例侧则 `>=` 写成 `>` 不会红。
+ * 🔴 另配一条**反向门控**用例：簇条目不可读时，段级两判必须**不评**——否则镜像拿一堆 0 去判
+ * 越界，与 shader 的控制流不同形（shader 那时根本没读条目，triOffset 等值不存在）。
+ */
+TEST_CASE("⑧ meshChainViolations 七判各自最小违例 + 相邻合法界 + 条目不可读时段判不评") {
+	// 基准态必须零位（数值取的是实机黑匣子里的真实量级：obj 1590 / cstart 11 / 步长 44 / 48）
+	CHECK(meshChainViolations(meshClean()) == kMeshViolNone);
+
+	// P0 objectIndex：上界是**开区间**
+	{
+		auto in = meshClean();
+		in.objectIndex = 4095u;
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		in.objectIndex = 4096u;
+		CHECK(meshChainViolations(in) == kMeshViolObjectIndexOob);
+		in.objectIndex = 0xFFFFFFFFu;
+		CHECK(meshChainViolations(in) == kMeshViolObjectIndexOob);
+	}
+	// P1 clusterStart 真上界（= range.count）：上一批覆盖面清单第 1 条，本批补上的那条
+	{
+		auto in = meshClean();
+		in.clusterStart = 11u;  // rangeCount-1 → 合法
+		in.intraCluster = 0u;
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		in.clusterStart = 12u;  // == rangeCount → 违例
+		CHECK(meshChainViolations(in) == kMeshViolClusterStartOob);
+	}
+	// P2 派发序号推出区间：与 P1 **互斥**（归因要分清是行表值坏还是 groupCount 算错）
+	{
+		auto in = meshClean();
+		in.clusterStart = 11u;
+		in.intraCluster = 0u;
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		in.intraCluster = 1u;  // 11 + 1 == rangeCount → 只报 P2，不报 P1
+		const uint32_t b = meshChainViolations(in);
+		CHECK((b & kMeshViolClusterPastRange) != 0u);
+		CHECK((b & kMeshViolClusterStartOob) == 0u);
+	}
+	// P3 簇条目越簇表尾（引擎已有守卫，本判据是给它接声音）+ P8 32 位回绕
+	{
+		auto in = meshClean();
+		// cBase + stride == clustersBytes 是合法的（条目正好占满最后 44B）
+		in.clusterIdx = 2272u;  // 2272*44 = 99968；+44 = 100012 > 100000 → 违例
+		CHECK((meshChainViolations(in) & kMeshViolClusterEntryOob) != 0u);
+		in.clusterIdx = 2271u;  // 2271*44 = 99924；+44 = 99968 ≤ 100000 → 合法
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		// P8：clusterIdx × 44 超过 32 位能表示的范围（引擎原码会回绕、守卫判不出来）
+		in.clusterIdx = 97612893u;  // ×44 = 4294967292 ≤ 0xFFFFFFFF → 不回绕
+		CHECK((meshChainViolations(in) & kMeshViolClusterBaseWrapped) == 0u);
+		in.clusterIdx = 97612894u;  // ×44 = 4294967336 > 0xFFFFFFFF → 回绕
+		CHECK((meshChainViolations(in) & kMeshViolClusterBaseWrapped) != 0u);
+	}
+	// P4 Tris 段越界（原码**无守卫**）
+	{
+		auto in = meshClean();
+		in.triOffset = 20000u - 3u * in.triCount;  // 正好占满 → 合法
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		in.triOffset = 20000u - 3u * in.triCount + 1u;  // 多一字节 → 违例
+		CHECK(meshChainViolations(in) == kMeshViolTriSectionOob);
+	}
+	// P5 Remap 段越界（原码**无守卫**）
+	{
+		auto in = meshClean();
+		in.remapOffset = 8000u / 4u - in.vertCount;  // (2000-15)*4 + 15*4 = 8000 → 合法
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		in.remapOffset = 8000u / 4u - in.vertCount + 1u;
+		CHECK(meshChainViolations(in) == kMeshViolRemapSectionOob);
+	}
+	// P6 顶点池越界 = fault@0 前一次读；P7 局部索引越本簇
+	{
+		auto in = meshClean();
+		in.vb = 100000u - 48u;  // 正好最后一个顶点 → 合法
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		in.vb = 100000u - 48u + 1u;
+		CHECK(meshChainViolations(in) == kMeshViolVertexPoolOob);
+		in = meshClean();
+		in.localIdx = 14u;  // vertCount-1 → 合法
+		CHECK(meshChainViolations(in) == kMeshViolNone);
+		in.localIdx = 15u;  // == vertCount → 违例
+		CHECK(meshChainViolations(in) == kMeshViolLocalIdxPastCluster);
+	}
+	// 🔴 反向门控：条目不可读时，段级两判**必须不评**（shader 那时没读条目，值不存在）
+	{
+		auto in = meshClean();
+		in.clusterIdx = 97612894u;  // 条目必然不可读
+		in.triOffset = 0xFFFFFF00u;  // 故意放会回绕的垃圾值
+		in.triCount = 0xFFFFFFFu;
+		in.remapOffset = 0xFFFFFFF0u;
+		in.vertCount = 0xFFFFFFFu;
+		const uint32_t b = meshChainViolations(in);
+		CHECK((b & kMeshViolClusterEntryOob) != 0u);
+		CHECK((b & kMeshViolTriSectionOob) == 0u);     // 没评 = 不报，与 shader 同形
+		CHECK((b & kMeshViolRemapSectionOob) == 0u);   // 同上
+	}
+	// 组合：真实故障形态"条目在表内但属于别的对象"→ P4/P5 一起中，P1/P3 都不中
+	{
+		auto in = meshClean();
+		in.triOffset = 900000u;  // 远超 trisBytes
+		in.remapOffset = 900000u;
+		const uint32_t b = meshChainViolations(in);
+		CHECK((b & kMeshViolTriSectionOob) != 0u);
+		CHECK((b & kMeshViolRemapSectionOob) != 0u);
+		CHECK((b & (kMeshViolClusterStartOob | kMeshViolClusterEntryOob)) == 0u);
+	}
+}
+
+/** ⑨ mesh 链位段 → 文本：八条都要有名字，未知位不许读成 none。 */
+TEST_CASE("⑨ describeMeshChainViolations 八条各有名字且可归因") {
+	CHECK(describeMeshChainViolations(kMeshViolNone) == "none");
+	CHECK(describeMeshChainViolations(kMeshViolClusterStartOob) == "cluster_start_oob");
+	CHECK(describeMeshChainViolations(kMeshViolVertexPoolOob) == "vertex_pool_oob");
+	CHECK(describeMeshChainViolations(kMeshViolClusterBaseWrapped) == "cluster_base_wrapped");
+	const std::string both =
+		describeMeshChainViolations(kMeshViolTriSectionOob | kMeshViolRemapSectionOob);
+	CHECK(both == "tri_section_oob|remap_section_oob");
+	CHECK(describeMeshChainViolations(1u << 30u) != "none");
+	for (uint32_t bit : {1u << 0, 1u << 1, 1u << 2, 1u << 3, 1u << 4, 1u << 5, 1u << 6, 1u << 7,
+			1u << 8})
+		CHECK(describeMeshChainViolations(bit) != "unknown_bits");
+}
+
+// ───────────── ⑩ latch-once 结构护栏（读 .slang 源本体）─────────────
+
+/** 读源文件并剥掉行注释与块注释后返回。护栏数的是**代码里的**读，注释里提几次都不算。 */
+std::string readSlangStripped(const char* file) {
+	const std::string path = std::string(RGL_SHADER_SRC_DIR) + "/" + file;
+	std::ifstream in(path, std::ios::binary | std::ios::ate);
+	if (!in.good())
+		return {};  // 读不到源 = 护栏空转，下面的 REQUIRE_FALSE(mesh.empty()) 会当场红
+	const size_t size = static_cast<size_t>(in.tellg());
+	in.seekg(0, std::ios::beg);
+	std::string all(size, '\0');
+	in.read(all.data(), static_cast<long>(size));
+	std::string out;
+	out.reserve(all.size());
+	for (size_t i = 0; i < all.size();) {
+		if (all.compare(i, 2, "//") == 0) {
+			const auto nl = all.find('\n', i);
+			if (nl == std::string::npos)
+				break;
+			i = nl;
+			continue;
+		}
+		if (all.compare(i, 2, "/*") == 0) {
+			const auto end = all.find("*/", i + 2);
+			if (end == std::string::npos)
+				break;
+			i = end + 2;
+			continue;
+		}
+		out += all[i++];
+	}
+	return out;
+}
+
+size_t countToken(const std::string& hay, std::string_view needle) {
+	size_t n = 0, pos = 0;
+	while ((pos = hay.find(needle, pos)) != std::string::npos) {
+		++n;
+		pos += needle.size();
+	}
+	return n;
+}
+
+/**
+ * ⑩ **latch-once 结构护栏**：自证变体里"被验的值"必须是**读一次进局部、之后判据与使用共用
+ * 那份拷贝**。这条性质住在 shader 源码里，编译产物与运行时都判不了 ⟹ 只能对源文本下判据
+ * （先例 = `check_shader_deps.py` 的 R5 数裸字节偏移）。
+ *
+ * 🔴 判据为什么长这样：自证支路里 `groupID.x` / `drawID` / `mdiTaskPush.rowBase` 这些原始输入
+ *    **只允许出现在 latch 那一次**；一旦有人把某个使用点改回直读 intrinsic，计数就涨，本用例
+ *    当场红（变异 L1 实测）。注释里的提及不算（已先剥注释）。
+ * 🔴 期望值是**结构**而不是巧合，且逐处归属写在断言旁边：mesh 侧 `groupID.x` 全文 4 处
+ *    = 自证 latch 点 1 + MDI 原版 1 + 非 MDI 出厂支 1 + 原版 half 1。若哪天原版也并回 latch
+ *    （那是改进），这里应当**跟着改数**，不是把断言删掉。
+ */
+TEST_CASE("⑩ latch-once：自证支路只读一次 intrinsic，使用点全走拷贝") {
+	const std::string mesh = readSlangStripped("shadow_meshlet.mesh.slang");
+	const std::string task = readSlangStripped("shadow_meshlet.task.slang");
+	REQUIRE_FALSE(mesh.empty());
+	REQUIRE_FALSE(task.empty());
+
+	// ── mesh：`groupID.x` 全文 4 处，归属**逐处钉死**（少一处或多一处都说明结构变了）──
+	//   L?  const uint latchedSlot = groupID.x;                       ← 自证 latch 点（唯一）
+	//   L?  ... mdiPayload.clusterStart + (groupID.x >> 1u);          ← MDI 原版 #else
+	//   L?  ... shadowMeshletDrawArgs.clusterStart + (groupID.x >> 1u); ← 非 MDI 出厂支
+	//   L?  const uint half = groupID.x & 1u;                          ← 原版 half
+	CHECK(countToken(mesh, "groupID.x") == 4u);
+	CHECK(countToken(mesh, "mdiPayload.objectIndex") == 3u);   // latch 点 + MDI 原版两处解引用
+	CHECK(countToken(mesh, "mdiPayload.clusterStart") == 2u);  // latch 点 + MDI 原版 range 读
+	// 🔴 真正锋利的三条：**自证支路里不许出现任何对 groupID.x 的直接运算**。
+	//    把使用点改回直读 intrinsic（变异 L1）会立刻把下面两条推高。
+	CHECK(countToken(mesh, "groupID.x >> 1u") == 2u);  // 只许出现在两条非自证支
+	CHECK(countToken(mesh, "groupID.x & 1u") == 1u);   // 只许是原版那条 half
+	CHECK(countToken(mesh, "latchedSlot >> 1u") >= 2u);  // 自证的 clusterIdx + P2
+	CHECK(countToken(mesh, "latchedSlot & 1u") == 1u);   // 自证的 half
+	CHECK(countToken(mesh, "latchedSlot") >= 5u);
+	CHECK(countToken(mesh, "latchedObjectIndex") >= 4u);
+
+	// ── task：`drawID` 3 处 = 形参声明 + latch + 原版 #else；`mdiTaskPush.rowBase` 2 处同理 ──
+	CHECK(countToken(task, "drawID") == 3u);
+	CHECK(countToken(task, "mdiTaskPush.rowBase") == 2u);
+	CHECK(countToken(task, "latchedDrawId") >= 3u);
+	CHECK(countToken(task, "latchedRowBase") >= 3u);
+	CHECK(countToken(task, "latchedObjectIndex") >= 4u);
+	// 🔴 反向：判据里**不许**再出现"重算 row"的写法 —— 上一批的 TOCTOU 就来自这一串
+	//    （`row` 曾把 `mdiTaskPush.rowBase + drawID` 又算一遍，而不是复用算 rowBytes 那份）。
+	//    现在它只允许存在于原版 #else 那一处。
+	CHECK(countToken(task, "mdiTaskPush.rowBase + drawID") == 1u);
 }
 
 }  // namespace RGL

@@ -194,8 +194,27 @@ void main(
     //    = "position within the current mesh task"）取值域 [0, meshGroupCount)，**逐值等于**旧的
     //    mesh 组号。★M-3T-a 那版每 task 只发 1 组、groupID.x 恒 0，才不得不从 payload 拿 slot；
     //    本批起两条路径算式**完全同形**（只差身份从 push 还是 payload 来）。
+# ifdef SHADOW_SELFCHECK
+    // 🔴 **latch-once**（本批补的纪律，与 task 侧同源）：payload 三个字段与 `groupID.x` 各读
+    //    **一次**进局部，之后**判据、地址算术、以及真正交出去的计算全部只用这几份拷贝**。
+    //    原版（#else 那支）逐字节不动。
+    //
+    //    为什么必须这样：本自证的全部价值是"我验的就是我要用的那个值"。若判据读一份、
+    //    地址算术再读一份，两次读之间值变了（编译器重 materialize、或上游本身在被并发写），
+    //    摄像头就是在**校验一个没人用的值** —— 它永远不响，而"零违例"会被读成"已排除"。
+    //    这类失效不报错、不崩溃，是本项目最忌的"看起来已完工的半吊子"。
+    const uint latchedObjectIndex = mdiPayload.objectIndex;
+    const uint latchedClusterStart = mdiPayload.clusterStart;
+    const uint latchedSlot = groupID.x;
+    const uint latchedCascade = shadowMeshletDrawArgs.cascadeIndex;
+    const ObjectClusterRange range = readObjectClusterRange(latchedObjectIndex);
+    const uint latchedRangeBase = range.base;
+    const uint latchedRangeCount = range.count;
+    const uint clusterIdx = latchedRangeBase + latchedClusterStart + (latchedSlot >> 1u);
+# else
     const ObjectClusterRange range = readObjectClusterRange(mdiPayload.objectIndex);
     const uint clusterIdx = range.base + mdiPayload.clusterStart + (groupID.x >> 1u);
+# endif
 #else
     // 🔴 clusterStart 在 base 之后加：批 A 的 start 是**相对 base 的偏移**，不是全局簇下标。
     // 🟰 非 MDI 这一支与改前**逐 token 同**（🔴 红线：门关/出厂的**交付图像**逐位不变 = 出厂锚
@@ -207,14 +226,67 @@ void main(
 #endif
     // 半区号：0 = 前 85 三角，1 = 其余。★M-3T-c 起两条路径**共用这一行**（序号来源同为
     // groupID.x，理由见 clusterIdx 处）。非 MDI 这一支的表达式与出厂那份逐 token 同（未动）。
+#if defined(MDI_SHADOW) && defined(SHADOW_SELFCHECK)
+    const uint half = latchedSlot & 1u;  // 🔴 latch-once：用上面那份拷贝，不再读第二次 groupID.x
+#else
     const uint half = groupID.x & 1u;
+#endif
     const uint cBase = clusterIdx * kClusterStride;
+
+    uint clustersBytes;
+    meshletClusters.GetDimensions(clustersBytes);
+
+#if defined(MDI_SHADOW) && defined(SHADOW_SELFCHECK)
+    // ---- 债-140 **mesh 取址链自证**（只在 MDI_SHADOW + SHADOW_SELFCHECK 双定义变体里存在）----
+    //
+    // 判据的**唯一真相源** = `rgl/blackbox.cppm::meshChainViolations`（CPU 镜像，进 just test
+    // 可变异）。这里必须是同一条判据的第二份拼写；改一侧必须同改另一侧。
+    //
+    // 🔴 为什么装在 mesh 而不是继续加在 task：task 只把行表三个 word 抄进 payload，它**读不到**
+    //    ObjectClusterRange（没声明 binding 33）⟹ "clusterStart 的真上界"在 task 里判不了；
+    //    而真正拿这些值解引用的是 mesh。上一批的摄像头装在链的**首端**，故障发生在链的**末端**。
+    //
+    // 🔴 本段刻意放在引擎那道簇表守卫**之前**：守卫命中时 `SetMeshOutputCounts(0,0)` 静默早退
+    //    = "一块不画但没有任何信号"，正是本项目最忌的形态。自证不新增防线，是把已有防线接上声音。
+    uint trisBytes = 0u;
+    uint remapBytes = 0u;
+    uint poolBytes = 0u;
+    meshletTris.GetDimensions(trisBytes);
+    meshletRemap.GetDimensions(remapBytes);
+    meshletVertexPool.GetDimensions(poolBytes);
+    const uint selfWordM = shadowMeshletDrawArgs.clusterStart;  // word2：MDI 下的保留位，task 侧同源
+    const uint objectCapacityM = (selfWordM >> 16u) & 0xFFFFu;
+    uint mbits = 0u;
+    if (latchedObjectIndex >= objectCapacityM)
+        mbits |= 1u;    // P0：mesh 在这里就解引用对象表（range 表 + 后面的矩阵表）
+    if (latchedClusterStart >= latchedRangeCount)
+        mbits |= 2u;    // P1：🔴 clusterStart 的**真**上界（上一批覆盖面清单第 1 条，本批补上）
+    else if (latchedClusterStart + (latchedSlot >> 1u) >= latchedRangeCount)
+        mbits |= 4u;    // P2：起点在区间内，是**派发序号**把它推出去的（×2/选级算术错）
+    if (uint64_t(clusterIdx) * uint64_t(kClusterStride) > uint64_t(0xFFFFFFFF))
+        mbits |= 256u;  // P8：32 位回绕 ⟹ 引擎那道守卫判不出来（防线自身失效）
+    if (uint64_t(clusterIdx) * uint64_t(kClusterStride) +
+            uint64_t(kClusterStride) >
+        uint64_t(clustersBytes))
+        mbits |= 8u;    // P3：簇条目越过簇表尾（引擎已守，但原本静默）
+    // 🔴 `ti == 0u`：这一段 14 个被验值全是 **线程无关** 的 uniform 量（payload / 表读来的
+    //    索引与 buffer 尺寸），而 mesh 入口有 128 线程 ⟹ 实测 RADV 会把同格式的输出按线程
+    //    展开成一行 64 份重复值（标定实测：每字段 n=64 且值全同，5145 字符/行）。限定单线程
+    //    打印**零覆盖损失**，行宽降到 1/64，命中时才读得出数值。
+    if (mbits != 0u && ti == 0u)
+    {
+        printf("MESH_SELFCHECK stage=entry bits=%u cascade=%u obj=%u obj_cap=%u cstart=%u "
+               "range_base=%u range_count=%u slot=%u cluster_idx=%u cbase=%u clusters_bytes=%u "
+               "tris_bytes=%u remap_bytes=%u pool_bytes=%u\n",
+               mbits, latchedCascade, latchedObjectIndex, objectCapacityM, latchedClusterStart,
+               latchedRangeBase, latchedRangeCount, latchedSlot, clusterIdx, cBase, clustersBytes,
+               trisBytes, remapBytes, poolBytes);
+    }
+#endif
 
     // 断言形态 ①（表坏/groupCount 算错的探测器）：簇条目必须整个落在簇表内 → 否则空组。
     // 阴影段的 groupCount 由「选级后的簇数 × 2」派生（批 B2），比主 pass 多一层选级算术，
     // 这条探测器正是为那一层准备的：算错 = 越界簇，宁可一块不画也不读越界内存。
-    uint clustersBytes;
-    meshletClusters.GetDimensions(clustersBytes);
     if (cBase + kClusterStride > clustersBytes) {
         SetMeshOutputCounts(0, 0);
         return;
@@ -223,6 +295,32 @@ void main(
     const uint vertCount = meshletClusters.Load(cBase + 12u);
     const uint triOffset = meshletClusters.Load(cBase + 16u);    // Tris 段**字节**偏移
     const uint remapOffset = meshletClusters.Load(cBase + 20u);  // Remap 段**元素**偏移
+
+#if defined(MDI_SHADOW) && defined(SHADOW_SELFCHECK)
+    // 🔴 段级两判：条目里**存的**那两个偏移，原码从头到尾没验过 —— 条目本身在表内 ≠ 条目里的
+    //    段偏移合法。一个属于别的对象/陈旧的簇条目，能顺利通过守卫①（它在同一张全局簇表里），
+    //    却把 triOffset/remapOffset 指到 buffer 外 ⟹ 后面那些无守卫的 Load 直接踩到 0x0。
+    //    这是 fault@0 最顺的一条通路，也是上一批"零违例"里**根本没被覆盖**的那一段。
+    {
+        uint sbits = 0u;
+        if (uint64_t(triOffset) + uint64_t(3u) * uint64_t(triCount) >
+            uint64_t(trisBytes))
+            sbits |= 16u;  // P4
+        if ((uint64_t(remapOffset) + uint64_t(vertCount)) * uint64_t(4u) >
+            uint64_t(remapBytes))
+            sbits |= 32u;  // P5
+        // 🔴 同上：段级两判的被验值（triOffset/triCount/remapOffset/vertCount 与四个
+        //    GetDimensions）也是线程无关的，单线程打印。
+        if (sbits != 0u && ti == 0u)
+        {
+            printf("MESH_SELFCHECK stage=section bits=%u cascade=%u obj=%u cluster_idx=%u "
+                   "tri_off=%u tri_count=%u vert_count=%u remap_off=%u tris_bytes=%u "
+                   "remap_bytes=%u pool_bytes=%u\n",
+                   sbits, latchedCascade, latchedObjectIndex, clusterIdx, triOffset, triCount,
+                   vertCount, remapOffset, trisBytes, remapBytes, poolBytes);
+        }
+    }
+#endif
 
     // 断言形态 ②（§10.3 ② 的 shader 侧第二道，与着色无关故本管线**照样保留**）：产物契约
     // triCount/vertCount ≤ 128 没变，但去索引下越界的后果 = 「两槽装不下的三角形根本没有
@@ -249,6 +347,12 @@ void main(
     // 之后活跃线程数可小于 numthreads，跨线程同步本来就不许用）⟹ 不存在可重排的结合序。
     // 步长取线程数常量而非写死 128，是为了让"覆盖集 = [0, 3nTri)"与线程数解耦（以后改线程数不用
     // 回来改这里）。
+#if defined(MDI_SHADOW) && defined(SHADOW_SELFCHECK)
+    // 🔴 逐顶点两判各**只报一次**：一次 draw 有 1530 行 × 每行若干 mesh 组 × 每组最多 255 个
+    //    顶点，若逐顶点打，printf 缓冲会被同一类违例灌满、把**首条**（信息量最大的那条）挤掉。
+    bool vertPoolReported = false;
+    bool localIdxReported = false;
+#endif
     for (uint v = ti; v < 3u * nTri; v += kMeshletMaxWorkGroupInvocations) {
         // 去索引：本元素 = 本任务第 v/3 个三角形的第 v%3 个角（与 meshlet.mesh 同法）。
         // 只取位置：depth-only 不着色 ⟹ 法线/uv/切线一个都不读（顶点池里它们就在同一 48B 内，
@@ -256,18 +360,51 @@ void main(
         const uint3 local = loadLocalTri(triOffset, triStart + (v / 3u));
         const uint corner = v % 3u;
         const uint localIdx = corner == 0u ? local.x : (corner == 1u ? local.y : local.z);
+#if defined(MDI_SHADOW) && defined(SHADOW_SELFCHECK)
+        // 🔴 P7 必须在**这次 remap 读之前**：`localIdx` 是从 Tris 段读来的 u8，它直接决定
+        //    `(remapOffset + localIdx) * 4` 落在哪。产物契约要求它 < 本簇 vertCount。
+        if (!localIdxReported && localIdx >= vertCount)
+        {
+            printf("MESH_SELFCHECK stage=localidx bits=128 cascade=%u obj=%u cluster_idx=%u "
+                   "local_idx=%u vert_count=%u remap_off=%u remap_bytes=%u v=%u\n",
+                   latchedCascade, latchedObjectIndex, clusterIdx, localIdx, vertCount,
+                   remapOffset, remapBytes, v);
+            localIdxReported = true;
+        }
+#endif
         const uint vb = meshletRemap.Load((remapOffset + localIdx) * 4u) * kVertexStride;
+#if defined(MDI_SHADOW) && defined(SHADOW_SELFCHECK)
+        // 🔴 P6 就是 fault@0 的**前一次读**：`vb` 来自 remap 里的一个 u32 乘 48，原码对它的
+        //    全部防线是"remap 读回来的值恰好合法"。这一判是整条链上最接近案发现场的摄像头。
+        if (!vertPoolReported && uint64_t(vb) + uint64_t(kVertexStride) >
+                                     uint64_t(poolBytes))
+        {
+            printf("MESH_SELFCHECK stage=pool bits=64 cascade=%u obj=%u cluster_idx=%u vb=%u "
+                   "vstride=%u pool_bytes=%u local_idx=%u remap_off=%u v=%u\n",
+                   latchedCascade, latchedObjectIndex, clusterIdx, vb, kVertexStride, poolBytes,
+                   localIdx, remapOffset, v);
+            vertPoolReported = true;
+        }
+#endif
         const float3 pos = asfloat(meshletVertexPool.Load3(vb));  // @0
 
         // 变换链与 shadow.mesh.slang **逐式同**（两段矩阵：world 在对象矩阵表 @128 已有现成
         // 一份，VP 区是每帧 4 槽定长装不下 per-object 预乘）。列组合走 scene.slang 的
         // worldPos / clipPos（无行/列主序约定歧义）。
 #ifdef MDI_SHADOW
+        // 🔴 latch-once：自证变体里这两次解引用用**上面那份拷贝**（对象矩阵表按 objectIndex 取，
+        //    VP 槽按 cascadeIndex 取），原版仍走原表达式。
+# ifdef SHADOW_SELFCHECK
+        const float3 world = worldPos(readObjectMatrix(latchedObjectIndex), pos);
+        verts[v].position = clipPos(readShadowViewProj(latchedCascade), world);
+# else
         const float3 world = worldPos(readObjectMatrix(mdiPayload.objectIndex), pos);
+        verts[v].position = clipPos(readShadowViewProj(shadowMeshletDrawArgs.cascadeIndex), world);
+# endif
 #else
         const float3 world = worldPos(readObjectMatrix(shadowMeshletDrawArgs.objectIndex), pos);
-#endif
         verts[v].position = clipPos(readShadowViewProj(shadowMeshletDrawArgs.cascadeIndex), world);
+#endif
     }
 
     // 去索引的索引自然连续：本任务第 p 个三角形 = 本组 verts[3p .. 3p+2]。
