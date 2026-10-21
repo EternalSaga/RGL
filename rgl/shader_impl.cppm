@@ -291,33 +291,43 @@ std::optional<std::set<uint32_t>> spvDeclaredBindings(const std::vector<uint32_t
 	return bindings;
 }
 
-/** spvFragmentOutputSignature 定义（契约见接口注释）。只收 storage class = Output(3) 且带
- *  Location(30) 的变量：BuiltIn 输出（FragDepth 等）无 Location，不参与 fragment output
- *  interface 匹配；无 OpTypePointer 的坏结构落 BADPTR（必不与任何合法签名相等）。 */
+namespace {
+
+/** 单个 OpVariable → "loc<N>:<type>" 签名片段，非"带 Location 的输出变量"返回 nullopt。
+ *  只收 storage class = Output(3) 且带 Location(30) 的变量：BuiltIn 输出（FragDepth 等）无
+ *  Location，不参与 fragment output interface 匹配；无 OpTypePointer 的坏结构落 BADPTR
+ *  （必不与任何合法签名相等）。 */
+std::optional<std::string> spvOutputEntry(const SpvModule& mod, const std::vector<uint32_t>& v) {
+	// OpVariable：字 1 = 结果类型、字 2 = 结果 id、字 3 = storage class（3 = Output）
+	if (v.size() < 4 || v[3] != 3)
+		return std::nullopt;
+	std::optional<uint32_t> location;
+	if (auto dIt = mod.decs.find(v[2]); dIt != mod.decs.end())
+		for (const auto& [decKind, operands] : dIt->second)
+			if (decKind == kDecorationLocation && !operands.empty())
+				location = operands[0];
+	if (!location)
+		return std::nullopt;
+	auto pIt = mod.defs.find(v[1]);
+	const std::string type = (pIt != mod.defs.end()
+		&& (pIt->second[0] & 0xFFFFu) == kOpTypePointer && pIt->second.size() >= 4)
+		? spvTypeToken(mod, pIt->second[3], 0)
+		: "BADPTR";
+	return "loc" + std::to_string(*location) + ":" + type;
+}
+
+}  // namespace
+
+/** spvFragmentOutputSignature 定义（契约见接口注释）。逐变量判据 → spvOutputEntry。 */
 std::string spvFragmentOutputSignature(const std::vector<uint32_t>& spv) {
 	SpvModule mod;
 	std::vector<std::string> tokens;  // 本函数不消费签名 token，仅满足 spvSplit 出参
 	if (!spvSplit(spv, mod, tokens))
 		return "SPV_CORRUPT";
 	std::vector<std::string> outs;
-	for (const auto& v : mod.variables) {
-		// OpVariable：字 1 = 结果类型、字 2 = 结果 id、字 3 = storage class（3 = Output）
-		if (v.size() < 4 || v[3] != 3)
-			continue;
-		std::optional<uint32_t> location;
-		if (auto dIt = mod.decs.find(v[2]); dIt != mod.decs.end())
-			for (const auto& [decKind, operands] : dIt->second)
-				if (decKind == kDecorationLocation && !operands.empty())
-					location = operands[0];
-		if (!location)
-			continue;
-		auto pIt = mod.defs.find(v[1]);
-		const std::string type = (pIt != mod.defs.end()
-			&& (pIt->second[0] & 0xFFFFu) == kOpTypePointer && pIt->second.size() >= 4)
-			? spvTypeToken(mod, pIt->second[3], 0)
-			: "BADPTR";
-		outs.push_back("loc" + std::to_string(*location) + ":" + type);
-	}
+	for (const auto& v : mod.variables)
+		if (auto entry = spvOutputEntry(mod, v))
+			outs.push_back(*entry);
 	std::sort(outs.begin(), outs.end());
 	std::string sig;
 	for (const auto& t : outs) {
