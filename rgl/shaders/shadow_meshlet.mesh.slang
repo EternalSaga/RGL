@@ -84,6 +84,9 @@ struct MdiShadowPayload
 {
     uint objectIndex;
     uint clusterStart;
+    // 债-143：行 mesh 组数上界（task 从行 word[5] 原样转交）。mesh 侧的钳制用它，
+    // 🔴 与 task 那份**逐字段同构**（字段序即契约，改一侧必同改另一侧）。
+    uint meshGroupCount;
 };
 #endif
 
@@ -205,6 +208,7 @@ void main(
     //    这类失效不报错、不崩溃，是本项目最忌的"看起来已完工的半吊子"。
     const uint latchedObjectIndex = mdiPayload.objectIndex;
     const uint latchedClusterStart = mdiPayload.clusterStart;
+    const uint latchedMeshGroupCount = mdiPayload.meshGroupCount;  // 债-143 钳制上界（latch 一次）
     const uint latchedSlot = groupID.x;
     const uint latchedCascade = shadowMeshletDrawArgs.cascadeIndex;
     const ObjectClusterRange range = readObjectClusterRange(latchedObjectIndex);
@@ -282,6 +286,27 @@ void main(
                latchedRangeBase, latchedRangeCount, latchedSlot, clusterIdx, cBase, clustersBytes,
                trisBytes, remapBytes, poolBytes);
     }
+#endif
+
+    // 🔴 **债-143 钳制**（仅 MDI 两支；非 MDI 出厂支一个字节不碰）：`groupID.x ≥ 行 meshGroupCount`
+    // 的组**本行根本没要**——spec 承诺 WorkgroupId ∈ [0, EmitMeshTasksEXT 的 X)，但 gfx1151 的
+    // task→mesh 派发实测偶发超发（三探针定案 → docs/债140_跨驱动与上游取证.md §17）。不钳制时
+    // 这种组拿 `base + clusterStart + (slot>>1)` 读到**隔壁对象的簇条目**去画 = P2 命中。
+    // 钳制 = 它们按"没要过"空转，图像不再被驱动超发污染；引擎不再裸信那条 spec 承诺。
+    // 🔴 自证变体里本钳制刻意装在摄像头**之后**：P2 照响，那是"上游缺陷仍在"的活体证据——
+    //    防线可以加，摄像头不许被修复弄盲（"修了 = 看不见了"正是本项目最忌的形态）。
+#ifdef MDI_SHADOW
+# if defined(SHADOW_SELFCHECK)
+    if (latchedSlot >= latchedMeshGroupCount) {
+        SetMeshOutputCounts(0, 0);
+        return;
+    }
+# else
+    if (groupID.x >= mdiPayload.meshGroupCount) {
+        SetMeshOutputCounts(0, 0);
+        return;
+    }
+# endif
 #endif
 
     // 断言形态 ①（表坏/groupCount 算错的探测器）：簇条目必须整个落在簇表内 → 否则空组。

@@ -5,7 +5,7 @@ import frame_draw_list;      // FrameDrawList / MdiShadowSegment
 import meshlet_shadow_args;  // MeshletShadowArgsService（heap 槽台账）
 
 /**
- * shadow_blackbox —— 债-140 **A1 黑匣子**的引擎侧接线（rlframe）
+ * shadow_blackbox —— 债-140 **A1 黑匣子**与债-143 **常开行表审计**的引擎侧接线（rlframe）
  *
  * ## 为什么单独成一个模块（而不是写在 `vkrenderer_passrec.cppm` 里）
  * 填一帧记录要读 `MdiShadowSegment` 的十个字段 + 算摘要 + 取槽台账，实测 43 行代码 ——
@@ -40,5 +40,30 @@ namespace RGL {
  */
 export void recordShadowMdiBlackbox(const FrameDrawList& list, uint64_t frame,
 	const MeshletShadowArgsService* args);
+
+/**
+ * 债-143 **CPU 断言**（常开审计，🔴 不经任何门）：逐帧检查本帧**实际建出的** MDI 阴影行，
+ * 每行「`clusterStart` + 最大簇内序」必须落在该对象 `ObjectClusterRange::count` 内
+ * （判据唯一真相源 = `blackbox::shadowRowRangeViolations`，与 GPU P2 同一条的第二份拼写）。
+ *
+ * ## 为什么装在 upload 之前的这里，而不是装配期的选级落表循环
+ * 落表循环只能查**表**（`lodTable` vs `ClusterRangeTable`，静态、启动期一次）；这里查的是
+ * **行**——行是每帧从候选重拼的成品（word[3]/[4]/[5] 三列），表对了行仍可能错（构建器漂移、
+ * 未来任何动态表形态）。且此处帧号、行字节、scene data 区间表镜像三样同时在场，
+ * WARN 的上下文能与 GPU `MESH_SELFCHECK` 的字段逐项对上（同源判定的抓手）。
+ *
+ * ## 观测者效应下界
+ * 只读不写不拦（违例照上传——本断言是摄像头不是闸门，②的修复落地前不许改变任何行为）；
+ * 每帧每行一次 64 位加法 + 一次比较（≤ 4773 行/帧，纳秒级）；通过时不逐帧出声，
+ * 装桩证据 = 首次有段可审时一行 INFO（先例 = 黑匣子开录 / heap_slot_audit）。
+ *
+ * ## 限流
+ * 违例通常是**静态的**（同一批行每帧同形）⟹ 每帧只 WARN 前 `kAuditWarnPerFrame` 条，
+ * 超出并入一条总数行（总数恒出声，限流只限明细——"总量在不在"不许被限掉）。
+ *
+ * @param list  本帧 draw list（`mdiSegments` 空 = 门关/回落 = 无行可审 = 静默返回）
+ * @param frame 帧号（`FrameSession::frameNumber()`，与黑匣子同口径）
+ */
+export void auditShadowMdiRows(const FrameDrawList& list, uint64_t frame);
 
 }  // namespace RGL

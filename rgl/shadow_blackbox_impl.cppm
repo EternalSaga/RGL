@@ -7,6 +7,7 @@ import rllogger;
 import blackbox;          // 帧记录类型 + 摘要 + 落盘（纯逻辑全在那边）
 import mdi_rows;          // kMdiShadowRowStride（按步长切行，不在这里抄 24）
 import diagnostics;       // blackbox / dgc_static / shader_selfcheck 三枚门
+import scene_forward_types_generated;  // ObjectClusterRange（债-143 审计读区间表镜像的条目）
 
 namespace RGL {
 
@@ -90,6 +91,81 @@ void recordShadowMdiBlackbox(const FrameDrawList& list, uint64_t frame,
 	warnIfTruncated(list.mdiSegments.size(), i);
 	fillHeapSlots(rec, args);
 	blackboxRecord(rec);
+}
+
+namespace {
+
+/** 每帧 WARN 明细上限（限流口径 → 接口注释；总数行不受限）。 */
+constexpr uint32_t kAuditWarnPerFrame = 5u;
+
+/**
+ * 装桩证据（只一次）：通过时不逐帧出声，没有这行，"零 WARN"就分不清"审了没问题"与
+ * "根本没接上"——上两批都踩过这条（blackbox 开录行 / heap_slot_audit 首调行，同先例）。
+ */
+void noteAuditInstalled(RLLogger* logger) {
+	static bool installed = false;
+	if (installed || logger == nullptr)
+		return;
+	installed = true;
+	logger->info("meshlet: 债-143 行表审计已装桩（常开，不经门）—— 逐帧审 gcX>0 的行："
+	             "clusterStart + 最大簇内序 ≤ ObjectClusterRange::count（64 位），"
+	             "每帧明细限 {} 条 + 总数行",
+		kAuditWarnPerFrame);
+}
+
+/**
+ * 审一行并出声（明细限流由调用方累计的 totalSoFar 决定）。
+ * @return 本行是否违例（1/0，供总数累计——"总量在不在"不许被限掉）
+ */
+uint32_t auditRow(RLLogger* logger, uint64_t frame, const MdiShadowSegment& seg, size_t i,
+	std::span<const ObjectClusterRange> ranges, uint32_t totalSoFar) {
+	const MdiShadowRow& row = seg.rows[i];
+	// 只审 gcX>0 的行 = GPU 真会读的那些（不可见行根本不启动 task，与 mesh 摄像头同一口径；
+	// 黑匣子已逐帧记全行摘要，病态空行逃不过事后复盘）。
+	if (row.groupCountX == 0u)
+		return 0u;
+	const bool entryExists = row.objectIndex < ranges.size();
+	// 越界行的 rangeCount 给 0（区间条目不存在）⟹ 要簇的行两条位同响 = "行整个指错"报满。
+	const ObjectClusterRange range =
+	    entryExists ? ranges[row.objectIndex] : ObjectClusterRange {};
+	const uint32_t bits = shadowRowRangeViolations(ShadowRowRangeInput {
+		.objectIndex = row.objectIndex,
+		.objectCapacity = static_cast<uint32_t>(ranges.size()),
+		.clusterStart = row.clusterStart,
+		.meshGroupCount = row.meshGroupCount,
+		.rangeCount = range.count,
+	});
+	if (bits == kRowRangeViolNone)
+		return 0u;
+	if (totalSoFar < kAuditWarnPerFrame && logger != nullptr) {
+		// 字段名与 GPU MESH_SELFCHECK 的 printf 逐项同名（obj/cstart/range_base/range_count），
+		// 同源对账 = 两侧 grep 同一个词比数值。
+		logger->warn("meshlet: DEBT143_AUDIT frame={} cascade={} row={} obj={} cstart={} mgc={} "
+		             "range_base={} range_count={} need={} kind={}",
+			frame, seg.cascadeIndex, seg.firstRow + static_cast<uint32_t>(i), row.objectIndex,
+			row.clusterStart, row.meshGroupCount, range.base, range.count,
+			shadowRowRangeNeeded(row.clusterStart, row.meshGroupCount),
+			describeShadowRowRangeViolations(bits));
+	}
+	return 1u;
+}
+
+}  // namespace
+
+void auditShadowMdiRows(const FrameDrawList& list, uint64_t frame) {
+	if (list.mdiSegments.empty())
+		return;  // 门关 / 回落 = 无行可审（静默；"没段"与"审了没问题"的区分靠装桩 INFO）
+	auto* logger = RLLogger::getInstance();
+	noteAuditInstalled(logger);
+	const auto& ranges = list.sceneData.clusterRanges;
+	uint32_t total = 0u;
+	for (const auto& seg : list.mdiSegments)
+		for (size_t i = 0u; i < seg.rows.size(); ++i)
+			total += auditRow(logger, frame, seg, i, ranges, total);
+	if (total > kAuditWarnPerFrame && logger != nullptr)
+		logger->warn("meshlet: DEBT143_AUDIT frame={} 本帧共 {} 条违例，明细只出前 {} 条（限流，"
+		             "总数不受限）",
+			frame, total, kAuditWarnPerFrame);
 }
 
 }  // namespace RGL

@@ -423,6 +423,8 @@ void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlo
 	recordShadowMdiBlackbox(list, session.frameNumber(), mdiShadowArgs);
 	if (list.mdiSegments.empty())
 		return;  // 门关 / 回落 = 零 upload 零新命令（逐位不变的构造性保证；首行判空即全退）
+	// 债-143 CPU 断言（常开，不经门；只读不拦，口径与限流 → shadow_blackbox 接口注释）。
+	auditShadowMdiRows(list, session.frameNumber());
 	// 🔴 雷 3 定案：以下每一条按构造都不可达（采集期预检全数拦下 + 装配层同点接线），
 	// 到达 = 接线 bug，一律 throw —— upload 被拒后照常提交 = GPU 拿陈旧行表画影子，
 	// 「画面错但没有任何信号」正是 §19.8 第 3 条与债-105 反复堵的形态。

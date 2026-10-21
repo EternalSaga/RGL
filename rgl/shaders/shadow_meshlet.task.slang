@@ -69,6 +69,11 @@ struct MdiShadowPayload
 {
     uint objectIndex;   // 行 word[3] = MeshRef.objectSlot ⟹ mesh 侧 readObjectClusterRange 的下标
     uint clusterStart;  // 行 word[4] = 🔴 **相对 ObjectClusterRange::base 的偏移**（不是全局簇下标）
+    // 债-143：行的 mesh 组数**上界**随身份一起交出去，mesh 侧据此钳制 `groupID.x ≥ meshGroupCount`
+    // 的组。spec 保证这种组不存在（WorkgroupId ∈ [0, EmitMeshTasksEXT 的 X)）；本机 RADV/gfx1151
+    // 的 task→mesh 派发实测偶发超发 ⟹ 引擎不再裸信那条承诺（判据与三探针读数 →
+    // docs/债140_跨驱动与上游取证.md §17）。
+    uint meshGroupCount;
 };
 
 // task 侧的 push 视图：只有 word0（= 行基址 rowBase），理由见文件头。
@@ -130,6 +135,7 @@ void main(uint drawID : SV_DrawIndex)
     MdiShadowPayload p;
     p.objectIndex = latchedObjectIndex;   // 🔴 payload 交出去的就是这份拷贝
     p.clusterStart = latchedClusterStart; // 🔴 判据验的也是这份拷贝
+    p.meshGroupCount = meshGroupCount;    // 债-143 钳制上界（同为 latch 的那份）
 #else
     const uint rowBytes = (mdiTaskPush.rowBase + drawID) * kMdiShadowRowStrideBytes;
     const uint meshGroupCount = mdiShadowArgs.Load(rowBytes + kMdiShadowMeshGroupCountByteOffset);
@@ -137,6 +143,7 @@ void main(uint drawID : SV_DrawIndex)
     MdiShadowPayload p;
     p.objectIndex = mdiShadowArgs.Load(rowBytes + kMdiShadowObjectIndexByteOffset);
     p.clusterStart = mdiShadowArgs.Load(rowBytes + kMdiShadowClusterStartByteOffset);
+    p.meshGroupCount = meshGroupCount;  // 债-143 钳制上界（与 DispatchMesh 的 X 同一个数）
 #endif
 
 #ifdef SHADOW_SELFCHECK

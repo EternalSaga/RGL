@@ -417,4 +417,60 @@ export [[nodiscard]] uint32_t meshChainViolations(const MeshChainCheckInput& in)
  */
 export [[nodiscard]] std::string describeMeshChainViolations(uint32_t bits);
 
+/**
+ * ## 债-143 CPU 断言：「行要的簇数不得超出对象簇区间」的输入（**常开审计**，非门）
+ *
+ * 破的不变量（`ab/meshcheck/MESH_READINGS.md` §0，mesh 自证 P2 `cluster_past_range` 的 CPU 对偶）：
+ * `clusterStart + 最大簇内序` 必须落在 `[0, ObjectClusterRange::count)` 内。GPU 侧 P2 逐槽判
+ * （每个 groupID.x 判一次），CPU 侧一次判**整行**——行要的簇内序上界 = `(meshGroupCount−1)>>1`
+ * （mesh 的 `groupID.x` 取值域 = `[0, meshGroupCount)`，spec 语义 = 本 task 内的组位置），
+ * 该行全部槽合法 ⟺ `needed = clusterStart + 最大簇内序 + 1 ≤ rangeCount`。
+ *
+ * 🔴 为什么从 `meshGroupCount` 推簇数、不写 `meshGroupCount / kSlotsPerCluster`：
+ * ×2 的唯一真相源在 `meshletTaskCount`（`mdi_rows` / `meshlet_lod` 文件头各立过一次规矩），
+ * 这里再拼一遍除法 = 第三个真相源；`(mgc−1)>>1` 吃的是**行里的成品数**，与 GPU 读的同一个数。
+ * 顺带白拿一条性质：奇数 mgc（表与行分家的病态形态）也按"实际会派发多少组"判，不整除丢尾。
+ *
+ * 🔴 算术一律 64 位（同 `meshChainViolations` 的纪律）：`clusterStart + 最大簇内序 + 1` 在
+ * 32 位下可回绕成小值，把"越界"判成"没越界" = 假阴，正是本案最怕的失效形态。
+ */
+export struct ShadowRowRangeInput {
+	uint32_t objectIndex = 0u;      ///< 行 word[3] = MeshRef.objectSlot
+	uint32_t objectCapacity = 0u;   ///< scene data 簇区间表镜像的条目数（越界 = 行指向不存在的区间条目）
+	uint32_t clusterStart = 0u;     ///< 行 word[4]（**相对 range.base 的偏移**，不是全局簇下标）
+	uint32_t meshGroupCount = 0u;   ///< 行 word[5]（mesh 组数成品；0 = 不派发 = 无从违例）
+	uint32_t rangeCount = 0u;       ///< `ObjectClusterRange::count`（真上界）；objectIndex 越界时调用方给 0
+};
+
+/** 债-143 CPU 断言的位段（编号独立于 `kMeshViol*`，短串名与 GPU P2 同名便于跨侧 grep）。 */
+export inline constexpr uint32_t kRowRangeViolNone = 0u;
+export inline constexpr uint32_t kRowRangeViolObjectOob = 1u << 0;  ///< objectIndex ≥ 区间表容量（区间条目不存在）
+export inline constexpr uint32_t kRowRangeViolPastRange = 1u << 1;  ///< 行要的簇数超出区间（= GPU P2 的 CPU 对偶）
+
+/**
+ * 一行从 `range.base` 起**要到的簇数**（**纯函数**，64 位；判据与 WARN 共用同一表达式，
+ * 两处各算一遍迟早漂）。`meshGroupCount == 0` = 不派发任何组 = 返回 0（恒不违例）。
+ * @param clusterStart   行 word[4]
+ * @param meshGroupCount 行 word[5]
+ * @return `clusterStart + ((meshGroupCount−1)>>1) + 1`（64 位，无回绕）
+ */
+export [[nodiscard]] uint64_t shadowRowRangeNeeded(uint32_t clusterStart, uint32_t meshGroupCount);
+
+/**
+ * 债-143 CPU 断言本体（**纯函数**；常开接线在 `shadow_blackbox::auditShadowMdiRows`）。
+ *
+ * 两条判据**各自独立评**（不像 shader 的 P1/P2 互斥——CPU 侧 objectIndex 越界时调用方给
+ * rangeCount=0，两条同响反而把"行整个指错"的形态报满，归因更干净）。
+ * @param in 行三 word + 区间事实
+ * @return `kRowRangeViol*` 的按位或
+ */
+export [[nodiscard]] uint32_t shadowRowRangeViolations(const ShadowRowRangeInput& in);
+
+/**
+ * 债-143 违例位段 → 可归因短串（**纯函数**）。
+ * @param bits `shadowRowRangeViolations` 的返回
+ * @return 形如 `cluster_past_range`；无位 = `none`；有位无名 = `unknown_bits`
+ */
+export [[nodiscard]] std::string describeShadowRowRangeViolations(uint32_t bits);
+
 }  // namespace RGL

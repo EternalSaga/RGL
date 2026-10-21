@@ -215,6 +215,45 @@ std::string describeMeshChainViolations(uint32_t bits) {
 	return out.empty() ? "unknown_bits" : out;  // 有位但没名字 = 位段与描述分家，出声
 }
 
+uint64_t shadowRowRangeNeeded(uint32_t clusterStart, uint32_t meshGroupCount) {
+	// 最大簇内序 = 最后一个组的 `groupID.x >> 1`（取值域 [0, meshGroupCount) ⟹ 上界组号
+	// = meshGroupCount−1）。🔴 全式 64 位：32 位下 `0xFFFFFFFF + 0 + 1` 回绕成 0 =
+	// "越界"被判成"没越界"（假阴，本案最怕）。meshGroupCount == 0 = 不派发 = 要 0 个。
+	if (meshGroupCount == 0u)
+		return 0u;
+	const uint64_t maxIntra = (static_cast<uint64_t>(meshGroupCount) - 1u) >> 1u;
+	return static_cast<uint64_t>(clusterStart) + maxIntra + 1u;
+}
+
+uint32_t shadowRowRangeViolations(const ShadowRowRangeInput& in) {
+	// 两条独立评（不做互斥早退），理由 → 接口注释。rangeCount 由调用方按 objectIndex 是否
+	// 在区间表内给出（越界给 0 ⟹ 任何要簇的行两条同响 = "行整个指错"报满）。
+	uint32_t bits = kRowRangeViolNone;
+	if (in.objectIndex >= in.objectCapacity)
+		bits |= kRowRangeViolObjectOob;
+	if (shadowRowRangeNeeded(in.clusterStart, in.meshGroupCount) > in.rangeCount)
+		bits |= kRowRangeViolPastRange;
+	return bits;
+}
+
+std::string describeShadowRowRangeViolations(uint32_t bits) {
+	if (bits == kRowRangeViolNone)
+		return "none";
+	std::string out;
+	const auto add = [&](const char* name, uint32_t bit) {
+		if (!(bits & bit))
+			return;
+		if (!out.empty())
+			out += '|';
+		out += name;
+	};
+	// 🔴 `cluster_past_range` 与 GPU P2（describeMeshChainViolations 同名项）**必须同名**——
+	//    本断言的全部价值是"CPU 与 GPU 各响一次、grep 同一个词对上下两条"，改名 = 拆桥。
+	add("object_index_oob", kRowRangeViolObjectOob);
+	add("cluster_past_range", kRowRangeViolPastRange);
+	return out.empty() ? "unknown_bits" : out;  // 有位但没名字 = 位段与描述分家，出声
+}
+
 namespace {
 
 /**

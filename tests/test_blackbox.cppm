@@ -23,13 +23,15 @@ module;
  * 五条谓词每条都要"最小违例 + 相邻合法界"两半。只测违例侧，`>=` 改成 `>` 不会红；
  * 只测 gcY 不测 gcZ，把 `||` 写成 `&&` 也不会红（skill：对称判据的每一半边各要一条）。
  *
- * ## 变异红线声明（**两批合计 21 条，全部抓到，21/21**）
+ * ## 变异红线声明（**三批合计 28 条，全部抓到，28/28**）
  *
- * 上一批（task 侧 + 黑匣子编码）**11/11**，2026-10-21 实测：原文读数 =
+ * 上上批（task 侧 + 黑匣子编码）**11/11**，2026-10-21 实测：原文读数 =
  * `ab/blackbox/mutate_results.txt`，harness = `ab/blackbox/mutate_blackbox.py`。
- * 本批（mesh 取址链 + latch-once）**10/10**，同日晚些：原文读数 =
+ * 上批（mesh 取址链 + latch-once）**10/10**，同日晚些：原文读数 =
  * `ab/meshcheck/mutate_results.txt`，harness = `ab/meshcheck/mutate_mesh.py`。
- * 本文件共 **11** 条 TEST_CASE（编号 ①–⑩，含 ④b）。
+ * 本批（债-143 CPU 断言 ⑪⑫ + 钳制护栏）**7/7**，2026-10-22 实测：原文读数 =
+ * `ab/debt143/mutate_results_merged.txt`，harness = `ab/debt143/mutate_debt143.py`。
+ * 本文件共 **13** 条 TEST_CASE（编号 ①–⑫，含 ④b）。
  *
  * 方法学六条防线（skill `rgl-test-discipline`）全部落在 harness 里：`shutil.copyfile`
  * （**不带 mtime**）+ 还原后 `touch`；显式 `cmake --build build --target rgl_tests`
@@ -62,6 +64,13 @@ module;
  * | L1 | 🔴 mesh 自证的 `clusterIdx` 改回直读 `groupID.x` | 🔯 ⑩ |
  * | L2 | 🔴 mesh 自证的 `half` 改回直读 `groupID.x` | 🔯 ⑩ |
  * | L3 | 🔴 task 谓词 1 改回直读 `drawID`（判据与取数可能不同行）| 🔯 ⑩ |
+ * | R1 | 债-143 判据 `>` → `>=`（needed == rangeCount 的合法界被误判）| 🔯 ⑪ |
+ * | R2 | needed 丢掉 maxIntra 项（只看起点，多要几簇看不见）| 🔯 ⑪ |
+ * | R3 | 🔴 needed 改 32 位算术（回绕把"越界"判成"没越界"= 假阴）| 🔯 ⑪ |
+ * | R4 | describe 漏 `cluster_past_range` 的名字（CPU↔GPU 同名桥断）| 🔯 ⑫ |
+ * | R5 | 最大簇内序 `(mgc−1)>>1` → `mgc>>1`（偶数组多算一簇）| 🔯 ⑪ |
+ * | R6 | mgc=0 早退由 0 改 1（不派发的行也报违例 = 反向用例响）| 🔯 ⑪ |
+ * | R7 | 🔴 钳制 `>=` → `>`（超发第一组漏网 = 修复本体被弱化；不重编即红）| 🔯 ⑩ |
  *
  * 🔴 读数里值得注意的四点：① **每条变异都只红一条用例**（红用例数恒 =1），说明各条用例
  * 之间没有互相兜底——去掉哪条判据就只有那条用例响，这既是好事（归因干净）也意味着
@@ -622,21 +631,33 @@ TEST_CASE("⑩ latch-once：自证支路只读一次 intrinsic，使用点全走
 	REQUIRE_FALSE(mesh.empty());
 	REQUIRE_FALSE(task.empty());
 
-	// ── mesh：`groupID.x` 全文 4 处，归属**逐处钉死**（少一处或多一处都说明结构变了）──
+	// ── mesh：`groupID.x` 全文 5 处，归属**逐处钉死**（少一处或多一处都说明结构变了）──
 	//   L?  const uint latchedSlot = groupID.x;                       ← 自证 latch 点（唯一）
 	//   L?  ... mdiPayload.clusterStart + (groupID.x >> 1u);          ← MDI 原版 #else
 	//   L?  ... shadowMeshletDrawArgs.clusterStart + (groupID.x >> 1u); ← 非 MDI 出厂支
 	//   L?  const uint half = groupID.x & 1u;                          ← 原版 half
-	CHECK(countToken(mesh, "groupID.x") == 4u);
+	//   L?  if (groupID.x >= mdiPayload.meshGroupCount)                ← 债-143 原版钳制
+	CHECK(countToken(mesh, "groupID.x") == 5u);
 	CHECK(countToken(mesh, "mdiPayload.objectIndex") == 3u);   // latch 点 + MDI 原版两处解引用
 	CHECK(countToken(mesh, "mdiPayload.clusterStart") == 2u);  // latch 点 + MDI 原版 range 读
+	// 🔴 债-143 钳制的结构护栏：payload 上界的**同构声明两侧各一处**、task 两支各写一次、
+	//    mesh 两支各钳一次（自证支走 latch 拷贝、原版走 payload 直读——原版没有 latch 纪律，
+	//    它与自证支的差异**只剩身份来源**这条既有口径不许被破坏）。
+	CHECK(countToken(mesh, "mdiPayload.meshGroupCount") == 2u);    // 自证 latch 点 + 原版钳制
+	CHECK(countToken(mesh, "latchedMeshGroupCount") == 2u);        // latch 点 + 自证钳制
+	CHECK(countToken(mesh, "uint meshGroupCount;") == 1u);
+	CHECK(countToken(task, "uint meshGroupCount;") == 1u);
+	CHECK(countToken(task, "p.meshGroupCount") == 2u);             // 自证支 + 原版各写一次
+	// 🔴 钳制的**精确形态**各钉一条（`>=` 改成 `>` = 超发的第一组漏网，这里当场红）：
+	CHECK(countToken(mesh, "if (latchedSlot >= latchedMeshGroupCount) {") == 1u);
+	CHECK(countToken(mesh, "if (groupID.x >= mdiPayload.meshGroupCount) {") == 1u);
 	// 🔴 真正锋利的三条：**自证支路里不许出现任何对 groupID.x 的直接运算**。
 	//    把使用点改回直读 intrinsic（变异 L1）会立刻把下面两条推高。
 	CHECK(countToken(mesh, "groupID.x >> 1u") == 2u);  // 只许出现在两条非自证支
 	CHECK(countToken(mesh, "groupID.x & 1u") == 1u);   // 只许是原版那条 half
 	CHECK(countToken(mesh, "latchedSlot >> 1u") >= 2u);  // 自证的 clusterIdx + P2
 	CHECK(countToken(mesh, "latchedSlot & 1u") == 1u);   // 自证的 half
-	CHECK(countToken(mesh, "latchedSlot") >= 5u);
+	CHECK(countToken(mesh, "latchedSlot") >= 6u);  // latch + clusterIdx + P2 + half + 债-143 钳制
 	CHECK(countToken(mesh, "latchedObjectIndex") >= 4u);
 
 	// ── task：`drawID` 3 处 = 形参声明 + latch + 原版 #else；`mdiTaskPush.rowBase` 2 处同理 ──
@@ -649,6 +670,110 @@ TEST_CASE("⑩ latch-once：自证支路只读一次 intrinsic，使用点全走
 	//    （`row` 曾把 `mdiTaskPush.rowBase + drawID` 又算一遍，而不是复用算 rowBytes 那份）。
 	//    现在它只允许存在于原版 #else 那一处。
 	CHECK(countToken(task, "mdiTaskPush.rowBase + drawID") == 1u);
+}
+
+// ───────────── ⑪⑫ 债-143 CPU 断言（行要的簇数 ≤ 对象簇区间）─────────────
+
+/**
+ * 债-143 审计的**合法基准行**（⑪ 的每一条都在它之上只动一个字段）。
+ * 数值取的是实机命中现场：obj=681 / range_base=22277 / range_count=1 / cstart=0，
+ * 但 mgc 取**合法值 2**（1 簇 × 2 槽）——GPU 抓到的形态是 mgc≥4，那正是违例侧。
+ */
+ShadowRowRangeInput rowClean() {
+	return ShadowRowRangeInput {
+		.objectIndex = 681u, .objectCapacity = 4096u, .clusterStart = 0u,
+		.meshGroupCount = 2u, .rangeCount = 1u,
+	};
+}
+
+/**
+ * ⑪ **债-143 CPU 断言**（mesh 自证 P2 的 CPU 对偶，常开审计的判据本体）。
+ *
+ * 纪律同 ⑥⑧：每条判据"最小违例 + 相邻合法界"两半（只测违例侧则 `>` 写成 `>=` 不红）；
+ * 反向用例（mgc=0 不许响）钉"没触发"与"坏掉了"可区分；64 位那条钉回绕假阴——
+ * `needed` 的期望值全部**手算闭式**（= clusterStart + ((mgc−1)>>1) + 1），不抄被测码。
+ */
+TEST_CASE("⑪ shadowRowRangeViolations 最小违例 + 相邻合法界 + needed 闭式 + 64 位不回绕") {
+	// 基准态必须零位（单簇对象 + 2 组 = 恰好填满区间）
+	CHECK(shadowRowRangeViolations(rowClean()) == kRowRangeViolNone);
+
+	// needed 闭式（期望值 = 手算，出处是接口注释里的数学契约）：
+	//   mgc=0 → 0（不派发）；mgc=1/2 → cstart+1；mgc=3/4 → cstart+2；奇数不整除丢尾
+	CHECK(shadowRowRangeNeeded(0u, 0u) == 0u);
+	CHECK(shadowRowRangeNeeded(0u, 1u) == 1u);
+	CHECK(shadowRowRangeNeeded(0u, 2u) == 1u);
+	CHECK(shadowRowRangeNeeded(0u, 3u) == 2u);
+	CHECK(shadowRowRangeNeeded(0u, 4u) == 2u);
+	CHECK(shadowRowRangeNeeded(35u, 2u) == 36u);  // obj=774 的合法形态（区间 36 恰好填满）
+	CHECK(shadowRowRangeNeeded(35u, 4u) == 37u);  // 同现场多要 1 簇 = GPU 命中的形态
+
+	// past_range 边界对（区间 1 簇）：mgc=2 合法 / mgc=4 违例（要 2 簇）
+	{
+		auto in = rowClean();
+		in.meshGroupCount = 4u;
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolPastRange);
+		in.meshGroupCount = 3u;  // 奇数组（表与行分家的病态形态）也按实际派发量判
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolPastRange);
+		in.meshGroupCount = 2u;
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolNone);
+	}
+	// 大区间尾例（obj=774 现场：cstart=35 / rc=36）：界上合法、越一簇违例
+	{
+		auto in = rowClean();
+		in.clusterStart = 35u;
+		in.rangeCount = 36u;
+		in.meshGroupCount = 2u;
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolNone);  // needed=36 == rc → 合法
+		in.meshGroupCount = 4u;
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolPastRange);  // needed=37 > 36
+	}
+	// 反向用例：mgc=0 = 不派发任何组 = **恒不违例**（哪怕区间是 0）
+	{
+		auto in = rowClean();
+		in.meshGroupCount = 0u;
+		in.rangeCount = 0u;
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolNone);
+	}
+	// object_oob：上界是**开区间**（capacity−1 合法，capacity 违例）
+	{
+		auto in = rowClean();
+		in.objectIndex = 4095u;
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolNone);
+		in.objectIndex = 4096u;
+		in.rangeCount = 0u;  // 区间条目不存在，调用方给 0（接线口径 → auditShadowMdiRows）
+		CHECK(shadowRowRangeViolations(in)
+		    == (kRowRangeViolObjectOob | kRowRangeViolPastRange));  // 要簇的行两条同响
+		in.meshGroupCount = 0u;  // 不派发的行只响 object_oob 一条
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolObjectOob);
+	}
+	// 🔴 64 位不回绕（假阴防线）：cstart=UINT32_MAX + 1 簇 = needed 2^32，任何 32 位
+	// rangeCount 都装不下 ⟹ 必响。32 位算术在这里回绕成 0 = "越界"读成"没越界"。
+	{
+		auto in = rowClean();
+		in.clusterStart = 0xFFFFFFFFu;
+		in.meshGroupCount = 2u;
+		in.rangeCount = 0xFFFFFFFFu;
+		CHECK(shadowRowRangeNeeded(0xFFFFFFFFu, 2u) == 4294967296ull);
+		CHECK(shadowRowRangeViolations(in) == kRowRangeViolPastRange);
+	}
+}
+
+/**
+ * ⑫ 债-143 位段 → 文本：两条各有名字，且 `cluster_past_range` **必须与 GPU P2 同名**
+ * （同源对账 = 两侧 grep 同一个词；改名 = 拆桥，这条断言当场红）。
+ */
+TEST_CASE("⑫ describeShadowRowRangeViolations 两条各有名字且与 GPU P2 同名") {
+	CHECK(describeShadowRowRangeViolations(kRowRangeViolNone) == "none");
+	CHECK(describeShadowRowRangeViolations(kRowRangeViolObjectOob) == "object_index_oob");
+	CHECK(describeShadowRowRangeViolations(kRowRangeViolPastRange) == "cluster_past_range");
+	CHECK(describeShadowRowRangeViolations(kRowRangeViolObjectOob | kRowRangeViolPastRange)
+	    == "object_index_oob|cluster_past_range");
+	CHECK(describeShadowRowRangeViolations(1u << 30u) != "none");
+	for (uint32_t bit : {1u << 0, 1u << 1})
+		CHECK(describeShadowRowRangeViolations(bit) != "unknown_bits");
+	// 与 GPU 侧的桥：P2 的短串必须与本断言的完全同名（跨 describe 函数对账，出处独立）
+	CHECK(describeShadowRowRangeViolations(kRowRangeViolPastRange)
+	    == describeMeshChainViolations(kMeshViolClusterPastRange));
 }
 
 }  // namespace RGL
