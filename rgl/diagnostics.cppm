@@ -139,6 +139,51 @@ export struct DiagnosticsConfig {
 	 * "没毒到"与"毒到了没炸"在 fault 地址读数上**完全同形**，静默回落等于把实验做成假负。
 	 */
 	std::string poisonScope = "all";
+	/**
+	 * **A1 黑匣子**（债-140 锁存路线判死后的数据侧摄像头，docs/债140_跨驱动与上游取证.md §13.11；默认关）。
+	 *
+	 * 开 = 每帧把 MDI 阴影段的现场事实（帧号 / 每段已写行数 / 上传的间接计数 COUNT 及其来源 /
+	 * 行表首末行六字 + 整段摘要 / heap 槽台账 / DGC 状态）投进环形缓冲，由**独立线程**异步
+	 * 落 ndjson（路径 = `blackbox_path`）。
+	 *
+	 * 为什么需要它：债-140 是概率性挂死，而 devcoredump 只有复位**之后**的寄存器快照
+	 * （§13.10 实测那里所有 fault 锁存都是复位值）。要归因就得自己留一份"案发前最后 N 帧"。
+	 *
+	 * 🔴 观测者效应：本案唯一已证实能改挂率的变量是速度，而记录本身会改时序。因此生产端
+	 * 只做一次 POD 拷贝（无锁/无分配/无格式化），且**挂率读数只能读成"没抓到"**。
+	 * 环形缓冲溢出会**覆盖最旧**并计数 —— 复盘时必须连 `blackboxGetStats()` 一起读，
+	 * 否则"最后一条记录"会被误读成"案发前一帧"。
+	 *
+	 * 门关 = 一条 `if` 都不进（出厂锚逐位不变的前提）。
+	 */
+	bool blackbox = false;
+	/**
+	 * 黑匣子 ndjson 落盘路径（**绝对路径**为宜；父目录须已存在）。
+	 *
+	 * 为什么要单独一枚键而不是写死：逐轮实验各要一份产物，写死就得为改路径重编一次
+	 * （同 `poison_scope` 的加键理由）。`blackbox=true` 而本键为空 = 什么都没发生，
+	 * 由 gate_lint 出声。
+	 */
+	std::string blackboxPath;
+	/**
+	 * **A2 着色器自证**（债-140 数据侧摄像头的 GPU 侧；默认关）。
+	 *
+	 * 开 = 阴影 MDI 的 **task 入口**换用 `-DSHADOW_SELFCHECK` 变体 SPV
+	 * （`shadow_meshlet.task_SHADOW_SELFCHECK.spv`），在每次读行表后自证五条判据
+	 * （行号越界 / gcX≠1 / meshGroupCount==0 / objectIndex 越界 / gcY‖gcZ≠1），
+	 * 违例走 `printf` → SPIR-V `NonSemantic.DebugPrintf` → RADV 每 submit 打 stderr。
+	 * 两个界经 push **word2**（MDI 变体下的保留位，mesh 侧一字节不读）传入，
+	 * 打包式 = `blackbox` 模块的 `encodeSelfCheckPush`（CPU 镜像同处一份）。
+	 *
+	 * 🔴 为什么必须是**第二个 SPV 变体**而不是运行时分支：`light.frag` 的 IZB_CONSUME
+	 * 教训（2026-10-02 实测 105401 像素漂移）—— 新代码"出现在编译单元里"这件事本身就会
+	 * 让 slang 重排 SSA / fp 融合，运行时 flag 挡不住逐位漂移。门关选原版 SPV =
+	 * 新指令连存在都不存在。
+	 *
+	 * 运行开关在驱动侧：`RADV_PRINTF_BUFFER_SIZE=16777216`（不设 = printf 是 no-op，
+	 * 于是"门开了但零输出"分不清"没违例"与"没缓冲"——矩阵脚本必须每轮核对它）。
+	 */
+	bool shaderSelfcheck = false;
 };
 
 /**
@@ -209,6 +254,16 @@ export struct PoisonScope {
  * @return 解析结果；空串 / 空 token / 未知名 = unexpected（启动失败，不回落）
  */
 export [[nodiscard]] std::expected<PoisonScope, Error> parsePoisonScope(std::string_view spec);
+
+/**
+ * 驱动侧 printf 缓冲是否已开（= 环境变量 `RADV_PRINTF_BUFFER_SIZE` 非空且非 "0"）。
+ *
+ * 为什么住在这里而不是让调用点自己 `getenv`：这是**一枚判据**而不是一个字符串读取——
+ * "设了但设成 0" 与 "没设" 在驱动侧行为相同（都不分配缓冲），把这条口径写两遍迟早漂。
+ * 消费者 = gate_lint 的 `shader_selfcheck` 生效前置（没开缓冲时"自证零输出"不可归因）。
+ * @return true = 驱动会分配 printf 缓冲并把 DebugPrintf 打到 stderr
+ */
+export [[nodiscard]] bool printfBufferEnabled();
 
 /**
  * 单例访问器（main setDiagnostics 后，深栈点 diagnostics() 只读）。

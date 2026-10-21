@@ -16,6 +16,7 @@ import vk_resources;
 import shader;
 import asset_table;
 import mdi_rows;  // kMdiShadowRowBinding（烘的号 = 对账的号，一处定义）
+import diagnostics;  // shader_selfcheck 门（决定 task SPV 选原版还是自证变体）
 
 namespace RGL {
 
@@ -81,9 +82,16 @@ namespace RGL {
 		uint32_t argsSlot) {
 		if (auto idx = pipelineIndex("shadow_meshlet_mdi"))
 			return *idx;
-		const RGL::PipelineSpec* spec = findSpec("shadow_meshlet_mdi");
+		// 债-140 **A2**：门 `diagnostics.shader_selfcheck` 决定选哪份 task SPV —— 两条 spec 的
+		// mesh/frag 逐字相同，只有 task 是原版 vs -DSHADOW_SELFCHECK 变体。门关选原版 =
+		// 自证指令在 SPV 里连存在都不存在（实测两份产物 1452 vs 3684 字节，原版 DebugPrintf
+		// 命中 0）。🔴 条目**名**保持 "shadow_meshlet_mdi" 不变：下游按名查条目（资产绑定、
+		// 采集侧取 pipeline 下标）一处都不该因为开了个诊断门而改拼写。
+		const char* const specName =
+			diagnostics().shaderSelfcheck ? "shadow_meshlet_mdi_selfcheck" : "shadow_meshlet_mdi";
+		const RGL::PipelineSpec* spec = findSpec(specName);
 		if (!spec)
-			throw std::runtime_error("pipeline spec not found: shadow_meshlet_mdi");
+			throw std::runtime_error(fmt::format("pipeline spec not found: {}", specName));
 		RGL::PipelineBindings b{};
 		b.descriptorSize = res.getDescriptorHeap().getDescriptorSize();
 		// binding 0/1 占位 = 旧条目逐字同（两 stage 不声明 ⟹ 批 M 过滤不烘；方向判据 →
@@ -118,8 +126,22 @@ namespace RGL {
 		entries.push_back(std::move(entry));
 		if (auto* logger = RLLogger::getInstance())
 			logger->debug("pipeline entry: shadow_meshlet_mdi (cluster slots {}/{}/{}/{}，binding "
-				"17-20 + 22=行表槽 {}；无 21) → 下标 {}",
-				clusterSlots[0], clusterSlots[1], clusterSlots[2], clusterSlots[3], argsSlot, index);
+				"17-20 + 22=行表槽 {}；无 21) → 下标 {}，task SPV = {}",
+				clusterSlots[0], clusterSlots[1], clusterSlots[2], clusterSlots[3], argsSlot, index,
+				// 🔴 把实际加载的 task SPV 打进日志 = 债-140 A2 那枚门的**生效指纹**。
+				// 没有它，"自证零输出"分不清「没有违例」与「门没开、加载的是原版 SPV」——
+				// 而后者在日志里完全静默（同"审计没跑"与"审计说没问题"必须分开的纪律）。
+				spec->taskSpv.empty() ? "(无 task)" : spec->taskSpv);
+		// A2 生效指纹（债-140）：🔴 必须 **INFO** 且**只在门开着时打**。
+		// 理由两条，缺一就换成 debug 都会出事：① 实测 `smoke_run.log` 只收 info 级
+		// （debug 行一条都不落），打在 debug 级 = 矩阵脚本永远查不到这行 = "自证零输出"
+		// 无法与"门根本没开、加载的是原版 SPV"区分；② 只在门开时打 = 门关的交付形态
+		// 日志一行不多（出厂锚的前提之一是日志面也不受影响）。
+		if (diagnostics().shaderSelfcheck) {
+			if (auto* logger = RLLogger::getInstance())
+				logger->info("pipeline entry: shadow_meshlet_mdi 用 **A2 自证变体**，task SPV = {}",
+					spec->taskSpv);
+		}
 		return index;
 	}
 

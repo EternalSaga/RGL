@@ -512,6 +512,15 @@ std::string MeshletShadowArgsService::describeEntrySlots() const {
 	return out.empty() ? "（未登记任何条目槽）" : out;
 }
 
+std::vector<uint32_t> MeshletShadowArgsService::entrySlotNumbers() const {
+	// 🔴 语义见接口注释：这是"条目会读的槽"，不是"本帧写入的槽"。
+	std::vector<uint32_t> out;
+	out.reserve(entrySlots.size());
+	for (const auto& [binding, slot] : entrySlots)
+		out.push_back(slot);
+	return out;
+}
+
 void MeshletShadowArgsService::auditEntrySlotsOnce() const {
 	// 每个 binding 只报一次：全零描述符若是常态（例如某条 binding 本引擎根本不写），每帧刷
 	// 会把日志冲干净、反而盖掉真正的现场；若是竞态，第一次出现就是最有价值的一次。

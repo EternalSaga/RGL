@@ -268,10 +268,38 @@ const GateRule kGateRules[]{
 			const auto s = parsePoisonScope(c.cfg.poisonScope);
 			return s && s->rowTable;
 		}},
+	// ---- 债-140 A1 黑匣子 / A2 着色器自证（两枚门 + 一枚路径键）----
+	{"blackbox", GateSeverity::warn,
+		"blackbox 开着但 **blackbox_path 为空** ⟹ 黑匣子**一个字节都不会落盘**（`blackboxOpen` "
+		"拿到空路径直接失败，`blackboxGetStats().open` 恒 false）。这是"
+		"「写了但什么都没发生」的标准形态：跑完一轮发现没有产物，而日志里零 ERROR。"
+		"要么给路径（宜绝对路径，父目录须已存在），要么把这行删掉",
+		[](const Ctx& c) { return c.cfg.blackbox && c.cfg.blackboxPath.empty(); }},
+	{"blackbox", GateSeverity::warn,
+		"blackbox 审的是 **MDI 阴影段**的每帧现场（已写行数 / 间接计数 COUNT / 行表首末行 / 摘要），"
+		"而 meshlet.mdi_shadow 关着 ⟹ `list.mdiSegments` 恒空、`prepareMdiShadowRows` 首行即退，"
+		"**一帧记录都不会产生**。要归因债-140 就把 meshlet.mdi_shadow 打开（那正是会挂的配置）",
+		[](const Ctx& c) { return c.cfg.blackbox && !c.runtime.meshletMdiShadow; }},
+	{"blackbox_path", GateSeverity::warn,
+		"blackbox_path 写了值而总门 blackbox 关着 ⟹ 不落任何盘（生产端 `blackboxRecord` 第一行就"
+		"因未运行而返回）。要么开 blackbox，要么把这行删掉",
+		[](const Ctx& c) {
+			return !c.cfg.blackbox && deviated(c, &DiagnosticsConfig::blackboxPath);
+		}},
+	{"shader_selfcheck", GateSeverity::warn,
+		"shader_selfcheck 换的是 **MDI 阴影 task 条目**的 SPV 变体，而 meshlet.mdi_shadow 关着 ⟹ "
+		"走的是非 MDI 的 shadow_meshlet 条目，**带自证的那份 SPV 根本不会被加载**（零 printf 输出）。"
+		"要自证就把 meshlet.mdi_shadow 打开",
+		[](const Ctx& c) { return c.cfg.shaderSelfcheck && !c.runtime.meshletMdiShadow; }},
+	{"shader_selfcheck", GateSeverity::warn,
+		"shader_selfcheck 的输出通路是 `NonSemantic.DebugPrintf` → **RADV 的 printf 缓冲**，而本进程"
+		"环境里 **RADV_PRINTF_BUFFER_SIZE 没设** ⟹ 驱动不分配缓冲、printf 编出来也是 **no-op**。"
+		"此时「零违例输出」完全无法归因（分不清「没有违例」与「根本没缓冲」）——"
+		"跑之前 `RADV_PRINTF_BUFFER_SIZE=16777216`（每 submit 打到 stderr）",
+		[](const Ctx& c) { return c.cfg.shaderSelfcheck && !c.env.printfBufferSet; }},
 	{"cull_replay", GateSeverity::warn,
 		"cull_replay 非 gpu_sync：opaque 段由 CPU 剔除驱动，dgc_static 的 execute 路根本不会被走到（要测 DGC 请同时设 cull_replay=\"gpu_sync\"，见 docs/cpu_perf_plan.md §4）",
-		[](const Ctx& c) { return c.cfg.dgcStatic && c.cfg.cullReplay != CullReplayMode::gpuSync; }},
-	{"imgui", GateSeverity::warn,
+		[](const Ctx& c) { return c.cfg.dgcStatic && c.cfg.cullReplay != CullReplayMode::gpuSync; }},	{"imgui", GateSeverity::warn,
 		"imgui 在 headless 下天然 no-op（无窗无输入，UI 段零调用）",
 		[](const Ctx& c) { return c.cfg.imgui && c.env.headless; }},
 	{"izb.dump_frame", GateSeverity::warn,

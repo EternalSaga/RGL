@@ -20,6 +20,11 @@ import gbuffer_contract;  // kGBufferAttachments（dump_gbuf 越界闸门按表�
 namespace RGL {
 
 /** 诊断配置单例存储（进程级，main setDiagnostics 一次，此后只读）。 */
+bool printfBufferEnabled() {
+	const char* v = std::getenv("RADV_PRINTF_BUFFER_SIZE");
+	return v != nullptr && *v != '\0' && std::string_view(v) != "0";
+}
+
 DiagnosticsConfig& diagnostics() {
 	static DiagnosticsConfig instance;
 	return instance;
@@ -263,6 +268,15 @@ static void applyScalarGates(sol::table& root, DiagnosticsConfig& cfg,
 	cfg.gpuavCompat = readBool("gpuav_compat", cfg.gpuavCompat);
 	cfg.heapSlotAudit = readBool("heap_slot_audit", cfg.heapSlotAudit);
 	cfg.poisonGpuMem = readBool("poison_gpu_mem", cfg.poisonGpuMem);
+	// 债-140 A1/A2 两枚门 + 黑匣子路径。默认全关 = 一条 if 都不进（出厂锚逐位不变的前提）。
+	cfg.blackbox = readBool("blackbox", cfg.blackbox);
+	cfg.shaderSelfcheck = readBool("shader_selfcheck", cfg.shaderSelfcheck);
+	auto readString = [&](const char* key, std::string def) {
+		trace.read.emplace_back(key);
+		sol::optional<std::string> v = root[key];
+		return v ? *v : def;
+	};
+	cfg.blackboxPath = readString("blackbox_path", cfg.blackboxPath);
 }
 
 /**
@@ -425,7 +439,7 @@ struct GateEcho {
  * tests/test_scene_config.cppm 的覆盖率护栏拦下（解析器读了而表里没有 → 红）。
  * 哨兵值出可读文本：texel_canary MAX = "off"、camera_probe.key 0 = "none"。
  */
-const std::array<GateEcho, 35> kGateEcho{{
+const std::array<GateEcho, 38> kGateEcho{{
 	{"no_vvl", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noVvl); }},
 	{"no_hdr", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noHdr); }},
 	{"no_present", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.noPresent); }},
@@ -456,6 +470,10 @@ const std::array<GateEcho, 35> kGateEcho{{
 	{"heap_slot_audit", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.heapSlotAudit); }},
 	{"poison_gpu_mem", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.poisonGpuMem); }},
 	{"poison_scope", [](const DiagnosticsConfig& c) { return c.poisonScope; }},
+	{"blackbox", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.blackbox); }},
+	{"blackbox_path", [](const DiagnosticsConfig& c) {
+		return c.blackboxPath.empty() ? std::string("(unset)") : c.blackboxPath; }},
+	{"shader_selfcheck", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.shaderSelfcheck); }},
 	{"picking_probe.frame", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeFrame); }},
 	{"picking_probe.x", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeX); }},
 	{"picking_probe.y", [](const DiagnosticsConfig& c) { return fmt::format("{}", c.pickingProbeY); }},

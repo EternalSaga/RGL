@@ -25,6 +25,8 @@ import asset_table;              // kInvalidPipelineIndex + numeric_limits 先�
 import scene_data;               // kActiveShadowCascades
 import mdi_rows;                 // MdiShadowRow/RowLocation/buildMdiShadowRows + 容量算式（★M-0/M-1a）
 import shadow_proxy_types;       // pinActive / ShadowProxyTable::Entry（N10 P3 钉段行与逐条支路同一个门）
+import blackbox;                 // encodeSelfCheckPush（A2 自证界的打包 = 与 CPU 镜像同一份算式）
+import diagnostics;              // shader_selfcheck 门
 
 namespace RGL {
 namespace {
@@ -287,7 +289,20 @@ RGL::DrawCall makeMdiShadowDrawCall(const RGL::MdiShadowSegment& seg,
 	// 🔴 12B push 在 MDI 变体下的语义（word0=rowBase / word2=reserved）见 shadow_meshlet.mesh.slang
 	args.objectIndex = seg.loc.rowBase;     // MDI 语义：行基址（同源 pair 的 rowBase）
 	args.cascadeIndex = seg.cascadeIndex;
-	args.clusterStart = 0u;                 // reserved（clusterStart 进行表 word[4]）
+	// word2 = MDI 下的保留位（mesh 侧一字节不读）。门关恒 0 = 逐位不变；门开时借它把
+	// 两个自证界传进 task（打包式与 CPU 镜像同出一处 = `blackbox::encodeSelfCheckPush`）。
+	// 🔴 超限（>65535）打包返回 0 = 两个界都成"永不违例"，自证静默失效 ⟹ 必须出声，
+	//    绝不能让"门开了但自证其实没在工作"读成"零违例"。
+	args.clusterStart = 0u;  // reserved（clusterStart 进行表 word[4]）
+	if (diagnostics().shaderSelfcheck) {
+		args.clusterStart = encodeSelfCheckPush(seg.rowCount, kSceneDataClusterRangeCapacity);
+		if (args.clusterStart == 0u && seg.rowCount != 0u) {
+			if (auto* logger = RLLogger::getInstance())
+				logger->warn("meshlet: A2 自证界打包失败（rows {} / cap {} 超 16 位）"
+				             "⟹ **本帧自证不工作**，零输出不可读成零违例",
+					seg.rowCount, kSceneDataClusterRangeCapacity);
+		}
+	}
 	return RGL::DrawCall{
 		.pipeline = seg.pipeline,
 		.pushData = std::as_bytes(std::span<const RGL::ShadowMeshletDrawArgs>{&args, 1}),

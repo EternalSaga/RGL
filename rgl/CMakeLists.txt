@@ -87,6 +87,11 @@ rgl_shader_defined(shadow_meshlet.mesh SHADOW_MESHLET_MDI_MESH_SPV MDI_SHADOW sc
 # 🔴 DEP 为空是对的：本文件是纯中继、不 import 任何模块，而 R1 查的是"import 闭包 ⊆ DEP"
 #    ——挂个用不上的 DEP 只会给 task 加一条假编译前置（`rgl_shader_defined` 的第三参是 DEFINE 不是 DEP）。
 rgl_shader(shadow_meshlet.task SHADOW_MESHLET_TASK_SPV)
+# 债-140 **A2 着色器自证**变体（门 `diagnostics.shader_selfcheck`）：同一 .slang 的
+# -DSHADOW_SELFCHECK 产物 → shadow_meshlet.task_SHADOW_SELFCHECK.spv。门关选上面那份原版
+# = 自证指令连存在都不存在（逐位不变的构造性保证；先例 = light.frag 的 IZB_CONSUME，
+# 教训 = 运行时 flag 挡不住 slang 重排 fp 融合，2026-10-02 实测 105401 像素漂移）。
+rgl_shader_defined(shadow_meshlet.task SHADOW_MESHLET_TASK_SELFCHECK_SPV SHADOW_SELFCHECK)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读
@@ -259,6 +264,8 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/meshlet_hand_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/mdi_rows.cppm"           # ★M-0（§19.3）：真 MDI 阴影段行表构建器（24B 行 + 聚合锚；纯 CPU 无设备，零消费者）
     "${CMAKE_CURRENT_SOURCE_DIR}/mdi_rows_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/blackbox.cppm"           # 债-140 A1/A2：黑匣子编码 + A2 自证谓词 CPU 镜像（纯 CPU 无设备，`just test` 可钉）
+    "${CMAKE_CURRENT_SOURCE_DIR}/blackbox_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/timing_util.cppm"      # 时间戳/时间统计纯函数层（自 profiler / present_timing / gpu_profiler 三处收敛）
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/profiler_impl.cppm"
@@ -384,6 +391,8 @@ set(RGL_FRAME_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_passrec.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shadow_blackbox.cppm"     # 债-140 A1 黑匣子的引擎侧接线（填帧记录；独立成模块是为了不把宿主顶过 500 行/复杂度红线）
+    "${CMAKE_CURRENT_SOURCE_DIR}/shadow_blackbox_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/vkrenderer_offgraph.cppm"  # 批 14.3：图外 compute 编舞（IZB/EVSSM；14.5 FSR 的家）
     "${CMAKE_CURRENT_SOURCE_DIR}/imgui_layer.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/imgui_layer_impl.cppm"

@@ -72,9 +72,18 @@ struct MdiShadowPayload
 };
 
 // task 侧的 push 视图：只有 word0（= 行基址 rowBase），理由见文件头。
+// 🔴 SHADOW_SELFCHECK 变体下多声明 word1/word2 —— 只在自证编译里存在，原版 SPV 一个字节不变
+//    （门关选原版 = 逐位不变的构造性保证；先例 = light.frag 的 IZB_CONSUME）。
+//    word1 = cascadeIndex（mesh 侧本来就读它，这里只是让自证输出能带上分块号）；
+//    word2 = MDI 下的**保留位**（`shadow_meshlet.mesh.slang` 的 clusterStart 注释原文：
+//    "MDI_SHADOW 变体下此位 = reserved"）⟹ 借它传两个界不改动 mesh 侧、不动 argsSize。
 struct MdiTaskPush
 {
     uint rowBase;
+#ifdef SHADOW_SELFCHECK
+    uint cascadeIndex;
+    uint selfCheck;  // word2 = encodeSelfCheckPush(rowsWritten, objectCapacity)
+#endif
 };
 
 [[vk::push_constant]] MdiTaskPush mdiTaskPush;
@@ -108,6 +117,60 @@ void main(uint drawID : SV_DrawIndex)
     MdiShadowPayload p;
     p.objectIndex = mdiShadowArgs.Load(rowBytes + kMdiShadowObjectIndexByteOffset);
     p.clusterStart = mdiShadowArgs.Load(rowBytes + kMdiShadowClusterStartByteOffset);
+
+#ifdef SHADOW_SELFCHECK
+    // ---- 债-140 **A2 着色器自证**（只在 -DSHADOW_SELFCHECK 变体里存在）----
+    //
+    // 五条判据的**唯一真相源** = `rgl/blackbox.cppm::shadowRowViolations`（CPU 镜像，进
+    // `just test` 可变异）。这里必须是**同一条判据的第二份拼写** —— 两边各写一遍是
+    // C++↔shader 无共享头的既有限制，而 CPU 镜像的存在理由正是"shader 里的判据没法单测，
+    // 写错了读数就是『零违例』，与『确实没违例』同形"。改一侧必须同改另一侧。
+    //
+    // 🔴 为什么"读陈旧行"才是本案形态（而不是"读全零行"）：不可见候选写 gcX=0 ⟹ 那一行
+    // **根本不启动 task** ⟹ 全零行从 task 内部不可观测。真正可观测且能解释 fault@0 的是
+    // `COUNT > 本帧已写行数` 时多出来的 drawID 读到**同一帧槽里两帧前的陈旧行**
+    // （ring×2 按 frameSlot 轮转复用）：它 gcX=1 因而会启动 task，但带的是上一轮那个对象的
+    // objectIndex/clusterStart ⟹ mesh 侧 readObjectClusterRange 拿错基址 → 越界取址 → 0x0。
+    //
+    // 🔴 覆盖面（引用"零违例"时不许读宽过这五条）：判不了 clusterStart 的**真**上界
+    // （= ObjectClusterRange::count，task 入口没声明 binding 33 读不到那张表）、
+    // 判不了 meshGroupCount 的上界（只判 0）、判不了"陈旧但语义仍合法"的行。
+    const uint selfWord = mdiTaskPush.selfCheck;
+    const uint rowsWritten = selfWord & 0xFFFFu;              // 低 16 位
+    const uint objectCapacity = (selfWord >> 16u) & 0xFFFFu;  // 高 16 位
+    // 🔴 三枚偏移必须走**具名常量**而不是 `+ 0u / + 4u / + 8u` 裸字面量：`check_shader_deps.py`
+    //    的 R5 就是拦"裸字节偏移"的（本文件上方那四个 kMdiShadow*ByteOffset 存在的理由），
+    //    写裸字面量会把基线从 39 顶到 42 —— 实测中过这一枪，处置是改写法，**不是抬基线**。
+    const uint kMdiShadowGroupCountXByteOffset = 0u;         // 行 word[0]
+    const uint kMdiShadowGroupCountYByteOffset = 4u;         // 行 word[1]（恒 1）
+    const uint kMdiShadowGroupCountZByteOffset = 8u;         // 行 word[2]（恒 1）
+    const uint gcX = mdiShadowArgs.Load(rowBytes + kMdiShadowGroupCountXByteOffset);
+    const uint gcY = mdiShadowArgs.Load(rowBytes + kMdiShadowGroupCountYByteOffset);
+    const uint gcZ = mdiShadowArgs.Load(rowBytes + kMdiShadowGroupCountZByteOffset);
+    const uint row = mdiTaskPush.rowBase + drawID;  // 绝对行号（只进输出，不参与判据：谓词 1 用相对口径）
+    uint bits = 0u;
+    if (drawID >= rowsWritten)
+        bits |= 1u;   // 谓词 1：间接计数与已上传行数分家（🔴 两边同为**段内相对**口径）
+    if (gcX != 1u)
+        bits |= 2u;   // 谓词 2：不变量 3b（每可见行恰一枚 task）
+    if (meshGroupCount == 0u)
+        bits |= 4u;   // 谓词 3：不变量 2（不发空 DispatchMesh）
+    if (p.objectIndex >= objectCapacity)
+        bits |= 8u;   // 谓词 4：mesh 侧 readObjectClusterRange 直接越界 = fault@0 通路
+    if (gcY != 1u || gcZ != 1u)
+        bits |= 16u;  // 谓词 5：行读歪（步长/偏移漂移的当场指纹）
+    if (bits != 0u)
+    {
+        // 帧号**不在**输出里：12B push 三个 word 已各有归属（rowBase / cascadeIndex / 两个界），
+        // 塞不下。对账靠 (row_base, cascade, draw_id, rows_written) 四元组 + printf 的
+        // **submit 序**（每 submit 一批、按帧序打）—— 黑匣子那侧这四个数全有。
+        printf("SHADOW_SELFCHECK bits=%u cascade=%u draw_id=%u row=%u row_base=%u rows_written=%u "
+               "gcx=%u gcy=%u gcz=%u obj=%u cstart=%u mgc=%u obj_cap=%u\n",
+               bits, mdiTaskPush.cascadeIndex, drawID, row, mdiTaskPush.rowBase, rowsWritten,
+               gcX, gcY, gcZ, p.objectIndex, p.clusterStart, meshGroupCount, objectCapacity);
+    }
+#endif
+
     // 一次发完整批：mesh 侧 groupID.x 的取值域因此 = [0, meshGroupCount)，逐值等于旧的 mesh 组号。
     DispatchMesh(meshGroupCount, 1u, 1u, p);
 }

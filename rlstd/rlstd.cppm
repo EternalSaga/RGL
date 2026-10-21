@@ -6,6 +6,7 @@
 module;
 #include <algorithm>
 #include <array>
+#include <atomic>  // std::atomic（blackbox 生产端零锁环形缓冲；缺名补这里，不在调用点加头）
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
@@ -67,6 +68,7 @@ export namespace std {
 using std::array;
 using std::asin;
 using std::atan2;
+using std::atomic;
 using std::back_inserter;
 using std::cerr;
 using std::clamp;

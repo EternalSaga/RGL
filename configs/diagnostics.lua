@@ -103,6 +103,29 @@ return {
     -- 就少毒一块，而"没毒到"与"毒到了没炸"在 fault 地址读数上**完全同形**（同 cull_replay 纪律）。
     poison_scope = "all",
 
+    -- **A1 黑匣子**（债-140 锁存路线判死后的数据侧摄像头，docs/债140_跨驱动与上游取证.md §13.11；默认关）。
+    -- true = 每帧把 MDI 阴影段现场事实（帧号 / 每段已写行数 / 上传的间接计数 COUNT 及其来源 /
+    -- 行表首末行六字 + 整段摘要 / heap 槽台账 / DGC 状态）投进环形缓冲，独立线程异步落 ndjson。
+    -- 为什么需要：devcoredump 只有复位**之后**的快照（§13.10 实测那里 fault 锁存全是复位值），
+    -- 要归因概率性挂死就得自己留一份"案发前最后 N 帧"。
+    -- 🔴 观测者效应：本案唯一已证实能改挂率的变量是速度，记录本身会改时序 ⟹ 挂率只能读成
+    -- "没抓到"。环形缓冲溢出会覆盖最旧并计数，复盘必须连落盘统计一起读。门关 = 一条 if 都不进。
+    blackbox = false,
+    -- 黑匣子 ndjson 路径（宜绝对路径，父目录须已存在）。单独一枚键是为了逐轮实验各出一份产物
+    -- 而不用重编（同 poison_scope 的加键理由）。🔴 blackbox=true 而此键为空 = 什么都没发生，
+    -- gate_lint 会 warn —— "写了但什么都没发生"是本项目最忌的失效形态。
+    blackbox_path = "",
+    -- **A2 着色器自证**（GPU 侧摄像头，与 A1 同一批；默认关）。
+    -- true = 阴影 MDI 的 task 入口换用 -DSHADOW_SELFCHECK 变体 SPV，读行表后自证五条判据
+    -- （行号越界 / gcX≠1 / meshGroupCount==0 / objectIndex 越界 / gcY‖gcZ≠1），违例走
+    -- printf → SPIR-V NonSemantic.DebugPrintf → RADV 每 submit 打 stderr。两个界经 push
+    -- word2（MDI 下的保留位，mesh 侧不读）传入。
+    -- 🔴 为什么是第二个 SPV 而不是运行时分支：light.frag IZB_CONSUME 的实测教训（105401 像素
+    -- 漂移）—— 代码"出现在编译单元里"本身就会让 slang 重排 fp 融合，门关选原版 = 逐位不变。
+    -- ⚠ 还要驱动侧开缓冲才有输出：RADV_PRINTF_BUFFER_SIZE=16777216；不设 = printf 是 no-op，
+    --   那时"零输出"分不清"没违例"与"没缓冲"。
+    shader_selfcheck = false,
+
     -- 批 11.3 HFTS/FTIZB 硬阴影（docs/hfts_izb_plan.md）：izb_shadow / izb_grid / izb_dump_frame
     -- 已迁出 → configs/shadow.lua 的 izb = { on, grid, dump_frame }（N6a，见上方迁出注释）。
 

@@ -1684,8 +1684,8 @@ return {
 	auto r = loadDiagnosticsConfig(f.pathStr(), &trace);
 	REQUIRE(r.has_value());
 	const auto echo = diagnosticsEchoKeys();
-	CHECK(echo.size() == 35u);            // 钉死门数：加门不更新回显表 → 这里先红
-	CHECK(trace.read.size() == 35u);      // 解析器恰好读一遍（重复读 = 记录点放错层）
+	CHECK(echo.size() == 38u);            // 钉死门数：加门不更新回显表 → 这里先红
+	CHECK(trace.read.size() == 38u);      // 解析器恰好读一遍（重复读 = 记录点放错层）
 	for (const auto& k : echo)
 		CHECK(containsKey(trace.read, k));    // 回显有而解析器不读 = 陈旧键
 	for (const auto& k : trace.read)
@@ -1775,7 +1775,7 @@ TEST_CASE("diagnostics 回显 describe：全默认 = 空串；改动只列改动
 	CHECK(s.find("texel_canary") == std::string::npos); // 未动的哨兵门不出现
 	const std::string all = describeAllDiagnosticsGates(d);
 	// 全量表 = 35 段 `k=v`（空格分隔），抽查首、中、尾与两个特殊格式条目
-	CHECK(std::ranges::count(all, '=') == 35);
+	CHECK(std::ranges::count(all, '=') == 38);
 	CHECK(all.find("no_vvl=false") != std::string::npos);
 	CHECK(all.find("cull_replay=cpu") != std::string::npos);
 	CHECK(all.find("fault_poll=false") != std::string::npos);  // device fault masked 轮询门

@@ -429,6 +429,17 @@ export class MeshletShadowArgsService {
 	/** 逐帧审计入口（门 = `heap_slot_audit`）：发现全零描述符即 ERROR，每个 binding 只报一次。 */
 	void auditEntrySlotsOnce() const;
 
+	/**
+	 * 已登记的条目 heap 槽号台账（债-140 A1 黑匣子用）。
+	 *
+	 * 🔴 语义 = 「本条目**会读**的那些槽」，**不是**「本帧写入了哪些槽」——行表描述符与簇
+	 * buffer 描述符都是启动期写一次、之后不动，每帧路径上没有任何"写槽"动作可记。
+	 * 把它读成"本帧写的槽"会得出「每帧都在改描述符」的错误结论；它真正的用处是让
+	 * 案发帧能回答"当时那 8 枚槽号分别是几"（配合 `describeEntrySlots` 的内容读数）。
+	 * @return 槽号列表（顺序 = `registerEntrySlots` 的登记序；未登记 = 空）
+	 */
+	[[nodiscard]] std::vector<uint32_t> entrySlotNumbers() const;
+
 	/** 构造期拍的槽内容快照（审计的判据基准；空 = 未拍）。 */
 	[[nodiscard]] std::span<const std::byte> slotSnapshot() const { return slotSnapshotBytes; }
 

@@ -31,6 +31,7 @@ import vulkan_utils;  // createImageBarrier（物化用）
 import VmaRaii;
 import frame_draw_list;  // segmentSpan（段名 → draw 序列）
 import meshlet_shadow_args;  // ★M-1b：MeshletShadowArgsService::upload + 间接 buffer 句柄
+import shadow_blackbox;       // 债-140 A1 黑匣子接线（帧记录填充住在该模块，宿主守 500 行红线）
 import mdi_rows;             // ★M-1b：kMdiShadowRowStride（MDI 步长唯一真相源，不写字面 24）
 import scene_context;  // shadowDrawSource（IZB mask 重放段名单一来源，批 11.3-1d）
 import material_types_generated;  // DrawArgs
@@ -413,6 +414,13 @@ void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
 
 // ★M-1b：录制期行表落 GPU（契约与四道 fail-fast 见 vkrenderer.cppm::prepareMdiShadowRows 声明）。
 void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlot) {
+	// 债-140 **A1 黑匣子**（门 diagnostics.blackbox，门关首行即退 = 逐位不变）。
+	// 为什么在**判空之前**、而不是贴着 upload：① 对照臂（mdi_shadow=false → 零段）必须也能
+	// 留下"开录"证据，否则"黑匣子坏了"与"没东西可记"同形；② 记录内容全部取自 CPU 侧的段
+	// 数据（不读 ring，本机统一内存读回是恒真判据 ★1-a0），upload 前后逐字相同；③ upload
+	// 被拒是 throw = 本帧直接死，记在之前反而留下"它想写什么"的现场。
+	// 接线为什么不在这里展开：见 rgl/shadow_blackbox.cppm 文件头（宿主守 500 行红线）。
+	recordShadowMdiBlackbox(list, session.frameNumber(), mdiShadowArgs);
 	if (list.mdiSegments.empty())
 		return;  // 门关 / 回落 = 零 upload 零新命令（逐位不变的构造性保证；首行判空即全退）
 	// 🔴 雷 3 定案：以下每一条按构造都不可达（采集期预检全数拦下 + 装配层同点接线），
@@ -455,6 +463,7 @@ void Renderer::prepareMdiShadowRows(const FrameDrawList& list, uint32_t frameSlo
 	// 债-113：`mdi.tasks` 入账 = 全部段真的落进 ring 之后（与 mdi.count/mdi.rows 同为录制期口径；
 	// 为什么不在 drawOne、也不在采集侧 → profiler.cppm::profilerAddMdiTasks 声明注释）。
 	profilerAddMdiTasks(tasks);
+
 }
 
 /**

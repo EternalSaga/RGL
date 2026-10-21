@@ -647,6 +647,7 @@ void runGateLint(const RuntimeConfig& runtime, const DeviceContext& device,
 	gateEnv.staticGraphicsIndirect = device.getDgcSupport().staticGraphicsIndirect;
 	// device fault 的 masked 上报是否**真的启用了**（探测事实，fault_poll 的生效前置）
 	gateEnv.deviceFaultMasked = device.getDeviceFaultSupport().reportMasked;
+	gateEnv.printfBufferSet = printfBufferEnabled();  // 债-140 A2 自证的生效前置（口径在 diagnostics）
 	// 三份配置各带一份出厂默认（第二份 = 「只报偏离出厂值的门」的比对基准）；
 	// shadow 侧与 diagnostics 侧同为「启动期单例」口径（loadAllConfigs 已回灌），
 	// runtime 侧的基准 = `RuntimeConfig{}`（meshlet 块出厂态 assets + shadow_lod = 5，债-106）。

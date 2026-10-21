@@ -718,7 +718,7 @@ export class ShaderRegistry {
 		// 每加一词控制复杂度 +1（taa 加进来正撞 16>15 红线），表长不受此税。
 		// ★M-1b 追加 shadow_meshlet_mdi：表长 10 → **11**（改表忘改长度 = 编译期直接红，
 		// brace-init 元素数与 std::array<N> 不符，编译器替我们盯着）。
-		static const std::array<RGL::PipelineSpec, 11> kTailSpecs{{
+		static const std::array<RGL::PipelineSpec, 12> kTailSpecs{{
 			{"tonemap", "generated_shaders/light.mesh.spv",
 				"generated_shaders/tonemap.frag.spv"},  // mesh 复用全屏大三角（Phase 8 ①）
 			{"shadow", "generated_shaders/shadow.mesh.spv", "generated_shaders/shadow.frag.spv"},
@@ -737,6 +737,15 @@ export class ShaderRegistry {
 			{"shadow_meshlet_mdi", "generated_shaders/shadow_meshlet.mesh_MDI_SHADOW.spv",
 				"generated_shaders/shadow.frag.spv",
 				"generated_shaders/shadow_meshlet.task.spv"},
+			// 债-140 **A2 着色器自证**变体（门 `diagnostics.shader_selfcheck`）：mesh/frag 与上面
+			// 那条**逐字相同**，只换 task SPV = 同一 .slang 的 -DSHADOW_SELFCHECK 产物。
+			// 🔴 为什么另开一条 spec 而不是改上面那条：门关必须选今天这份原版 SPV（实测原版
+			// 与自证变体逐字节不同的唯一原因就是那份 #ifdef 代码），而 spec 是静态默认表——
+			// 改表就等于把出厂形态换掉了。选哪条由 `addShadowMeshletMdiEntry` 按门决定。
+			{"shadow_meshlet_mdi_selfcheck",
+				"generated_shaders/shadow_meshlet.mesh_MDI_SHADOW.spv",
+				"generated_shaders/shadow.frag.spv",
+				"generated_shaders/shadow_meshlet.task_SHADOW_SELFCHECK.spv"},
 			{"izb_mask", "generated_shaders/izb_mask.mesh.spv",
 				"generated_shaders/izb_mask.frag.spv"},
 			{"ao", "generated_shaders/light.mesh.spv",

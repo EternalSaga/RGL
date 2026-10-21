@@ -56,6 +56,7 @@ set(RGL_TEST_SOURCES
     test_compute_hazard.cppm      # B2-2 compute hazard 机器派生 + 双源对账：判据四条各配反向 + 按类去重 + 🔴 人工半边↔反射互锁 + 数量锚 5 + 全产品面复算
     test_scene_config.cppm      # 四份配置解析契约
     test_gpu_poison.cppm        # 债-140 H3 毒化实验的纯函数面：毒值恒非零 + 逐字节小端 + 尾部不留洞不越界 + scope fail-fast + 🔴 门关三目标全 false（"门关=逐位不变"的唯一机器判据）
+    test_blackbox.cppm          # 债-140 A1/A2：FNV 摘要公开向量 + 首末行摘取 hasRows 反向 + ndjson 里 COUNT 与 rows 各自在场 + 自证 push 超限不截断 + 🔴 五条自证谓词的 CPU 镜像（每条含相邻合法界；shader 侧判据唯一可单测的那一份）
     test_render_scale.cppm      # 批 14.3 渲染倍率纯算术：1.0 档逐像素红线 / 取整 / 钳制 / 非退化
     test_velocity_field.cppm    # 批 14.4 逐像素速度场：显式相机基参考 / 旋转光流闭式 / 天空与无效判据
     test_camera.cppm            # 相机数学

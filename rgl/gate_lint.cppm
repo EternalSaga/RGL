@@ -41,6 +41,11 @@ export struct GateEnv {
 	 *  `deviceFaultReportMasked` + 本进程按 fault_poll 门请求过）。fault_poll 的生效前置，
 	 *  来源 = `DeviceContext::getDeviceFaultSupport().reportMasked`（探测事实，不是配置）。 */
 	bool deviceFaultMasked = false;
+	/** 驱动侧 printf 缓冲是否已开（= 环境变量 `RADV_PRINTF_BUFFER_SIZE` 非空）。
+	 *  `shader_selfcheck` 的生效前置：没开则 `NonSemantic.DebugPrintf` 是 **no-op**，
+	 *  于是"自证零输出"分不清「没有违例」与「根本没缓冲」——正是本项目最忌的假负形态。
+	 *  来源 = 进程环境（探测事实，不是配置）。 */
+	bool printfBufferSet = false;
 };
 
 /** 一条 lint 结论（gate = 三个配置来源的键名拼写：diagnostics / shadow 回显表键名 +
