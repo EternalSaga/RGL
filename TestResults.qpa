@@ -1,0 +1,7 @@
+#sessionInfo releaseName unknown
+#sessionInfo releaseId 0xcafebabe
+#sessionInfo targetName "X11 EGL"
+#sessionInfo logFormatVersion "0.3.4"
+#sessionInfo commandLineParameters "--deqp-runmode=stdout-trie"
+
+#beginSession
