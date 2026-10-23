@@ -2124,7 +2124,7 @@ decorations with Task and Mesh shader stages"）；`maxDrawIndirectCount = 42949
 **结论：M-1b 在 ANV 上工作 —— RADV 那条红坐实为驱动缺陷，代码面没有机器相关的潜在问题。**
 ★M-2 三机结案进度 = Intel anv 已验（本节），NVIDIA 待验；债-81 的 heap 那一半**仍未结案**（等三机齐）。
 
-判据逐条（同一次构建 `96887ba`，双臂同会话）：
+判据逐条（同一次构建 `f708537`，双臂同会话）：
 
 | 判据 | 读数 | 判定 |
 |---|---|---|

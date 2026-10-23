@@ -34,7 +34,7 @@ Phase 9 衔接：本机判定 CPU-bound（`frame=7.10ms cpu.record=7.03ms gpu.fr
 
 | 层 | 现状 | 证据 |
 |---|---|---|
-| **已单源（反射生成，勿动）** | `SceneLight`/`GpuLight`/`ModelVertex`/`DrawArgs` | `generated/scene_forward_types_generated.cppm:11`（48B）、`lights_types_generated.cppm:11`（64B）+ **:25-29 生成常量 `kMaxLights`/`kGpuLightStride`/`kSceneDataLightArrayBase=262272`**、`model_types_generated.cppm:11`、`material_types_generated.cppm:11`；修复提交 `fa69c86`（SceneLight 双源消除，替换手写 `LightDataGpu`）、`27ebec3`（Slang C API 逐字段 offsetof）、`ed38446`（灯数据入反射）；C++ 侧非 generated 同名 struct **零残留** |
+| **已单源（反射生成，勿动）** | `SceneLight`/`GpuLight`/`ModelVertex`/`DrawArgs` | `generated/scene_forward_types_generated.cppm:11`（48B）、`lights_types_generated.cppm:11`（64B）+ **:25-29 生成常量 `kMaxLights`/`kGpuLightStride`/`kSceneDataLightArrayBase=262272`**、`model_types_generated.cppm:11`、`material_types_generated.cppm:11`；修复提交 `fa69c86`（SceneLight 双源消除，替换手写 `LightDataGpu`）、`cd9c45b`（Slang C API 逐字段 offsetof）、`ed38446`（灯数据入反射）；C++ 侧非 generated 同名 struct **零残留** |
 | **未单源（本期内修）** | `ObjectDraw`（材质五参数表） | shader 真相源 `shaders/scene.slang:96-110`（totalTriangles/vertexOffset/baseColor/roughnessMetallic/emissive）；C++ 手写 `frame_draw_list.cppm:41` `ObjectDrawGpu` + `:49` sizeof==48 断言"与 readObjectDraw 字面量手工一致"；读取裸字面量 `scene.slang:114`（`524944u + objectIndex*48u`）；`material_schema.lua` 无登记 |
 | **半单源** | 标量头 exposure@56/envIntensity@48/envMipRange@52 | C++ `scene_data.cppm:43-56`：`kSceneDataEnvOffset = sizeof(SceneLight)` 派生自反射 + static_assert 链钉 48/64/128；shader 侧 `Load(48)/Load(56)` 字面量无校验 |
 | **无单源** | 表基址 @128 矩阵 / @262800 MVP | C++ constexpr 手写 + shader 字面量双向无校验（`scene.slang:11-13` 自述）；@524944 draw 表基址同理（可随 10.2a 像 `kSceneDataLightArrayBase` 一样入 schema） |
