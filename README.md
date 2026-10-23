@@ -25,7 +25,23 @@ just gates       # 一条命令跑完编译 + 测试 + 严格检查
 
 前置：支持 modules 的 clang、CMake + Ninja、Vulkan loader、vcpkg（依赖）、Slang 工具链（细节见 `Justfile` 与 `docs/技术概念.md`）。
 
-## 已知平台问题
+## 已知平台问题 / Known Platform Issues
+
+- **gfx1151（Radeon 8060S / Strix Halo）— mesh shader MDI GPU hang, standalone reproducer available.**
+  On RADV / Mesa 26.2.x, launching mesh-task dispatches via **multi-draw-indirect**
+  (`vkCmdDrawMeshTasksIndirectMultiEXT`, ~1.5k rows × 3 segments) whose mesh shaders
+  **actually dereference buffer data** triggers probabilistic GPU hangs
+  (12/14 rounds × 400 frames): `amdgpu [gfxhub] page fault ... at 0x0`,
+  `GCVM_L2_PROTECTION_FAULT_STATUS 0x701431` (client `SQC (data)`),
+  `ring gfx timeout` → `MODE2 reset`; occasionally a secondary userspace crash,
+  `libvulkan_radeon.so` calling through a NULL function pointer.
+  Clean on NVIDIA / Intel / RDNA2 iGPU with the identical binary; direct dispatch
+  (`vkCmdDrawMeshTasksEXT`) or trivial mesh shaders are clean — dose threshold
+  ≈ 500–1500 mesh groups per dispatch, which is why CTS never caught it.
+  Repro & full forensics: `tools/debt140_repro/` (see its `README` / `REPRODUCE.txt`),
+  `docs/债140_跨驱动与上游取证.md`; upstream Mesa issue pending.
+  Engine-side auto workaround for this PCI id: `meshlet.mdi_shadow_direct = "auto"`
+  (direct-dispatch emulation, bit-identical output).
 
 - **gfx1151（Radeon 8060S / Strix Halo）**：MDI × mesh 着色器真取数链会概率性 GPU 挂死
   （fault@0 + CP wedge；跨厂商对照 RDNA2 核显 / NVIDIA / Intel 全净）。
