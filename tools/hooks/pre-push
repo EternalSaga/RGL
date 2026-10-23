@@ -212,6 +212,61 @@ def _chain(root: Path, argv: list[str], stdin_data: bytes) -> int:
     return p.returncode
 
 
+_BIG_LFS_BYTES = 50 * 1024 * 1024
+_BIG_LFS_ACK = "RGL_PUSH_ALLOW_BIG_LFS"
+
+
+def _lfs_guard(root: Path, stdin_data: bytes) -> None:
+    """拦「修一次转换脚本就多一个 459MB」式出血：本次推送若**新增** >50MB 的 LFS 对象即拦。
+
+    为什么拦而不是警告（项目哲学第 4 条：让错的东西编不过 > 让错的东西被看见）：26.2 的
+    bistro_exterior.glb 五枚版本 = 2.25GB，每一枚当年都"看见了"。逃生门是**定向**的
+    （`RGL_PUSH_ALLOW_BIG_LFS=1 git push`），比 `--no-verify` 好——后者把回归网一起拆了。
+
+    口径：只算 stdin ref 行里 `远端..本地` 差分新增的 LFS 指针（pointer 文本里的 size）；
+    新分支（远端 OID 全零）无差分基准，跳过并在 stderr 说明——宁可漏报新分支，不在
+    钩子里跑全树扫描（响应时间决定钩子存活，见文件头）。
+    """
+    big: list[str] = []
+    new_branch_skipped = False
+    for line in stdin_data.decode(errors="replace").splitlines():
+        f = line.split()
+        if len(f) < 4 or f[1] == "*(deleted)":
+            continue
+        local_sha, remote_sha = f[1], f[3]
+        if set(remote_sha) == {"0"}:
+            new_branch_skipped = True
+            continue
+        try:
+            changed = subprocess.run(
+                ["git", "diff", "--name-only", f"{remote_sha}..{local_sha}"],
+                cwd=str(root), capture_output=True, text=True, check=True).stdout.splitlines()
+        except subprocess.CalledProcessError:
+            return  # 历史不可达（force-push 重写后常见）：不拦，读不到基准不是用户的错
+        for path in changed:
+            try:
+                ptr = subprocess.run(["git", "cat-file", "blob", f"{local_sha}:{path}"],
+                                     cwd=str(root), capture_output=True, check=True).stdout
+            except subprocess.CalledProcessError:
+                continue
+            if not ptr.startswith(b"version https://git-lfs"):
+                continue
+            size = next((int(l.split()[-1]) for l in ptr.splitlines()
+                         if l.startswith(b"size ")), 0)
+            if size > _BIG_LFS_BYTES:
+                big.append(f"{path}  {size / 1048576:.0f}MB")
+    if new_branch_skipped:
+        print("pre-push: （新分支推送无差分基准，LFS 大文件护栏本次跳过）", file=sys.stderr)
+    if big and os.environ.get(_BIG_LFS_ACK) != "1":
+        print("pre-push: ✗ 本次推送新增大 LFS 对象（>50MB/枚）：", file=sys.stderr)
+        for b in big:
+            print(f"    {b}", file=sys.stderr)
+        print(f"  转换产物重复入库的历史教训 = bistro_exterior.glb ×5 = 2.25GB（§29 手术）。\n"
+              f"  确属有意（新资产入库）：`{_BIG_LFS_ACK}=1 git push ...`（保留回归网；\n"
+              f"  别用 --no-verify，那把 just test 也拆了）", file=sys.stderr)
+        sys.exit(1)
+
+
 def main(argv: list[str]) -> int:
     # 行缓冲：钩子的进度走 stdout、拦截走 stderr，git 把两路并到一个终端；stdout 默认
     # 块缓冲 ⟹ 进度行会**跑到拦截行后面**（实测输出顺序错乱）。行缓冲换回真实顺序。
@@ -224,6 +279,7 @@ def main(argv: list[str]) -> int:
     stdin_data = _read_stdin(no_stdin)      # 先读干净，后面才敢转给接力的钩子
     t0 = time.time()
     root = _repo_root()
+    _lfs_guard(root, stdin_data)            # 大 LFS 出血护栏（在跑测试之前，秒级）
     build = root / "build"
     print("pre-push: 跑无设备回归 `just test`（债-10；不跑 just build、不碰 GPU 用例）")
     _preflight(root, build)
