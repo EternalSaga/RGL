@@ -92,6 +92,7 @@ struct Opts {
 	// ---- §26 真取数链批（任务 13）----
 	uint32_t chain = 0;          // 1 = 引擎形态 task + 真取数链 mesh；0 = 旧臂
 	uint32_t triv = 0;           // 1 = 链 mesh 的 CHAIN=0 trivial 变体（R1 锚，配 --chain 1）
+	uint32_t gridsize = 0;       // 任务 16：1 = mesh_chain 消费 gl_NumWorkGroups（强制 user SGPR 槽非 0）
 	bool heap = false;           // SO + descriptor heap 绑定（引擎形态）；false = 描述符集
 	// 直派替代 MDI（引擎 S3 镜像）= `--mode direct`（链档下 grid X = 段行数）
 	bool rowvary = false;        // 行表内容每帧改写（引擎逐帧剔除变化）
@@ -137,6 +138,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(argv[i], "--twopass")) o.twopass = true;
 		else if (eq("--chain")) o.chain = (uint32_t)atoi(argv[++i]);
 		else if (eq("--triv")) o.triv = (uint32_t)atoi(argv[++i]);
+		else if (eq("--gridsize")) o.gridsize = (uint32_t)atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--heap")) o.heap = true;
 		else if (!strcmp(argv[i], "--rowvary")) o.rowvary = true;
 		else { std::fprintf(stderr, "unknown arg %s\n", argv[i]); return 3; }
@@ -559,6 +561,8 @@ int main(int argc, char **argv) {
 	void *rowMap = nullptr;
 	VkDeviceSize rowBytesTotal = 0;
 	const uint32_t chainVal = o.triv ? 0u : 1u; // mesh_chain 的 CHAIN spec 常量
+	// 任务 16：--gridsize 1 = 换用消费 gl_NumWorkGroups 的 mesh_chain 变体（恒 +0，输出逐位同）
+	const char *chainMeshSpv = o.gridsize ? "shaders/mesh_chain_gs.spv" : "shaders/mesh_chain.spv";
 	VkSpecializationMapEntry csme{0, 0, 4};
 	VkSpecializationInfo cspec{};
 	cspec.mapEntryCount = 1; cspec.pMapEntries = &csme;
@@ -689,7 +693,7 @@ int main(int argc, char **argv) {
 		shTask = makeSO(VK_SHADER_STAGE_TASK_BIT_EXT, VK_SHADER_STAGE_MESH_BIT_EXT,
 			mdi ? "shaders/task_engine.spv" : "shaders/task_engine_dd.spv", nullptr, &miTask);
 		shMesh = makeSO(VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT,
-			"shaders/mesh_chain.spv", &cspec, &miMesh);
+			chainMeshSpv, &cspec, &miMesh);
 		shFrag = makeSO(VK_SHADER_STAGE_FRAGMENT_BIT, VkShaderStageFlagBits(0u),
 			"shaders/frag.spv", nullptr, nullptr);
 	}
@@ -741,7 +745,7 @@ int main(int argc, char **argv) {
 		cstg[0].pName = "main";
 		cstg[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		cstg[1].stage = VK_SHADER_STAGE_MESH_BIT_EXT;
-		cstg[1].module = loadMod("shaders/mesh_chain.spv");
+		cstg[1].module = loadMod(chainMeshSpv);
 		cstg[1].pName = "main"; cstg[1].pSpecializationInfo = &cspec;
 		cstg[2].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		cstg[2].stage = VK_SHADER_STAGE_FRAGMENT_BIT; cstg[2].module = fragM; cstg[2].pName = "main";

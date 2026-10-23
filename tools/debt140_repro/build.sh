@@ -15,6 +15,8 @@ $G -V $T -S vert shaders/vert.glsl        -o shaders/vert.spv
 $G -V $T -S task shaders/task_engine.glsl     -o shaders/task_engine.spv
 $G -V $T -DDD=1 -S task shaders/task_engine.glsl -o shaders/task_engine_dd.spv
 $G -V $T -S mesh shaders/mesh_chain.glsl      -o shaders/mesh_chain.spv
+# 任务 16 grid-size 变体（恒 +0 语义中性，强制 user SGPR 槽非 0）
+$G -V $T -DGRIDSIZE=1 -S mesh shaders/mesh_chain.glsl -o shaders/mesh_chain_gs.spv
 $G -V $T -S frag shaders/frag.glsl        -o shaders/frag.spv
 clang++ -std=c++20 -O1 -g -o repro repro.cpp -lvulkan
 echo "BUILD OK"

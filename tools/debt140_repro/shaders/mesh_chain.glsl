@@ -28,7 +28,14 @@ uint loadU8x3(uint byteAddr) {
 }
 
 void main() {
+#ifdef GRIDSIZE
+    // 任务 16 假设：消费 grid size（gl_NumWorkGroups）→ mesh 入口 user SGPR 槽非 0 →
+    // 48da0f3a 病灶（零 user SGPR 的 SET_SH_REG 声明数>写入数）前提消失。
+    // >>31 在运行时恒 0（grid 不可能 ≥2^31），输出与基线逐位同，但编译器折不掉。
+    uint slot = gl_WorkGroupID.x + (gl_NumWorkGroups.x >> 31u);
+#else
     uint slot = gl_WorkGroupID.x;
+#endif
     uint v = gl_LocalInvocationID.x;
     if (slot >= tpl.mgc) { SetMeshOutputsEXT(0u, 0u); return; } // 债-143 钳制
     if (CHAIN == 0u) { // R1 trivial：payload 只参与算术、不派地址
