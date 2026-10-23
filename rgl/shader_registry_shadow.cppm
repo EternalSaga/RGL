@@ -73,13 +73,23 @@ namespace RGL {
 		assets.bindShadowMeshletPipeline(assetId, entryIdx);
 	}
 
+	/**
+	 * ★M-1b/A2/§27 三态选路：MDI 条目吃哪份 spec（= 哪份 task SPV 变体）。
+	 * 优先级与理由的原文注在调用点（directEmu > selfcheck > 原版；直派×自证同开的出声在装配层）。
+	 */
+	[[nodiscard]] static const char* pickShadowMdiSpecName(bool directEmu, bool selfcheck) {
+		if (directEmu)
+			return "shadow_meshlet_mdi_direct";  // 债-140 §27 gfx1151 workaround（Mesa#TODO）
+		return selfcheck ? "shadow_meshlet_mdi_selfcheck" : "shadow_meshlet_mdi";
+	}
+
 	// ★M-1b（docs/mdi_plan.md §19.2 D2 / §19.5）：真 MDI 阴影条目（契约见接口注释）。
 	// 与 addShadowMeshletEntry **刻意保持两份代码**（不抽公共体）：两者的差异只有一枚
 	// binding 与一份 mesh SPV，但「条目级 SPV 变体位」是会被后续批继续分叉的地方
 	// （债-105 的「凡条目级的位都要问宿主被谁共用」），两份并排比一份带 bool 参数更难漏烘。
 	// 只应差别两处的行已用注释钉住（mesh SPV 走 spec、extra 多一枚 22）。
 	uint32_t ShaderRegistry::addShadowMeshletMdiEntry(std::array<uint32_t, 4> clusterSlots,
-		uint32_t argsSlot) {
+		uint32_t argsSlot, bool directEmu) {
 		if (auto idx = pipelineIndex("shadow_meshlet_mdi"))
 			return *idx;
 		// 债-140 **A2**：门 `diagnostics.shader_selfcheck` 决定选哪份 task SPV —— 两条 spec 的
@@ -87,8 +97,12 @@ namespace RGL {
 		// 自证指令在 SPV 里连存在都不存在（实测两份产物 1452 vs 3684 字节，原版 DebugPrintf
 		// 命中 0）。🔴 条目**名**保持 "shadow_meshlet_mdi" 不变：下游按名查条目（资产绑定、
 		// 采集侧取 pipeline 下标）一处都不该因为开了个诊断门而改拼写。
-		const char* const specName =
-			diagnostics().shaderSelfcheck ? "shadow_meshlet_mdi_selfcheck" : "shadow_meshlet_mdi";
+		// 债-140 §27 直派模拟（gfx1151 workaround，上游 Mesa#TODO）：directEmu 优先于自证——
+		// 自证的 task 变体只拼在 SV_DrawIndex 那份上（SHADOW_SELFCHECK × MDI_DIRECT 第三份
+		// task SPV 不存在，两门同开时静默选直派 = 自证零输出，装配层 wireMeshletMdiShadowActivation
+		// 对这一组合**出声**（warn），不在这里静默）。
+		const bool selfcheck = diagnostics().shaderSelfcheck && !directEmu;
+		const char* const specName = pickShadowMdiSpecName(directEmu, selfcheck);
 		const RGL::PipelineSpec* spec = findSpec(specName);
 		if (!spec)
 			throw std::runtime_error(fmt::format("pipeline spec not found: {}", specName));
@@ -120,7 +134,10 @@ namespace RGL {
 			// word0 语义切换见 shadow_meshlet.mesh.slang ★M-1b 注释。🔴 尺寸与旧条目同源，
 			// static_assert 在 frame_draw_list.cppm——argsSize 不动 = 执行器通用 push 路径不动）
 			.argsSize = 12,
-			.spec = *spec, .bindings = b};
+			.spec = *spec, .bindings = b,
+			// 债-140 §27：派发形态与 task SPV 变体**同源落位**（唯一产地 = 本参数，消费点 =
+			// Renderer::drawOne 的 drawCount>1 分支），分家按构造不可能。
+			.directTaskDispatch = directEmu };
 		const uint32_t index = static_cast<uint32_t>(entries.size());
 		indexByName[entry.name] = index;
 		entries.push_back(std::move(entry));
@@ -137,7 +154,15 @@ namespace RGL {
 		// （debug 行一条都不落），打在 debug 级 = 矩阵脚本永远查不到这行 = "自证零输出"
 		// 无法与"门根本没开、加载的是原版 SPV"区分；② 只在门开时打 = 门关的交付形态
 		// 日志一行不多（出厂锚的前提之一是日志面也不受影响）。
-		if (diagnostics().shaderSelfcheck) {
+		// 直派模拟生效指纹（债-140 §27，INFO 理由 = 下方 A2 那两条同型）
+		if (directEmu) {
+			if (auto* logger = RLLogger::getInstance())
+				logger->info(
+					"pipeline entry: shadow_meshlet_mdi 用 **直派模拟变体**（gfx1151 workaround，"
+					"上游 Mesa#TODO，判据 → docs/债140_跨驱动与上游取证.md §26/§27），task SPV = {}",
+					spec->taskSpv);
+		}
+		if (selfcheck) {
 			if (auto* logger = RLLogger::getInstance())
 				logger->info(
 					"pipeline entry: shadow_meshlet_mdi 用 **A2 自证变体**，task SPV = {}，"

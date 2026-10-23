@@ -51,6 +51,7 @@ constexpr std::string_view kRuntimeKeys[]{
 	"meshlet.shadow_lod",
 	"meshlet.shadow_lod_fallback",
 	"meshlet.mdi_shadow",
+	"meshlet.mdi_shadow_direct",
 	"meshlet.shadow_proxy",
 	"meshlet.coplanar",
 	"show_after",
@@ -626,6 +627,31 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 }
 
 /**
+ * `meshlet.mdi_shadow_direct` 三态字符串键解析（债-140 §27 直派模拟，gfx1151 workaround，
+ * 上游 Mesa#TODO；形态先例 = `applyMeshletShadowLodFallbackKey`，含其 ⚠ 覆盖面边界：
+ * 只有字符串值进得了判据，非字符串 = 缺键保默认）。
+ * 值域 = "auto"（默认）/ "true" / "false"；未知值 = 启动 fail-fast（笔误静默回落 = 把
+ * workaround 读丢，比崩更糟）。语义展开 → RuntimeConfig::meshletMdiShadowDirect 注释。
+ */
+[[nodiscard]] static std::optional<std::string> applyMdiShadowDirectEmuKey(
+	const sol::table& root, RuntimeConfig& cfg, std::string_view path) {
+	sol::optional<std::string> raw = root["mdi_shadow_direct"];
+	if (!raw)
+		return std::nullopt;
+	if (*raw == "auto")
+		cfg.meshletMdiShadowDirect = MdiShadowDirectEmu::Auto;
+	else if (*raw == "true")
+		cfg.meshletMdiShadowDirect = MdiShadowDirectEmu::On;
+	else if (*raw == "false")
+		cfg.meshletMdiShadowDirect = MdiShadowDirectEmu::Off;
+	else
+		return fmt::format("runtime config ({}): meshlet.mdi_shadow_direct must be "
+			"\"auto\", \"true\" or \"false\", got \"{}\"",
+			path, *raw);
+	return std::nullopt;
+}
+
+/**
  * `meshlet` 嵌套块解析（★0-b1 簇路径**资源门**（assets：决定条目烘不烘、4 段簇 buffer 与描述符槽
  * 在不在；不是块内 8 键的总门——生效前置不含它的只有 mode 的 `"overlay"` 档，三条语义的权威展开
  * → RuntimeConfig::meshletAssets 注释）+ ★1-a1ii-α/β-1 选路档（mode，债-129 S2 由 overlay/switch
@@ -633,7 +659,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * ★0.5-b2 coplanar + ★1-a2-i cull + ★18-B1 shadow_lod 阴影段选级 +
  * ★M-0 mdi_shadow 真 MDI 档）：
  * `meshlet = { assets, mode, instrument, coplanar, cull, shadow_lod,
- * shadow_lod_fallback, mdi_shadow }`。
+ * shadow_lod_fallback, mdi_shadow, mdi_shadow_direct, shadow_proxy }`。
  * 缺块 / 缺键 = 保持结构体默认（🔴 ★18-C 起 `meshletAssets = true`；`meshletShadowLod` 曾 5、
  * N10 起 7 且 `meshletShadowProxy = true`（2026-10-20 用户拍板，依据 → 数 8）
  * = 出厂即开簇路径与阴影远级联 LOD，2026-10-12 用户拍板。P5「门关 = 逐位不变」**仍是硬护栏**，
@@ -658,7 +684,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
  * @param root runtime.lua 顶层表
  * @param cfg  写入目标
  * @param path 仅用于错误消息
- * @param trace 键轨迹（八枚键在块入口**无条件**记全 = 覆盖率护栏输入；四枚三态字符串键
+ * @param trace 键轨迹（十枚键在块入口**无条件**记全 = 覆盖率护栏输入；五枚三态字符串键
  *              由本函数记，不进 applyMeshlet*Key 内部记——每键恰好记一次）
  * @return nullopt = 合法；有值 = 首个错误消息（调用方 fail-fast）
  */
@@ -671,6 +697,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 	trace.read.emplace_back("meshlet.shadow_lod");
 	trace.read.emplace_back("meshlet.shadow_lod_fallback");
 	trace.read.emplace_back("meshlet.mdi_shadow");
+	trace.read.emplace_back("meshlet.mdi_shadow_direct");
 	trace.read.emplace_back("meshlet.shadow_proxy");
 	trace.read.emplace_back("meshlet.coplanar");
 	sol::table meshlet = root["meshlet"];
@@ -697,6 +724,9 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 		return err;
 	// ★M-0（§19.2 D2）真 MDI 阴影段档（本批零消费者 = 读到也不改变任何一帧行为）
 	if (auto err = readStrictBoolKey(meshlet, "mdi_shadow", cfg.meshletMdiShadow, path))
+		return err;
+	// 债-140 §27 直派模拟三态键（gfx1151 workaround，宿主 = mdi_shadow 的宿主；语义 → 字段注释）
+	if (auto err = applyMdiShadowDirectEmuKey(meshlet, cfg, path))
 		return err;
 	// N10 P2 阴影代理钉段表档（🔴 P2 本批零消费者：建表 + 打日志，接消费点 = P3）
 	if (auto err = readStrictBoolKey(meshlet, "shadow_proxy", cfg.meshletShadowProxy, path))

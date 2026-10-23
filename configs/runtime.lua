@@ -230,6 +230,18 @@ return {
         -- 门 = 选 SPV 变体 / 选管线条目，不是运行时 flag（§12/§13 的 2026-10-02 教训）⟹ 门关用的
         -- 还是今天那份 SPV 与那条条目，一字节不动。🔴 必须是布尔（写成字符串/数字 = 启动失败点名键）。
         mdi_shadow = false,
+        -- 债-140 §26/§27 **直派模拟**三态键（gfx1151 workaround，上游 issue 占位 Mesa#TODO，
+        -- 投递后主 agent 回填编号）。gfx1151 上「MDI 间接命令 × mesh 真取数链」概率性 CP 卡死
+        -- （引擎外复现 12/14，判据 → docs/债140_跨驱动与上游取证.md §26/§27）；本键把阴影段
+        -- 每级联的派发换成语义等价的 vkCmdDrawMeshTasksEXT(rowCount,1,1)（行表/push/task 取数
+        -- 全保留，400 帧截图与 MDI 版 sha256 逐位相同 = §26.2 + §28 复跑）。
+        --   "auto"（默认）= 仅 PCI 1002:1586（本机 Radeon 8060S，gfx1151 家族）命中时启用；
+        --                   其它设备 = 关，出厂行为逐位不变。
+        --   "true"  = 无视设备强制启用（排查/对照）；"false" = 强制关（回到 MDI 形态）。
+        -- 宿主 = mdi_shadow 的宿主（行表载体在位）；mdi_shadow=false 时本键无消费者（gate_lint
+        -- 申报）。未知值 = 启动 fail-fast（笔误把 workaround 读丢比崩更糟；shadow_lod_fallback
+        -- 三态键同族纪律）。
+        mdi_shadow_direct = "auto",
         -- N10 P3 阴影代理**钉段表**档：= true 时启动期把簇产物 v2 的 MustL0 段读成
         -- per-objectSlot 的 ShadowProxyTable（rgl/shadow_proxy_types.cppm）+ 打 INFO 读数，
         -- 且**画面会变**：c1..c3 对过 texel 门的候选多发一条选级恒 0 的 draw，保住"只有级 0

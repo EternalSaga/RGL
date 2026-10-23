@@ -104,7 +104,17 @@ ByteAddressBuffer mdiShadowArgs;
 // 发一次"，多线程只会让其余线程空转（★M-3T-c 后仍成立：读的行数与线程数无关，都是 1 行）；
 // ② NV 的 task 上限是 128（§19.11），1 恒合规。
 [numthreads(1, 1, 1)]
+#ifdef MDI_DIRECT
+// gfx1151 直派模拟变体（`meshlet.mdi_shadow_direct`，债-140 §26/§27 转正的 workaround）：
+// 行号来源从 SV_DrawIndex 换成 SV_GroupID.x（执行器发 vkCmdDrawMeshTasksEXT，grid X = 段行数），
+// **不经 MDI 间接命令**——§27 引擎外复现定案：崩溃 = MDI 派发 × mesh 真取数链 的必要条件组合，
+// 直派形态 0/14 净（上游 issue 占位 Mesa#TODO，用户投递后回填）。行表/payload/DispatchMesh
+// 与 MDI 变体逐式同；gcX==0 的行（MDI 下本就不启动 task）在此改为 task 启动后早退。
+// 门 = 选 SPV 变体（同 SHADOW_SELFCHECK / §19.2 D2 纪律，运行时 flag 挡不住 slang fp 重排）。
+void main(uint3 directGroupID : SV_GroupID)
+#else
 void main(uint drawID : SV_DrawIndex)
+#endif
 {
     // 行表规格常量（口径与对账链 → 文件头；写法 = 函数内 `const uint`，slang 的全局 const 需 static，
     // 照 meshlet.mesh.slang 先例放 main 体内）。
@@ -137,7 +147,16 @@ void main(uint drawID : SV_DrawIndex)
     p.clusterStart = latchedClusterStart; // 🔴 判据验的也是这份拷贝
     p.meshGroupCount = meshGroupCount;    // 债-143 钳制上界（同为 latch 的那份）
 #else
+# ifdef MDI_DIRECT
+    // 直派模拟（见入口注）：行号 = rowBase + SV_GroupID.x；gcX==0 早退不发 mesh。
+    // 行寻址算式的对偶 = `mdi_rows.cppm::mdiDirectEmuTarget`（CPU 侧唯一算式产地，测试钉）。
+    const uint kMdiDirectGroupCountXByteOffset = 0u;  // 行 word[0]（具名常量 = R5 口径）
+    const uint rowBytes = (mdiTaskPush.rowBase + directGroupID.x) * kMdiShadowRowStrideBytes;
+    if (mdiShadowArgs.Load(rowBytes + kMdiDirectGroupCountXByteOffset) == 0u)
+        return;
+# else
     const uint rowBytes = (mdiTaskPush.rowBase + drawID) * kMdiShadowRowStrideBytes;
+# endif
     const uint meshGroupCount = mdiShadowArgs.Load(rowBytes + kMdiShadowMeshGroupCountByteOffset);
 
     MdiShadowPayload p;

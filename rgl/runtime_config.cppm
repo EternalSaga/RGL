@@ -212,6 +212,34 @@ export enum class MeshletLodFallbackMode : uint8_t {
 };
 
 /**
+ * 债-140 §26/§27 直派模拟三态键（`meshlet.mdi_shadow_direct`，gfx1151 workaround，
+ * 上游 Mesa#TODO）。语义展开 → RuntimeConfig::meshletMdiShadowDirect 注释。
+ * 形态先例 = MeshletLodFallbackMode（配置层自立枚举，不 import 执行模块）。
+ */
+export enum class MdiShadowDirectEmu : uint8_t {
+	Auto = 0,  ///< 命中受影响平台才开（默认）
+	On,        ///< 无视设备强制开
+	Off,       ///< 无视设备强制关（今天的 MDI 形态）
+};
+
+/**
+ * 三态键 + 设备事实 → 最终启用位（纯函数，tests/test_mdi_direct_emu 钉；
+ * 调用点唯一 = `wireMeshletMdiShadowActivation`，与条目 `directTaskDispatch` 位同源）。
+ */
+export [[nodiscard]] constexpr bool resolveMdiShadowDirectEmu(MdiShadowDirectEmu key,
+	bool affectedDevice) {
+	switch (key) {
+	case MdiShadowDirectEmu::On:
+		return true;
+	case MdiShadowDirectEmu::Off:
+		return false;
+	case MdiShadowDirectEmu::Auto:
+		break;  // 穷尽 switch 不写 default（-Wcovered-switch-default 已第一方启用）
+	}
+	return affectedDevice;
+}
+
+/**
  * 簇路径叠加的 **mesh SPV 变体仪器位**（configs/runtime.lua `meshlet.instrument` 键，
  * 债-129 S2 O1-1.1）：**三态互斥**，不是两个布尔（`aa` 三态先例的复刻）。
  *
@@ -592,6 +620,27 @@ export struct RuntimeConfig {
 	 * （gate_lint 的 meshlet 段），**不为它做特例**。
 	 */
 	bool meshletMdiShadow = false;
+
+	/**
+	 * 债-140 §26/§27 **直派模拟**三态（`runtime.lua meshlet.mdi_shadow_direct`，默认 `"auto"`）。
+	 *
+	 * gfx1151 的 MDI 间接命令 × mesh 真取数链崩溃（上游 issue 占位 **Mesa#TODO**，投递后回填；
+	 * 判据 = docs/债140_跨驱动与上游取证.md §26 引擎内减法 + §27 引擎外复现 12/14）。本键把
+	 * 阴影段每级联的派发从 `drawMeshTasksIndirectEXT` 换成等价的 `drawMeshTasksEXT(rowCount,1,1)`
+	 * （行表/push/task 取数/可见性全保留；语义等价 = §26.2 截图 sha256 逐位相同 + §28 复跑）。
+	 *
+	 * 三态语义（解析函数 = `resolveMdiShadowDirectEmu`，测试 = tests/test_mdi_direct_emu）：
+	 *  - `"auto"`（默认）= 仅命中受影响平台（`DeviceContext::isMdiMeshChainAffected`，
+	 *    PCI 1002:1586 = 本机 Radeon 8060S）时启用——「专门为 gfx1151 开的 workaround」（用户
+	 *    拍板 2026-10-23）；非受影响设备 = 关，出厂行为逐位不变。
+	 *  - `"true"` = 无视设备强制启用（排查/对照用）。
+	 *  - `"false"` = 无视设备强制关闭（回到今天的 MDI 形态）。
+	 *
+	 * 🔴 宿主 = `meshlet.mdi_shadow` 的宿主（行表载体在位）——本键只在 MDI 条目烘出来之后
+	 * 决定**派发指令选哪条**；mdi_shadow=false 时本键无消费者（gate_lint 申报）。
+	 * 未知值 = 启动 fail-fast（同 shadow_lod_fallback 三态键纪律）。
+	 */
+	MdiShadowDirectEmu meshletMdiShadowDirect = MdiShadowDirectEmu::Auto;
 
 	/**
 	 * N10 P2 阴影代理**钉段表**档（`runtime.lua meshlet.shadow_proxy`，🔴 默认关）。

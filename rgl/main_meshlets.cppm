@@ -531,6 +531,38 @@ uint32_t bindMdiShadowEntryToAssets(ShaderRegistry& pipelines, const AssetTable&
 }
 
 /**
+ * 债-140 §27 直派模拟的**裁决本体**（gfx1151 workaround，上游 Mesa#TODO，判据 → §26/§27）：
+ * 两脚 = 三态键 × 受影响设备（`resolveMdiShadowDirectEmu` 纯函数，tests/test_mdi_direct_emu 钉）
+ * + 容量回落（grid 判负 = 退回 MDI 并出声，workaround 自己不许把画面搞没）+ 自证冲突出声。
+ * 结果只喂一个消费者（`addShadowMeshletMdiEntry` → 条目 directTaskDispatch 位 + task SPV 变体，
+ * 同源落位）。从 `wireMeshletMdiShadowActivation` 拆出 = 认知复杂度预算（同文件先例）。
+ */
+[[nodiscard]] static bool decideMdiShadowDirectEmu(const RuntimeConfig& cfg, bool affectedDevice,
+	DeviceContext& device, const MeshletShadowArgsService& shadowArgs,
+	RLLogger* logger) {
+	bool directEmu = resolveMdiShadowDirectEmu(cfg.meshletMdiShadowDirect, affectedDevice);
+	if (!directEmu)
+		return false;
+	const auto meshLimits = device.getPhysicalDevice()
+		.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceMeshShaderPropertiesEXT>()
+		.get<vk::PhysicalDeviceMeshShaderPropertiesEXT>();
+	// 保守上界 = 整帧槽行数（每段 grid ≤ 本值；算式产地 = mdi_rows，测试钉）
+	const uint32_t gridX = mdiDirectEmuGridX(shadowArgs.sliceRows());
+	if (!mdiDirectEmuGridFits(gridX, meshLimits.maxTaskWorkGroupCount[0])) {
+		if (logger)
+			logger->warn("meshlet: mdi_shadow_direct 容量判负（grid X={} > "
+						 "maxTaskWorkGroupCount[0] {}，VUID-TaskEXT-07322）—— 回落 MDI 形态",
+				gridX, meshLimits.maxTaskWorkGroupCount[0]);
+		return false;
+	}
+	if (diagnostics().shaderSelfcheck && logger)
+		logger->warn("meshlet: shader_selfcheck 与 mdi_shadow_direct 同开 —— 自证**失效**"
+					 "（task 自证变体只拼在 SV_DrawIndex 那份上，直派选 MDI_DIRECT 变体）；"
+					 "要跑自证请把 mdi_shadow_direct 置 \"false\"");
+	return true;
+}
+
+/**
  * 第⑤步（★M-1b）：真 MDI 阴影段**管线条目烘焙 + 资产回填 + 生效标记**（docs/mdi_plan.md
  * §19.2 D2 / §19.5；消费者 = `renderListSystem` 经 ctx 读 `MeshletMdiShadowActivation`）。
  *
@@ -560,10 +592,13 @@ uint32_t bindMdiShadowEntryToAssets(ShaderRegistry& pipelines, const AssetTable&
  * @param pipelines 管线表（addShadowMeshletMdiEntry / bindShadowMeshletMdiToAsset / 旧条目下标读回）
  * @param assets   资产表（回填目标 = 「带 474 条目」的资产；判据用字段本身，不复述 byFile 对账）
  * @param assembly 服务持有者（读④的 shadowArgs 与 α 的 bindingSlots）
- * @param cfg      运行配置（meshletMdiShadow 门）
+ * @param cfg      运行配置（meshletMdiShadow 门 + meshletMdiShadowDirect 三态键）
+ * @param device   设备上下文（债-140 §27 直派模拟两脚：受影响平台判据 + 网格容量查询）
  */
+
 void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pipelines,
-	const AssetTable& assets, MeshletAssembly& assembly, const RuntimeConfig& cfg) {
+	const AssetTable& assets, MeshletAssembly& assembly, const RuntimeConfig& cfg,
+	DeviceContext& device) {
 	if (!cfg.meshletMdiShadow)
 		return;  // 门关 = 零条目零 INFO 零 ctx（A2 构造性）
 	auto* logger = RLLogger::getInstance();
@@ -578,9 +613,13 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
 	const auto& slots = *assembly.bindingSlots;
 	const std::array<uint32_t, 4> clusterSlots{slots.vertexPool, slots.clusters, slots.tris,
 		slots.remap};
+	// ---- 债-140 §27 直派模拟裁决（gfx1151 workaround，判据 → §26/§27；裁决本体已抽函数）----
+	const bool affectedDevice = device.isMdiMeshChainAffected();
+	const bool directEmu
+		= decideMdiShadowDirectEmu(cfg, affectedDevice, device, *assembly.shadowArgs, logger);
 	// 条目幂等（同名命中返回既有下标）；argsSlot = ④ 领的行表堆槽，binding 34 与声明同向。
 	const uint32_t mdiIdx = pipelines.addShadowMeshletMdiEntry(clusterSlots,
-		assembly.shadowArgs->argSlot());
+		assembly.shadowArgs->argSlot(), directEmu);
 	// 🔴 债-140 第四击 Ⓐ：**烘入 mapping 对账**（补上 heap_slot_audit 自知的另一半盲区）。
 	// 上一击审的是"服务那枚槽里的字节"，但 GPU 读的是**条目烘进去的那枚槽** —— 两条独立
 	// 代码路径（服务 writeSlotDescriptor / 条目 bakeBindingMappings）给出各自的槽号，
@@ -612,11 +651,15 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
 		logger->info("meshlet: mdi_shadow 生效（★M-1b）—— 机读三元：新条目下标={} 旧 shadow_meshlet "
 					 "条目下标={}（纯追加应仍=474）entries_total={}；旧簇槽 {}/{}/{}/{} + 可见标志槽 {} "
 					 "未动，行表槽 {}（binding 34）；sliceRows={} × slices={}（Σ行上界口径 = 选级表 "
-					 "count>0 的 objectSlot 数 × 级联段数，见 wireMeshletShadowArgs）",
+					 "count>0 的 objectSlot 数 × 级联段数，见 wireMeshletShadowArgs）；"
+					 "direct_emu={}（0=off 1=on；键枚举 0=auto 1=true 2=false；受影响设备 "
+					 "0/1；债-140 §27 gfx1151 workaround，Mesa#TODO）",
 			mdiIdx, oldIdx.value_or(0xFFFFFFFFu), pipelines.entriesView().size(), clusterSlots[0],
 			clusterSlots[1], clusterSlots[2], clusterSlots[3], slots.clusterVisible,
 			assembly.shadowArgs->argSlot(), assembly.shadowArgs->sliceRows(),
-			assembly.shadowArgs->slices());
+			assembly.shadowArgs->slices(), static_cast<uint32_t>(directEmu),
+			static_cast<uint32_t>(cfg.meshletMdiShadowDirect),
+			static_cast<uint32_t>(affectedDevice));
 }
 
 /**
@@ -780,7 +823,7 @@ void wireMeshletPostRegistration(entt::registry& registry, const UploadedAssets&
 	// ⑤ ★M-1b：真 MDI 条目烘焙 + 生效标记（🔴 必须紧跟④：argSlot() 此刻才是真值；而本函数
 	// 整体仍在 assembleBackEnd 之前 → DGC/GpuCull 的 entries 快照含新条目，时序论证与三态
 	// 结论 → wireMeshletMdiShadowActivation 头注释。门关 = 零条目零 INFO 零 ctx）。
-	wireMeshletMdiShadowActivation(registry, pipelines, assetTable, assembly, cfg);
+	wireMeshletMdiShadowActivation(registry, pipelines, assetTable, assembly, cfg, device);
 }
 
 }  // namespace RGL

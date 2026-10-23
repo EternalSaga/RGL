@@ -111,6 +111,7 @@ set(RGL_TEST_SOURCES
     test_mdi_rows.cppm           # ★M-0（§19.3）MDI 行表构建器：行序=候选序 + 前 12B 对账 Vk 结构 + stride 合法性 + 四条不变量反向用例（错误串两两不同）+ 配置键探针
                                  # + ★M-1a（§19.5）尺寸/偏移算术：🔴 argsOffset 与 rowBase 同源 + 07089/07090 合一闭式边界 + 容量少 1 字节必红
     test_mdi_shadow_emit.cppm    # ★M-1b（§19.2 D4 / §19.5）生效档采集判据：constexpr 桥（schema↔mdi_rows）+ 每级联一条 MDI + 同源 pair 闭式字面 + 混合形态/孔洞流/五档回落 + 行序=候选序
+    test_mdi_direct_emu.cppm     # 债-140 §27 直派模拟（gfx1151 workaround，Mesa#TODO）：三态裁决全表 + 保守上界网格 + 容量边界 + 组号→行号同源对账 + 空组早退 + 配置键
                                  # + ★M-1a（§19.5）尺寸/偏移算术：🔴 argsOffset 与 rowBase 同源 + 07089/07090 合一闭式边界 + 容量少 1 字节必红
     test_shader_mapping.cppm     # ★M-3T-a（§19.16）批 M mapping 过滤契约：🔴 无 task stage 不得判成解析失败（实踩：479 条误退全烘而终图逐位不变）+ task 声明进并集 + 三侧坏码流各触发 nullopt + 消费者侧条数与 running index 序
     test_shader_output_sig.cppm  # VUID-11148 判据面（2026-10-21 DGC execution set 修复）：fragment 输出签名只收 Output+Location + 声明序无关 + depth-only 空签名 + 坏码流哨兵 + 单/五输出必不同（合成 SPV，不读构建产物）

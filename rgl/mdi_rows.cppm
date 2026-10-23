@@ -240,6 +240,49 @@ export constexpr MdiShadowRowLocation mdiShadowRowLocation(uint32_t sliceRows, u
 	};
 }
 
+// ———— §27 直派模拟算式（gfx1151 workaround，上游 Mesa#TODO；判据 = 取证文档 §26/§27）————
+//
+// 直派模拟 = 把每级联的 `drawMeshTasksIndirectEXT(rowCount 行)` 换成语义等价的
+// `drawMeshTasksEXT(gridX,1,1)`：行表、push（rowBase/cascade）、task 取数、payload、可见性
+// 语义**一个不动**，只换派发指令。行消费契约从「MDI 逐行启动 task」变成「逐组算行号 +
+// 空行早退」——下面三枚纯函数就是这份新契约的 **CPU 侧唯一算式产地**（task 侧
+// `shadow_meshlet.task.slang` 的 MDI_DIRECT 分支是它的第二份拼写，两份的数值对账 =
+// tests/test_mdi_direct_emu 的闭式期望；同「C++↔shader 双拼写」的既有格局）。
+
+/**
+ * 行表 → **保守上界网格**：每行一组（不变量 3b「每可见行恰一枚 task」的对偶——直派网格
+ * 无法按可见性压紧，压紧要前缀和，§19.2 D4 已裁决不付那笔代价）⟹ grid X = 段行数，
+ * 含 gcX=0 的孔洞行（它们靠 `mdiDirectEmuSkipRow` 早退）。
+ */
+export [[nodiscard]] constexpr uint32_t mdiDirectEmuGridX(uint32_t rowCount) {
+	return rowCount;
+}
+
+/**
+ * 网格容量判据：task 管线的 `groupCountX ≤ maxTaskWorkGroupCount[0]`
+ * （VUID-vkCmdDrawMeshTasksEXT-TaskEXT-07322，Y=Z=1 ⟹ 乘积判据 07325 同式退化；
+ * spec 下限 65535，真产物 ~1.5k 恒过）。判负 = 装配层回落 MDI 形态并出声
+ * （workaround 自己不许把画面搞没）。
+ */
+export [[nodiscard]] constexpr bool mdiDirectEmuGridFits(uint32_t gridX,
+	uint32_t maxTaskWorkGroupCountX) {
+	return gridX <= maxTaskWorkGroupCountX;
+}
+
+/** 组号 → 行号（task 的 `row = rowBase + SV_GroupID.x` 的 CPU 对偶；行内序恒 0 = 不变量 3b）。 */
+export [[nodiscard]] constexpr uint32_t mdiDirectEmuRow(uint32_t rowBase, uint32_t groupX) {
+	return rowBase + groupX;
+}
+
+/**
+ * 空组早退判据：gcX == 0 的行在 MDI 下**根本不启动 task**（`VkDrawMeshTasksIndirectCommandEXT`
+ * 的 groupCountX=0），直派下网格覆盖它 ⟹ task 启动后必须按同一判据早退，两边消费才等价。
+ * 🔴 只看 word[0]（gcX），不看身份字段——不可见行的身份字段照写（文件头口径）。
+ */
+export [[nodiscard]] constexpr bool mdiDirectEmuSkipRow(uint32_t groupCountX) {
+	return groupCountX == 0u;
+}
+
 /**
  * 一个候选（一个级联内的一条阴影投影体候选，字段口径 = `ShadowCandidate` 的可切那半）。
  *

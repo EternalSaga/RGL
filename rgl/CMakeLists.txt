@@ -99,6 +99,9 @@ rgl_shader(shadow_meshlet.task SHADOW_MESHLET_TASK_SPV)
 # = 自证指令连存在都不存在（逐位不变的构造性保证；先例 = light.frag 的 IZB_CONSUME，
 # 教训 = 运行时 flag 挡不住 slang 重排 fp 融合，2026-10-02 实测 105401 像素漂移）。
 rgl_shader_defined(shadow_meshlet.task SHADOW_MESHLET_TASK_SELFCHECK_SPV SHADOW_SELFCHECK)
+# 债-140 §26/§27 直派模拟变体（门 `meshlet.mdi_shadow_direct`，gfx1151 workaround）：同一 .slang
+# 的 -DMDI_DIRECT 产物。行号走 SV_GroupID.x + gcX 早退，执行器发直派（不经 MDI 间接命令）。
+rgl_shader_defined(shadow_meshlet.task SHADOW_MESHLET_TASK_DIRECT_SPV MDI_DIRECT)
 # Phase 8 批次 ①：HDR tonemap frag（mesh 复用 light.mesh.spv；import scene 读 @56 曝光）
 rgl_shader(tonemap.frag TONEMAP_FRAG_SPV scene)
 # Phase 11 批 11.4：SSAO frag（mesh 复用 light.mesh.spv 全屏大三角；import scene 读

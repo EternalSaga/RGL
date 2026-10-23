@@ -212,6 +212,24 @@ export class DeviceContext {
 	/** @return DGC 能力位（queryDgcSupport 派生；culling 子系统据此选 DGC 全路径 /
 	 * 读回重放回退，见 vk_indirect_commands 模块与 phase7_devlog 批次 5）。 */
 	const RGL::DgcSupport& getDgcSupport() const { return dgcSupport; }
+	/**
+	 * 债-140 §26/§27：**MDI 间接命令 × mesh 真取数链崩溃**的受影响平台判据（gfx1151 workaround
+	 * 的设备识别脚，上游 issue 占位 **Mesa#TODO**，投递后回填编号）。
+	 *
+	 * 判据 = PCI (vendor 0x1002, device 0x1586)。**0x1586 = 本机实测**（Radeon 8060S /
+	 * RADV STRIX_HALO，`/sys/bus/pci/devices/0000:65:00.0/{vendor,device}` 亲读）。
+	 * ⚠ gfx1151（RDNA 3.5 Strix 系）家族另有近亲 SKU 的 device id（Strix Point 的 890M/880M
+	 * 等）——**本机未实测，一律不列进判据**；要扩列的准入 = 该机器上先用 `ab/repro/ --chain`
+	 * 复现器复红（§27 口径），再进来。宁缺勿滥的理由：漏列 = 那台机器维持现状（照崩但行为
+	 * 不变），错列 = 在未验证设备上静默换派发形态。
+	 *
+	 * 消费者唯一 = `wireMeshletMdiShadowActivation`（喂 `resolveMdiShadowDirectEmu` 的
+	 * `affectedDevice` 脚）；纯查询零副作用，启动期一次。
+	 */
+	[[nodiscard]] bool isMdiMeshChainAffected() const {
+		const auto p = getPhysicalDevice().getProperties();
+		return p.vendorID == 0x1002 && p.deviceID == 0x1586;
+	}
 	/** @return device fault 诊断通路的探测结论（后端 / masked 是否启用 / maxFaultCount）。
 	 *  消费者：main 的 device lost 出口（`reportDeviceFaultOnLost`）与 ecs 帧循环的 masked
 	 *  轮询（`pollDeviceFaults`）——两者都在 `backend == none` 时零调用返回。 */

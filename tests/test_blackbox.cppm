@@ -660,9 +660,11 @@ TEST_CASE("⑩ latch-once：自证支路只读一次 intrinsic，使用点全走
 	CHECK(countToken(mesh, "latchedSlot") >= 6u);  // latch + clusterIdx + P2 + half + 债-143 钳制
 	CHECK(countToken(mesh, "latchedObjectIndex") >= 4u);
 
-	// ── task：`drawID` 3 处 = 形参声明 + latch + 原版 #else；`mdiTaskPush.rowBase` 2 处同理 ──
+	// ── task：`drawID` 3 处 = 形参声明 + latch + 原版 #else；`mdiTaskPush.rowBase` 3 处 =
+	//    自证支 latch + 原版 #else + **直派模拟支**（债-140 §27，各支内部仍只读一次——
+	//    自证支的 TOCTOU 反向判据 = 下方 `+ drawID` 计数，直派支同型拼写由 §28 截图对拍兜底）──
 	CHECK(countToken(task, "drawID") == 3u);
-	CHECK(countToken(task, "mdiTaskPush.rowBase") == 2u);
+	CHECK(countToken(task, "mdiTaskPush.rowBase") == 3u);
 	CHECK(countToken(task, "latchedDrawId") >= 3u);
 	CHECK(countToken(task, "latchedRowBase") >= 3u);
 	CHECK(countToken(task, "latchedObjectIndex") >= 4u);
