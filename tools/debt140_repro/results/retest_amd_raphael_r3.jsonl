@@ -1,0 +1,15 @@
+{"round": 1, "rc": 0, "wall_s": 31.9, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 2, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 3, "rc": 0, "wall_s": 31.9, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 4, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 5, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 6, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 7, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 8, "rc": 0, "wall_s": 34.8, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 9, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 10, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 11, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 12, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 13, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"round": 14, "rc": 0, "wall_s": 32.0, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "AMD Ryzen 9 9950X 16-Core Processor (RADV RAPHAEL_MENDOCINO)", "hang": false}
+{"kernel_lines": [], "cell_wall_s": 450.6}

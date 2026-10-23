@@ -13,6 +13,8 @@
 > ```
 > 挂判据 = 进程 120s 不动 / 内核 `ring gfx timeout` / MODE2 复位（`journalctl -k`）。
 > `--heap` 变体需要 VK_EXT_descriptor_heap（NV/Intel 上没有，跳过属预期）。
+> 批量驱动 = `retest_cards.py <轮数>`（VK_ICD_FILENAMES 逐卡锁 ICD，逐轮 jsonl 落 results/）。
+> **2026-10-23 本机三卡（5090 / Arc B50 / RDNA2 核显）复测：9 格 0/14×9 全净 → 取证文档 §29。**
 
 > **🔴 2026-10-23 任务 13 更新：复现成立。**§22 的"独立复现失败"输在 mesh 是 trivial；
 > 补上引擎形态真取数链（`--chain`）后：**R3 = 12/14 挂**（经典管线+描述符集+MDI+链 mesh，

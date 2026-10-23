@@ -1,0 +1,15 @@
+{"round": 1, "rc": 0, "wall_s": 3.2, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 2, "rc": 0, "wall_s": 3.2, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 3, "rc": 0, "wall_s": 2.8, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 4, "rc": 0, "wall_s": 3.1, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 5, "rc": 0, "wall_s": 3.4, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 6, "rc": 0, "wall_s": 3.3, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 7, "rc": 0, "wall_s": 1.7, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 8, "rc": 0, "wall_s": 1.5, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 9, "rc": 0, "wall_s": 1.5, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 10, "rc": 0, "wall_s": 1.5, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 11, "rc": 0, "wall_s": 1.5, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 12, "rc": 0, "wall_s": 1.5, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 13, "rc": 0, "wall_s": 1.5, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"round": 14, "rc": 0, "wall_s": 1.5, "stderr": "", "checksum": 53699175, "lit": 210585, "device": "NVIDIA GeForce RTX 5090", "hang": false}
+{"kernel_lines": [], "cell_wall_s": 31.2}
