@@ -39,7 +39,7 @@ just gates       # 一条命令跑完编译 + 测试 + 严格检查
   (`vkCmdDrawMeshTasksEXT`) or trivial mesh shaders are clean — dose threshold
   ≈ 500–1500 mesh groups per dispatch, which is why CTS never caught it.
   Repro & full forensics: `tools/debt140_repro/` (see its `README` / `REPRODUCE.txt`),
-  `docs/债140_跨驱动与上游取证.md`; upstream Mesa issue pending.
+  `docs/债140_跨驱动与上游取证.md`; upstream: Mesa issues #16670 (probabilistic hang, standalone reproducer) & #16671 (deterministic DrawIndex defect + fix patch).
   Engine-side auto workaround for this PCI id: `meshlet.mdi_shadow_direct = "auto"`
   (direct-dispatch emulation, bit-identical output).
 
