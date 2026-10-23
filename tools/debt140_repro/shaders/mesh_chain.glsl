@@ -8,6 +8,11 @@ layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in; // 引擎 ★
 layout(triangles) out;
 layout(max_vertices = 255, max_primitives = 85) out;               // 引擎 3×85 契约
 layout(constant_id = 0) const uint CHAIN = 1u;
+// 任务 17：OVERSHOOT=1 开越界检测器（只测不拦）；CLAMPMODE 0=无钳制 1=mgc 钳制（现状）
+// 2=mgc 钳制+常量帽 8（payload 腐坏免疫）。spec 常量在管线创建期特化，关=死代码消除。
+layout(constant_id = 1) const uint OVERSHOOT = 0u;
+layout(constant_id = 2) const uint CLAMPMODE = 1u;
+layout(std430, binding = 6) buffer OvsLog { uint g[]; } ovsLog; // [0]count [1]max_slot [2]wptr [3..66]slots [67..130]mgcs [131]count_cap8
 layout(std430, binding = 1) readonly buffer RangeTbl { uvec2 r[]; } rangeTbl; // {base,count}
 layout(std430, binding = 2) readonly buffer Clusters { uint c[]; } clusterTbl; // 44B/条=11 word
 layout(std430, binding = 3) readonly buffer Tris { uint t[]; } triStream;      // u8 索引流
@@ -37,7 +42,21 @@ void main() {
     uint slot = gl_WorkGroupID.x;
 #endif
     uint v = gl_LocalInvocationID.x;
-    if (slot >= tpl.mgc) { SetMeshOutputsEXT(0u, 0u); return; } // 债-143 钳制
+    // 任务 17 E1 检测器：main 第一处、任何解引用之前。cap8 计数不依赖 payload
+    // （host 保证 mgc ∈ [2,8] ⟹ slot ≥ 8 必越界），补「payload 被毒致 mgc 检查失真」盲区。
+    if (OVERSHOOT != 0u && v == 0u) {
+        if (slot >= 8u) atomicAdd(ovsLog.g[131], 1u);
+        if (slot >= tpl.mgc) {
+            uint idx = atomicAdd(ovsLog.g[0], 1u);
+            atomicMax(ovsLog.g[1], slot);
+            if (idx < 64u) {
+                uint w = atomicAdd(ovsLog.g[2], 1u);
+                if (w < 64u) { ovsLog.g[3u + w] = slot; ovsLog.g[67u + w] = tpl.mgc; }
+            }
+        }
+    }
+    if (CLAMPMODE >= 1u && slot >= tpl.mgc) { SetMeshOutputsEXT(0u, 0u); return; } // 债-143 钳制
+    if (CLAMPMODE == 2u && slot >= 8u) { SetMeshOutputsEXT(0u, 0u); return; }      // E2b 常量帽
     if (CHAIN == 0u) { // R1 trivial：payload 只参与算术、不派地址
         SetMeshOutputsEXT(3u, 1u);
         if (v < 3u) {

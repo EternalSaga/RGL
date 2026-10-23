@@ -93,6 +93,8 @@ struct Opts {
 	uint32_t chain = 0;          // 1 = 引擎形态 task + 真取数链 mesh；0 = 旧臂
 	uint32_t triv = 0;           // 1 = 链 mesh 的 CHAIN=0 trivial 变体（R1 锚，配 --chain 1）
 	uint32_t gridsize = 0;       // 任务 16：1 = mesh_chain 消费 gl_NumWorkGroups（强制 user SGPR 槽非 0）
+	uint32_t overshoot = 0;      // 任务 17 E1：1 = mesh 入口越界检测器（slot≥mgc / slot≥8 计数，只测不拦）
+	uint32_t clampmode = 1;      // 任务 17 E2：0=无钳制 1=mgc 钳制（现状）2=mgc 钳制+常量帽 8
 	bool heap = false;           // SO + descriptor heap 绑定（引擎形态）；false = 描述符集
 	// 直派替代 MDI（引擎 S3 镜像）= `--mode direct`（链档下 grid X = 段行数）
 	bool rowvary = false;        // 行表内容每帧改写（引擎逐帧剔除变化）
@@ -139,6 +141,8 @@ int main(int argc, char **argv) {
 		else if (eq("--chain")) o.chain = (uint32_t)atoi(argv[++i]);
 		else if (eq("--triv")) o.triv = (uint32_t)atoi(argv[++i]);
 		else if (eq("--gridsize")) o.gridsize = (uint32_t)atoi(argv[++i]);
+		else if (eq("--overshoot")) o.overshoot = (uint32_t)atoi(argv[++i]);
+		else if (eq("--clampmode")) o.clampmode = (uint32_t)atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--heap")) o.heap = true;
 		else if (!strcmp(argv[i], "--rowvary")) o.rowvary = true;
 		else { std::fprintf(stderr, "unknown arg %s\n", argv[i]); return 3; }
@@ -556,17 +560,21 @@ int main(int argc, char **argv) {
 		return vkGetBufferDeviceAddress(dev, &di);
 	};
 	VkBuffer rowBuf = VK_NULL_HANDLE, rangeBuf = VK_NULL_HANDLE, clusterBuf = VK_NULL_HANDLE,
-			 trisBuf = VK_NULL_HANDLE, remapBuf = VK_NULL_HANDLE, poolBuf = VK_NULL_HANDLE;
-	VkDeviceMemory rowMem, rangeMem, clusterMem, trisMem, remapMem, poolMem;
-	void *rowMap = nullptr;
+			 trisBuf = VK_NULL_HANDLE, remapBuf = VK_NULL_HANDLE, poolBuf = VK_NULL_HANDLE,
+			 ovsBuf = VK_NULL_HANDLE; // 任务 17 越界日志（1KB host-coherent）
+	VkDeviceMemory rowMem, rangeMem, clusterMem, trisMem, remapMem, poolMem, ovsMem;
+	void *rowMap = nullptr, *ovsMap = nullptr;
+	FILE *osF = nullptr; // 任务 17：越界进度实时落盘（挂轮也留痕），每轮启动截断
 	VkDeviceSize rowBytesTotal = 0;
 	const uint32_t chainVal = o.triv ? 0u : 1u; // mesh_chain 的 CHAIN spec 常量
 	// 任务 16：--gridsize 1 = 换用消费 gl_NumWorkGroups 的 mesh_chain 变体（恒 +0，输出逐位同）
 	const char *chainMeshSpv = o.gridsize ? "shaders/mesh_chain_gs.spv" : "shaders/mesh_chain.spv";
-	VkSpecializationMapEntry csme{0, 0, 4};
+	// 任务 17：spec 三入口 = {CHAIN, OVERSHOOT, CLAMPMODE}（关的检测器在管线创建期被折掉）
+	const uint32_t specVals[3] = {chainVal, o.overshoot, o.clampmode};
+	VkSpecializationMapEntry csme[3] = {{0, 0, 4}, {1, 4, 4}, {2, 8, 4}};
 	VkSpecializationInfo cspec{};
-	cspec.mapEntryCount = 1; cspec.pMapEntries = &csme;
-	cspec.dataSize = 4; cspec.pData = &chainVal;
+	cspec.mapEntryCount = 3; cspec.pMapEntries = csme;
+	cspec.dataSize = 12; cspec.pData = specVals;
 	if (o.chain) {
 		uint64_t s = 0x5EED26ull; // 静态表 LCG 定种子（可复现）
 		auto rnd = [&]() {
@@ -618,6 +626,9 @@ int main(int argc, char **argv) {
 		CHAIN_STATIC(remap, remapHost, (VkDeviceSize)remapHost.size() * 4)
 		CHAIN_STATIC(pool, poolHost, (VkDeviceSize)poolHost.size() * 4)
 #undef CHAIN_STATIC
+		makeBufferAddr(1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, ovsBuf, ovsMem, &ovsMap);
+		memset(ovsMap, 0, 1024); // 越界日志：[0]count [1]max [2]wptr [3..66]slots [67..130]mgcs [131]cap8
+		if (o.overshoot) osF = std::fopen("os_live.txt", "w");
 	}
 
 	// ---- §26 heap 档：堆缓冲 + 六枚描述符 + ESO（引擎 shadow_meshlet_mdi 条目的引擎外镜像）----
@@ -627,6 +638,7 @@ int main(int argc, char **argv) {
 	VkShaderEXT shTask = VK_NULL_HANDLE, shMesh = VK_NULL_HANDLE, shFrag = VK_NULL_HANDLE;
 	uint32_t pushWords[3] = {0, 0, 0}; // 引擎 DrawArgs {rowBase, cascade, reserved}
 	if (o.chain && o.heap) {
+		if (o.overshoot) { std::fprintf(stderr, "heap+overshoot: binding 6 未接 ESO 映射（E1/E2 走经典集档）\n"); return 3; }
 		VkPhysicalDeviceDescriptorHeapPropertiesEXT hprops{
 			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_PROPERTIES_EXT};
 		VkPhysicalDeviceProperties2 hp2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
@@ -703,18 +715,19 @@ int main(int argc, char **argv) {
 	VkPipelineLayout plChain = VK_NULL_HANDLE;
 	VkDescriptorSet dsetChain = VK_NULL_HANDLE;
 	if (o.chain && !o.heap) {
-		VkDescriptorSetLayoutBinding cdb[6] = {
+		VkDescriptorSetLayoutBinding cdb[7] = {
 			{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr},
 			{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
 			{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
 			{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
 			{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
-			{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr}};
+			{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+			{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr}}; // 任务 17 越界日志
 		VkDescriptorSetLayoutCreateInfo cdli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-		cdli.bindingCount = 6; cdli.pBindings = cdb;
+		cdli.bindingCount = 7; cdli.pBindings = cdb;
 		VkDescriptorSetLayout dslChain;
 		check("CreateDSLc", vkCreateDescriptorSetLayout(dev, &cdli, nullptr, &dslChain));
-		VkDescriptorPoolSize cps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6};
+		VkDescriptorPoolSize cps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7};
 		VkDescriptorPoolCreateInfo cpi2{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 		cpi2.maxSets = 1; cpi2.poolSizeCount = 1; cpi2.pPoolSizes = &cps;
 		VkDescriptorPool dpChain;
@@ -722,17 +735,18 @@ int main(int argc, char **argv) {
 		VkDescriptorSetAllocateInfo cdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 		cdai.descriptorPool = dpChain; cdai.descriptorSetCount = 1; cdai.pSetLayouts = &dslChain;
 		check("AllocDSc", vkAllocateDescriptorSets(dev, &cdai, &dsetChain));
-		struct { VkBuffer b; VkDeviceSize sz; } res[6] = {
+		struct { VkBuffer b; VkDeviceSize sz; } res[7] = {
 			{rowBuf, rowBytesTotal}, {rangeBuf, (VkDeviceSize)rangeHost.size() * 4},
 			{clusterBuf, (VkDeviceSize)clusterHost.size() * 4}, {trisBuf, trisBytes},
-			{remapBuf, (VkDeviceSize)remapHost.size() * 4}, {poolBuf, (VkDeviceSize)poolHost.size() * 4}};
-		VkDescriptorBufferInfo dbi[6]; VkWriteDescriptorSet wd[6];
-		for (uint32_t i = 0; i < 6; ++i) {
+			{remapBuf, (VkDeviceSize)remapHost.size() * 4}, {poolBuf, (VkDeviceSize)poolHost.size() * 4},
+			{ovsBuf, 1024}};
+		VkDescriptorBufferInfo dbi[7]; VkWriteDescriptorSet wd[7];
+		for (uint32_t i = 0; i < 7; ++i) {
 			dbi[i] = {res[i].b, 0, res[i].sz};
 			wd[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, dsetChain, i, 0, 1,
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &dbi[i], nullptr};
 		}
-		vkUpdateDescriptorSets(dev, 6, wd, 0, nullptr);
+		vkUpdateDescriptorSets(dev, 7, wd, 0, nullptr);
 		VkPushConstantRange pcr{VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u};
 		VkPipelineLayoutCreateInfo cpli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		cpli.setLayoutCount = 1; cpli.pSetLayouts = &dslChain;
@@ -979,6 +993,11 @@ int main(int argc, char **argv) {
 			siC.commandBufferCount = 1; siC.pCommandBuffers = &cmd;
 			check("Submit", vkQueueSubmit(queue, 1, &siC, fences[slot]));
 			if (!o.async) vkWaitForFences(dev, 1, &fences[slot], VK_TRUE, ~0ull);
+			if (osF && (f % 50u == 49u || f + 1u == o.frames)) { // 越界进度 flush（sync 档读回安全）
+				const uint32_t *og = (const uint32_t *)ovsMap;
+				std::fprintf(osF, "OS f%u count=%u cap8=%u max=%u\n", f, og[0], og[131], og[1]);
+				std::fflush(osF);
+			}
 			continue;
 		}
 		VkRenderPassBeginInfo rbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -1073,7 +1092,22 @@ int main(int argc, char **argv) {
 	uint64_t sum = 0, lit = 0;
 	auto *px = (const uint8_t *)rbMap;
 	for (uint32_t i = 0; i < W * H; ++i) { sum += px[i * 4]; if (px[i * 4] > 127) ++lit; }
-	printf("{\"tasks\":%u,\"x\":%u,\"rows\":%u,\"dispatches\":%u,\"frames\":%u,\"mode\":\"%s\",\"xsrc\":\"%s\",\"reuse\":\"%s\",\"async\":%s,\"interleave\":%s,\"heavy\":%s,\"vary\":%s,\"meshdrawid\":%s,\"meshread\":%s,\"intermesh\":%u,\"intertask\":%u,\"twopass\":%s,\"chain\":%u,\"triv\":%u,\"heap\":%s,\"rowvary\":%s,\"total_groups\":%llu,\"checksum\":%llu,\"lit_pixels\":%llu,\"device\":\"%s\",\"driver\":%u}\n",
+	// 任务 17：越界读数（count=slot≥mgc；cap8=slot≥8 不依赖 payload；前 64 个 slot/mgc 值）
+	uint32_t osCnt = 0, osCap8 = 0, osMax = 0;
+	char osSlots[640] = "", osMgcs[640] = "";
+	if (o.chain && o.overshoot && ovsMap) {
+		const uint32_t *og = (const uint32_t *)ovsMap;
+		osCnt = og[0]; osCap8 = og[131]; osMax = og[1];
+		uint32_t n = og[0] < 64u ? og[0] : 64u;
+		int p1 = 0, p2 = 0;
+		for (uint32_t i = 0; i < n; ++i) {
+			p1 += std::snprintf(osSlots + p1, sizeof(osSlots) - p1, "%s%u", i ? "," : "", og[3 + i]);
+			p2 += std::snprintf(osMgcs + p2, sizeof(osMgcs) - p2, "%s%u", i ? "," : "", og[67 + i]);
+			if (p1 > 600 || p2 > 600) break;
+		}
+	}
+	if (osF) std::fclose(osF);
+	printf("{\"tasks\":%u,\"x\":%u,\"rows\":%u,\"dispatches\":%u,\"frames\":%u,\"mode\":\"%s\",\"xsrc\":\"%s\",\"reuse\":\"%s\",\"async\":%s,\"interleave\":%s,\"heavy\":%s,\"vary\":%s,\"meshdrawid\":%s,\"meshread\":%s,\"intermesh\":%u,\"intertask\":%u,\"twopass\":%s,\"chain\":%u,\"triv\":%u,\"heap\":%s,\"rowvary\":%s,\"total_groups\":%llu,\"checksum\":%llu,\"lit_pixels\":%llu,\"overshoot_count\":%u,\"overshoot_cap8\":%u,\"overshoot_max\":%u,\"overshoot_slots\":\"%s\",\"overshoot_mgcs\":\"%s\",\"device\":\"%s\",\"driver\":%u}\n",
 		o.tasks, o.x, rows, o.dispatches, o.frames, o.mode.c_str(), o.xsrc.c_str(), o.reuse.c_str(),
 		o.async ? "true" : "false", o.interleave ? "true" : "false", o.heavy ? "true" : "false",
 		o.vary ? "true" : "false", o.meshdrawid ? "true" : "false",
@@ -1081,6 +1115,7 @@ int main(int argc, char **argv) {
 		o.intermesh, o.intertask, o.twopass ? "true" : "false",
 		o.chain, o.triv, o.heap ? "true" : "false", o.rowvary ? "true" : "false",
 		(unsigned long long)totalGroups, (unsigned long long)sum, (unsigned long long)lit,
+		osCnt, osCap8, osMax, osSlots, osMgcs,
 		props.deviceName, props.driverVersion);
 	vkDeviceWaitIdle(dev);
 	return 0;

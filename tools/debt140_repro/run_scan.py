@@ -72,12 +72,17 @@ def main():
 			"resets": jcount(since, "reset succeeded"),
 			"mode2": jcount(since, "MODE2"),
 			"fault_lines": [l.split("address")[-1].strip()[:20] for l in faults][:2],
+			"overshoot_count": out.get("overshoot_count"), "overshoot_cap8": out.get("overshoot_cap8"),
+			"overshoot_max": out.get("overshoot_max"), "overshoot_slots": out.get("overshoot_slots"),
+			"overshoot_mgcs": out.get("overshoot_mgcs"),
+			"os_tail": ((OUT.parent / "os_live.txt").read_text().strip().splitlines() or [""])[-1]
+			if (OUT.parent / "os_live.txt").exists() else "",
 			"stderr": (se or "")[-200:]}
 		fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 		fh.flush()
 		print(f"  r{n}: {'❌挂' if rec['hang'] else '✅净'} rc={rc} {wall}s "
 			f"lit={rec['lit']} reset={rec['resets']} MODE2={rec['mode2']} "
-			f"fault={rec['fault_lines']}", flush=True)
+			f"fault={rec['fault_lines']} os={rec['overshoot_count'] or rec['os_tail'] or '-'}", flush=True)
 		if rec["hang"]:
 			wait_reset(since)
 	h = sum(1 for l in open(path) if json.loads(l)["hang"])
