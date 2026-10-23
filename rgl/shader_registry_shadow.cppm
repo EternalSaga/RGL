@@ -79,7 +79,7 @@ namespace RGL {
 	 */
 	[[nodiscard]] static const char* pickShadowMdiSpecName(bool directEmu, bool selfcheck) {
 		if (directEmu)
-			return "shadow_meshlet_mdi_direct";  // 债-140 §27 gfx1151 workaround（Mesa#TODO）
+			return "shadow_meshlet_mdi_direct";  // 债-140 §27 gfx1151 workaround（Mesa#16670）
 		return selfcheck ? "shadow_meshlet_mdi_selfcheck" : "shadow_meshlet_mdi";
 	}
 
@@ -97,7 +97,7 @@ namespace RGL {
 		// 自证指令在 SPV 里连存在都不存在（实测两份产物 1452 vs 3684 字节，原版 DebugPrintf
 		// 命中 0）。🔴 条目**名**保持 "shadow_meshlet_mdi" 不变：下游按名查条目（资产绑定、
 		// 采集侧取 pipeline 下标）一处都不该因为开了个诊断门而改拼写。
-		// 债-140 §27 直派模拟（gfx1151 workaround，上游 Mesa#TODO）：directEmu 优先于自证——
+		// 债-140 §27 直派模拟（gfx1151 workaround，上游 Mesa#16670）：directEmu 优先于自证——
 		// 自证的 task 变体只拼在 SV_DrawIndex 那份上（SHADOW_SELFCHECK × MDI_DIRECT 第三份
 		// task SPV 不存在，两门同开时静默选直派 = 自证零输出，装配层 wireMeshletMdiShadowActivation
 		// 对这一组合**出声**（warn），不在这里静默）。
@@ -159,7 +159,7 @@ namespace RGL {
 			if (auto* logger = RLLogger::getInstance())
 				logger->info(
 					"pipeline entry: shadow_meshlet_mdi 用 **直派模拟变体**（gfx1151 workaround，"
-					"上游 Mesa#TODO，判据 → docs/债140_跨驱动与上游取证.md §26/§27），task SPV = {}",
+					"上游 Mesa#16670，判据 → docs/债140_跨驱动与上游取证.md §26/§27），task SPV = {}",
 					spec->taskSpv);
 		}
 		if (selfcheck) {

@@ -97,7 +97,7 @@ export struct PipelineEntry {
 	RGL::PipelineSpec spec;                       // SPV 规格路径（源 .slang 名 = basename 换扩展）
 	RGL::PipelineBindings bindings;               // 烘焙 mapping 参数（heap 槽/形态位/extra）
 	bool modelEntry = false;                      // addModelEntry 建的模式位（picking 克隆范围判据 = mesh 接口是 ModelVertexOutput）
-	/** 债-140 §27 直派模拟位（gfx1151 workaround，上游 Mesa#TODO）：本条目的 task 是
+	/** 债-140 §27 直派模拟位（gfx1151 workaround，上游 Mesa#16670）：本条目的 task 是
 	 *  MDI_DIRECT 变体 ⟹ 执行器对 `drawCount > 1` 的发 `drawMeshTasksEXT(drawCount,1,1)` 直派
 	 *  而非间接命令。**唯一产地 = `addShadowMeshletMdiEntry` 的选路参数**（与 task SPV 同源，
 	 *  派发形态与接口变体按构造不可分家）；消费点唯一 = `Renderer::drawOne`。 */
@@ -596,7 +596,7 @@ export class ShaderRegistry {
 	 * @param clusterSlots 4 个簇 buffer 堆槽号（binding 17-20，与旧条目同一批，口径同上）
 	 * @param argsSlot 行表 heap 槽号（binding 34 = MeshletShadowArgsService::argSlot()；定案号 22
 	 * 被 sceneHeader 占用，见 shadow_meshlet.mesh.slang 的 ⚠ 注）
-	 * @param directEmu 债-140 §27 直派模拟（gfx1151 workaround，上游 Mesa#TODO）：true = task 选
+	 * @param directEmu 债-140 §27 直派模拟（gfx1151 workaround，上游 Mesa#16670）：true = task 选
 	 * MDI_DIRECT 变体 + 条目 `directTaskDispatch` 置位（执行器发直派替代间接命令）。
 	 * 判据与语义等价实证 → docs/债140_跨驱动与上游取证.md §26/§27。与 shader_selfcheck 同开时
 	 * 自证失效（调用侧出声）。
@@ -760,7 +760,7 @@ export class ShaderRegistry {
 				"generated_shaders/shadow.frag.spv",
 				"generated_shaders/shadow_meshlet.task_SHADOW_SELFCHECK.spv"},
 			// 债-140 §26/§27 **直派模拟**变体（门 `meshlet.mdi_shadow_direct`，gfx1151 workaround，
-			// 上游 Mesa#TODO）：mesh SPV 与 MDI 变体**逐字节同一份**，只换 task（SV_GroupID 行号 +
+			// 上游 Mesa#16670）：mesh SPV 与 MDI 变体**逐字节同一份**，只换 task（SV_GroupID 行号 +
 			// gcX 早退）；执行器按条目 `directTaskDispatch` 位发 vkCmdDrawMeshTasksEXT 替代间接命令。
 			// 语义等价实证 = §26.2（400 帧截图 sha256 逐位相同）+ 本批判据复跑。
 			{"shadow_meshlet_mdi_direct", "generated_shaders/shadow_meshlet.mesh_MDI_SHADOW.spv",

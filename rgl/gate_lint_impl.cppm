@@ -390,7 +390,7 @@ const GateRule kGateRules[]{
 	{"meshlet.mdi_shadow_direct", GateSeverity::warn,
 		"mdi_shadow_direct = \"true\" 但 meshlet.mdi_shadow 关着 ⟹ MDI 条目根本不烘，直派模拟与"
 		"间接命令**两者都不存在**，本键无消费者（债-140 §27 的 workaround 键只换派发指令，"
-		"行表/条目/采集全挂在 mdi_shadow 的宿主链上；上游 Mesa#TODO）",
+		"行表/条目/采集全挂在 mdi_shadow 的宿主链上；上游 Mesa#16670）",
 		// 跨键宿主残留行（heap_slot_audit 同型）：assets/lod 两脚由块与 mdi_shadow 行各自出声，
 		// 本行只报「宿主两脚都好而 mdi_shadow 本身关着 + 本键显式 true」这一格。
 		[](const Ctx& c) { return c.runtime.meshletMdiShadowDirect == MdiShadowDirectEmu::On
@@ -489,13 +489,13 @@ const BlockKey kMeshletKeys[]{
 		"assets）⟹ 槽没人给，阴影段 LOD 整体无效（债-106 把 ★18-C 的就近 WARNING 迁到此处）。"
 		"门关档 shadow_lod = -1 不满足「≥ 0」⟹ 不喊 = 「门关 grep meshlet = 0」护栏保留"},
 	{"meshlet.mdi_shadow", [](const Ctx& c) { return c.runtime.meshletMdiShadow; }, kMsgMeshletMdiShadow},
-	// 债-140 §27 直派模拟（gfx1151 workaround，Mesa#TODO）：present = **偏离默认 "auto"**
+	// 债-140 §27 直派模拟（gfx1151 workaround，Mesa#16670）：present = **偏离默认 "auto"**
 	// （显式 true/false 才是申报；auto = 出厂默认不产 finding，同 cull_replay 口径）。
 	// 块只报 assets=false 的宿主不成立；跨键宿主（mdi_shadow 不在）在 kGateRules 残留行。
 	{"meshlet.mdi_shadow_direct",
 		[](const Ctx& c) { return deviated(c, &RuntimeConfig::meshletMdiShadowDirect); },
 		"mdi_shadow_direct 的宿主链 = assets → mdi_shadow 宿主（行表载体 + MDI 条目）：本键只"
-		"决定「条目烘出来之后派发指令选哪条」（直派模拟 vs 间接命令，债-140 §26/§27，Mesa#TODO）"},
+		"决定「条目烘出来之后派发指令选哪条」（直派模拟 vs 间接命令，债-140 §26/§27，Mesa#16670）"},
 	{"meshlet.shadow_proxy", [](const Ctx& c) { return c.runtime.meshletShadowProxy; },
 		kMsgMeshletShadowProxy},
 };

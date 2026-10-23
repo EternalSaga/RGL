@@ -6,7 +6,7 @@ module;
 #include <fstream>
 
 /**
- * test_mdi_direct_emu —— 债-140 §27 **直派模拟**（gfx1151 workaround，上游 Mesa#TODO）的
+ * test_mdi_direct_emu —— 债-140 §27 **直派模拟**（gfx1151 workaround，上游 Mesa#16670）的
  * 纯逻辑层：三态键裁决 + 行表→网格算式 + 组号→行号映射 + 空组早退判据。
  *
  * 被测对象 = `rgl/runtime_config.cppm`（resolveMdiShadowDirectEmu + 键解析）+

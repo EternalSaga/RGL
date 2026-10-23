@@ -404,7 +404,7 @@ void Renderer::drawOne(vk::raii::CommandBuffer& cmd, const DrawCall& call) {
 	if (call.drawCount > 1u) {
 		// 行表载体必然在位：prepareMdiShadowRows 已在 pass 循环前把段写好并核对过服务指针
 		// （段非空而指针空 = 那里已 throw，走到这里 mdiShadowArgs 非空是构造性事实）。
-		// 债-140 §27 直派模拟（gfx1151 workaround，上游 Mesa#TODO，判据 → §26/§27）：条目位与
+		// 债-140 §27 直派模拟（gfx1151 workaround，上游 Mesa#16670，判据 → §26/§27）：条目位与
 		// task SPV 变体同源（addShadowMeshletMdiEntry 唯一产地）⟹ grid X = 段行数直派，行表/
 		// push/上传/消费全同；行消费契约的 CPU 算式 = mdi_rows::mdiDirectEmu*（测试钉）。
 		if (entry.directTaskDispatch)

@@ -240,7 +240,7 @@ export constexpr MdiShadowRowLocation mdiShadowRowLocation(uint32_t sliceRows, u
 	};
 }
 
-// ———— §27 直派模拟算式（gfx1151 workaround，上游 Mesa#TODO；判据 = 取证文档 §26/§27）————
+// ———— §27 直派模拟算式（gfx1151 workaround，上游 Mesa#16670；判据 = 取证文档 §26/§27）————
 //
 // 直派模拟 = 把每级联的 `drawMeshTasksIndirectEXT(rowCount 行)` 换成语义等价的
 // `drawMeshTasksEXT(gridX,1,1)`：行表、push（rowBase/cascade）、task 取数、payload、可见性

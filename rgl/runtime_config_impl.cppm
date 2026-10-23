@@ -628,7 +628,7 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 
 /**
  * `meshlet.mdi_shadow_direct` 三态字符串键解析（债-140 §27 直派模拟，gfx1151 workaround，
- * 上游 Mesa#TODO；形态先例 = `applyMeshletShadowLodFallbackKey`，含其 ⚠ 覆盖面边界：
+ * 上游 Mesa#16670；形态先例 = `applyMeshletShadowLodFallbackKey`，含其 ⚠ 覆盖面边界：
  * 只有字符串值进得了判据，非字符串 = 缺键保默认）。
  * 值域 = "auto"（默认）/ "true" / "false"；未知值 = 启动 fail-fast（笔误静默回落 = 把
  * workaround 读丢，比崩更糟）。语义展开 → RuntimeConfig::meshletMdiShadowDirect 注释。

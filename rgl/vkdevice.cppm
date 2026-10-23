@@ -214,7 +214,7 @@ export class DeviceContext {
 	const RGL::DgcSupport& getDgcSupport() const { return dgcSupport; }
 	/**
 	 * 债-140 §26/§27：**MDI 间接命令 × mesh 真取数链崩溃**的受影响平台判据（gfx1151 workaround
-	 * 的设备识别脚，上游 issue 占位 **Mesa#TODO**，投递后回填编号）。
+	 * 的设备识别脚，上游 issue 占位 **Mesa#16670**，投递后回填编号）。
 	 *
 	 * 判据 = PCI (vendor 0x1002, device 0x1586)。**0x1586 = 本机实测**（Radeon 8060S /
 	 * RADV STRIX_HALO，`/sys/bus/pci/devices/0000:65:00.0/{vendor,device}` 亲读）。

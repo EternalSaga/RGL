@@ -531,7 +531,7 @@ uint32_t bindMdiShadowEntryToAssets(ShaderRegistry& pipelines, const AssetTable&
 }
 
 /**
- * 债-140 §27 直派模拟的**裁决本体**（gfx1151 workaround，上游 Mesa#TODO，判据 → §26/§27）：
+ * 债-140 §27 直派模拟的**裁决本体**（gfx1151 workaround，上游 Mesa#16670，判据 → §26/§27）：
  * 两脚 = 三态键 × 受影响设备（`resolveMdiShadowDirectEmu` 纯函数，tests/test_mdi_direct_emu 钉）
  * + 容量回落（grid 判负 = 退回 MDI 并出声，workaround 自己不许把画面搞没）+ 自证冲突出声。
  * 结果只喂一个消费者（`addShadowMeshletMdiEntry` → 条目 directTaskDispatch 位 + task SPV 变体，
@@ -653,7 +653,7 @@ void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pi
 					 "未动，行表槽 {}（binding 34）；sliceRows={} × slices={}（Σ行上界口径 = 选级表 "
 					 "count>0 的 objectSlot 数 × 级联段数，见 wireMeshletShadowArgs）；"
 					 "direct_emu={}（0=off 1=on；键枚举 0=auto 1=true 2=false；受影响设备 "
-					 "0/1；债-140 §27 gfx1151 workaround，Mesa#TODO）",
+					 "0/1；债-140 §27 gfx1151 workaround，Mesa#16670）",
 			mdiIdx, oldIdx.value_or(0xFFFFFFFFu), pipelines.entriesView().size(), clusterSlots[0],
 			clusterSlots[1], clusterSlots[2], clusterSlots[3], slots.clusterVisible,
 			assembly.shadowArgs->argSlot(), assembly.shadowArgs->sliceRows(),

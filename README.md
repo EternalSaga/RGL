@@ -46,7 +46,7 @@ just gates       # 一条命令跑完编译 + 测试 + 严格检查
 - **gfx1151（Radeon 8060S / Strix Halo）**：MDI × mesh 着色器真取数链会概率性 GPU 挂死
   （fault@0 + CP wedge；跨厂商对照 RDNA2 核显 / NVIDIA / Intel 全净）。
   完整取证与**独立最小复现器**：`tools/debt140_repro/`、`docs/债140_跨驱动与上游取证.md`；
-  上游 issue 投递中。引擎内置该平台自动绕过：`meshlet.mdi_shadow_direct = "auto"`
+  上游 issue 已投：https://gitlab.freedesktop.org/mesa/mesa/-/issues/16670。引擎内置该平台自动绕过：`meshlet.mdi_shadow_direct = "auto"`
   （直派模拟，输出逐位一致）。
 
 ## 仓库结构
