@@ -1,0 +1,309 @@
+--- /tmp/step03_fixed.cpp	2026-10-22 23:45:06.309997802 +0800
++++ vktMeshShaderMdiMergeTestsEXT.cpp	2026-10-22 23:55:13.935077977 +0800
+@@ -106,7 +106,6 @@
+ 	"layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+ 	"layout(std430, set = 0, binding = 0) buffer RowTable { uint t[]; } rows;\n"
+ 	"layout(push_constant) uniform Push { uint rowBase; uint seg; uint segRows; } pc;\n"
+-
+ 	"struct MeshPayload { uint rowId; uint groups; uint obj; };\n"
+ 	"taskPayloadSharedEXT MeshPayload payload;\n"
+ 	"void main() {\n"
+@@ -145,6 +144,39 @@
+ 
+ // Pixel payload: R|G = rowId the draw reported, B = group count it read from the row
+ // table, A = 0x80 | z (nonzero, so "written" is distinguishable from the black clear).
++// step04 (engine main-scene shape): mesh-only direct dispatch, no task stage. Reads a big
++// table per workgroup (real memory traffic) and lands a marker pixel in the far corner of the
++// fb (alpha bit 6 -> invisible to the slot detector, which only reads bit 7).
++const char *DIRECT_MESH_GLSL =
++	"#version 460\n"
++	"#extension GL_EXT_mesh_shader : require\n"
++	"layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;\n"
++	"layout(triangles) out;\n"
++	"layout(max_vertices = 3, max_primitives = 1) out;\n"
++	"layout(std430, set = 0, binding = 1) buffer BigTable { uint t[]; } tbl;\n"
++	"layout(location = 0) out flat uvec3 slotInfo[3];\n"
++	"shared uint ssum;\n"
++	"void main() {\n"
++	"    SetMeshOutputsEXT(3u, 1u);\n"
++	"    if (gl_LocalInvocationID.x == 0u) ssum = 0u;\n"
++	"    barrier();\n"
++	"    uint base = gl_WorkGroupID.x * 256u + gl_LocalInvocationID.x * 8u;\n"
++	"    uint mine = 0u;\n"
++	"    for (int j = 0; j < 8; ++j) mine += tbl.t[(base + uint(j)) & 1048575u];\n"
++	"    atomicAdd(ssum, mine);\n"
++	"    barrier();\n"
++	"    uint sum = ssum;\n"
++	"    uint slot = 262100u + (sum % 40u);\n"
++	"    uint px = slot % 512u;\n"
++	"    uint py = slot / 512u;\n"
++	"    uint v = gl_LocalInvocationID.x;\n"
++	"    vec2 lp[3] = vec2[3](vec2(0.1, 0.1), vec2(0.9, 0.1), vec2(0.5, 0.9));\n"
++	"    vec2 p = (vec2(float(px), float(py)) + lp[v] * 0.8) / vec2(512.0, 512.0);\n"
++	"    gl_MeshVerticesEXT[v].gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);\n"
++	"    if (v == 0u) gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);\n"
++	"    slotInfo[v] = uvec3(sum & 255u, (sum >> 8) & 255u, 64u);\n"
++	"}\n";
++
+ const char *FRAG_GLSL =
+ 	"#version 450\n"
+ 	"layout(location = 0) in flat uvec3 slotInfo;\n"
+@@ -211,6 +243,7 @@
+ 		programCollection.glslSources.add("task") << glu::TaskSource(TASK_GLSL) << buildOptions;
+ 		programCollection.glslSources.add("mesh") << glu::MeshSource(MESH_GLSL) << buildOptions;
+ 		programCollection.glslSources.add("frag") << glu::FragmentSource(FRAG_GLSL) << buildOptions;
++		programCollection.glslSources.add("direct") << glu::MeshSource(DIRECT_MESH_GLSL) << buildOptions;
+ 	}
+ 
+ 	void checkSupport(Context &context) const override
+@@ -288,6 +321,22 @@
+ 	fillHostBuf(vkd, device, alloc, rowBytesTotal, rowUsage, rowBuf, heap);
+ 	memset(rowBuf.map, 0, size_t(rowBytesTotal));
+ 
++	// ---- big table (step04): 4 MB, read by the direct-dispatch mesh shader ----
++	auto tblUsage = (VkBufferUsageFlags)(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
++	if (heap)
++		tblUsage = (VkBufferUsageFlags)(tblUsage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
++	HostBuf bigTable;
++	fillHostBuf(vkd, device, alloc, 4u << 20u, tblUsage, bigTable, heap);
++	{
++		uint32_t *tp = static_cast<uint32_t *>(bigTable.map);
++		uint64_t ts = 0x1234ABCDull;
++		for (uint32_t i = 0u; i < (4u << 20u) / 4u; ++i)
++		{
++			ts = ts * 6364136223846793005ull + 1442695040888963407ull;
++			tp[i] = uint32_t(ts >> 33u);
++		}
++	}
++
+ 	// ---- color target ----
+ 	const auto colorSRR = makeImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u);
+ 	ImageWithBuffer color(vkd, device, alloc, extent, fbFormat,
+@@ -320,6 +369,17 @@
+ 		dst.address = heapBuf.map;
+ 		dst.size = resourceStride;
+ 		VK_CHECK(vkd.writeResourceDescriptorsEXT(device, 1u, &rdi, &dst));
++		// slot 1 -> big table (direct-dispatch pipeline)
++		VkResourceDescriptorInfoEXT rdi2 = initVulkanStructure();
++		rdi2.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
++		VkDeviceAddressRangeEXT bar2 = {};
++		bar2.address = bigTable.addr;
++		bar2.size = 4u << 20u;
++		rdi2.data.pAddressRange = &bar2;
++		VkHostAddressRangeEXT dst2 = {};
++		dst2.address = static_cast<char *>(heapBuf.map) + resourceStride;
++		dst2.size = resourceStride;
++		VK_CHECK(vkd.writeResourceDescriptorsEXT(device, 1u, &rdi2, &dst2));
+ 		// push data: 12B engine DrawArgs {rowBase, cascade, selfCheck} (engine shape)
+ 		fillHostBuf(vkd, device, alloc, 12u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pushBuf);
+ 		memset(pushBuf.map, 0, 12u);
+@@ -328,6 +388,7 @@
+ 	// ---- set layout (+ mapping for heap) ----
+ 	const auto dsl = DescriptorSetLayoutBuilder()
+ 	                     .addSingleBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_TASK_BIT_EXT)
++	                     .addSingleBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_MESH_BIT_EXT)
+ 	                     .build(vkd, device);
+ 
+ 	VkDescriptorSetAndBindingMappingEXT mapping = initVulkanStructure();
+@@ -346,6 +407,22 @@
+ 	mappingInfo.mappingCount = 1u;
+ 	mappingInfo.pMappings = &mapping;
+ 
++	// direct-mesh-stage mapping: binding 1 <- heap slot 1 (constant offset)
++	VkDescriptorSetAndBindingMappingEXT mapping2 = initVulkanStructure();
++	mapping2.descriptorSet = 0u;
++	mapping2.firstBinding = 1u;
++	mapping2.bindingCount = 1u;
++	mapping2.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
++	if (heap)
++	{
++		mapping2.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
++		mapping2.sourceData.constantOffset.heapOffset = uint32_t(resourceStride);
++		mapping2.sourceData.constantOffset.heapArrayStride = 0u;
++	}
++	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo2 = initVulkanStructure();
++	mappingInfo2.mappingCount = 1u;
++	mappingInfo2.pMappings = &mapping2;
++
+ 	const VkDescriptorSetLayout dslRaw = dsl.get();
+ 	const VkPushConstantRange pcRange = {VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u};
+ 	const auto pl = makePipelineLayout(vkd, device, dslRaw, heap ? nullptr : &pcRange);
+@@ -360,9 +437,12 @@
+ 		descriptorPool = poolBuilder.build(vkd, device, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, 1u);
+ 		descriptorSet = makeDescriptorSet(vkd, device, *descriptorPool, dsl.get());
+ 		const VkDescriptorBufferInfo rowBufInfo = makeDescriptorBufferInfo(*rowBuf.buf, 0ull, rowBytesTotal);
++		const VkDescriptorBufferInfo tblBufInfo = makeDescriptorBufferInfo(*bigTable.buf, 0ull, 4u << 20u);
+ 		DescriptorSetUpdateBuilder updateBuilder;
+ 		updateBuilder.writeSingle(*descriptorSet, DescriptorSetUpdateBuilder::Location::binding(0u),
+ 		                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &rowBufInfo);
++		updateBuilder.writeSingle(*descriptorSet, DescriptorSetUpdateBuilder::Location::binding(1u),
++		                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &tblBufInfo);
+ 		updateBuilder.update(vkd, device);
+ 	}
+ 
+@@ -377,9 +457,12 @@
+ 	const auto ctype = eso ? PIPELINE_CONSTRUCTION_TYPE_SHADER_OBJECT_UNLINKED_SPIRV
+ 	                       : PIPELINE_CONSTRUCTION_TYPE_MONOLITHIC;
+ 	std::unique_ptr<GraphicsPipelineWrapper> pipeWrap;
++	std::unique_ptr<GraphicsPipelineWrapper> pipeWrap2; // step04 direct mesh-only (so arm)
+ 	PipelineLayoutWrapper layoutWrap;
+ 	Move<VkPipeline> rawPipe;
++	Move<VkPipeline> rawPipe2; // step04 direct mesh-only (classic/heap arms)
+ 	std::vector<Move<VkShaderEXT>> shaders; // ESO+heap manual path
++	std::vector<Move<VkShaderEXT>> shaders2; // step04 direct (soheap arm)
+ 	std::vector<VkDynamicState> dynStates;
+ 
+ 	if (eso)
+@@ -426,6 +509,22 @@
+ 		rawPipe = makeGraphicsPipeline(vkd, device, VK_NULL_HANDLE, heap ? (VkPipelineLayout)VK_NULL_HANDLE : pl.get(),
+ 		                               0u, stageVec, rp.get(), viewports, scissors, 0u, &rs, &ms, &ds, &cb, &dyn,
+ 		                               heap ? (const void *)&flags2 : nullptr, &vinCi, &iaCi);
++		// step04: direct mesh-only pipeline; mesh stage carries the big-table mapping (heap arms)
++		const auto directMod = createShaderModule(vkd, device, binaries.get("direct"));
++		VkPipelineShaderStageCreateInfo dStages[2] = {initVulkanStructure(), initVulkanStructure()};
++		dStages[0].stage = VK_SHADER_STAGE_MESH_BIT_EXT;
++		dStages[0].module = *directMod;
++		dStages[0].pName = "main";
++		if (heap)
++			dStages[0].pNext = &mappingInfo2;
++		dStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
++		dStages[1].module = *fragMod;
++		dStages[1].pName = "main";
++		const std::vector<VkPipelineShaderStageCreateInfo> dStageVec(dStages, dStages + 2);
++		rawPipe2 = makeGraphicsPipeline(vkd, device, VK_NULL_HANDLE,
++		                                heap ? (VkPipelineLayout)VK_NULL_HANDLE : pl.get(), 0u, dStageVec, rp.get(),
++		                                viewports, scissors, 0u, &rs, &ms, &ds, &cb, &dyn,
++		                                heap ? (const void *)&flags2 : nullptr, &vinCi, &iaCi);
+ 	}
+ 	else if (!heap)
+ 	{
+@@ -450,6 +549,17 @@
+ 		pipeWrap->setupFragmentShaderState(layoutWrap, VK_NULL_HANDLE, 0u, fragSh, nullptr, &msEso);
+ 		pipeWrap->setupFragmentOutputState(VK_NULL_HANDLE, 0u, &cbEso, &msEso);
+ 		pipeWrap->buildPipeline();
++		// step04: direct mesh-only wrapper (null task shader)
++		pipeWrap2 = std::make_unique<GraphicsPipelineWrapper>(vki, vkd, m_context.getPhysicalDevice(), device,
++		                                                      m_context.getDeviceExtensions(), ctype);
++		ShaderWrapper noTask;
++		ShaderWrapper directSh(vkd, device, binaries.get("direct"), VK_SHADER_STAGE_MESH_BIT_EXT);
++		ShaderWrapper fragSh2(vkd, device, binaries.get("frag"), VK_SHADER_STAGE_FRAGMENT_BIT);
++		pipeWrap2->setupPreRasterizationMeshShaderState(viewports, scissors, layoutWrap, VK_NULL_HANDLE, 0u, noTask,
++		                                                directSh);
++		pipeWrap2->setupFragmentShaderState(layoutWrap, VK_NULL_HANDLE, 0u, fragSh2, nullptr, &msEso);
++		pipeWrap2->setupFragmentOutputState(VK_NULL_HANDLE, 0u, &cbEso, &msEso);
++		pipeWrap2->buildPipeline();
+ 	}
+ 	else
+ 	{
+@@ -485,6 +595,34 @@
+ 			sci.pNext = &mappingInfo;
+ 			shaders.push_back(createShader(vkd, device, sci));
+ 		}
++		// step04: direct mesh-only shader objects (mesh carries binding-1 mapping, frag none)
++		const struct
++		{
++			VkShaderStageFlagBits stage;
++			const ProgramBinary *bin;
++			const void *map;
++		} dDefs[2] = {
++			{VK_SHADER_STAGE_MESH_BIT_EXT, &binaries.get("direct"), &mappingInfo2},
++			{VK_SHADER_STAGE_FRAGMENT_BIT, &binaries.get("frag"), nullptr},
++		};
++		for (const auto &sd : dDefs)
++		{
++			VkShaderCreateInfoEXT sci = initVulkanStructure();
++			sci.flags = VkShaderCreateFlagsEXT(VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT);
++			sci.stage = sd.stage;
++			sci.nextStage = (sd.stage == VK_SHADER_STAGE_MESH_BIT_EXT) ? VK_SHADER_STAGE_FRAGMENT_BIT
++			                                                           : VkShaderStageFlagBits(0u);
++			sci.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
++			sci.codeSize = sd.bin->getSize();
++			sci.pCode = sd.bin->getBinary();
++			sci.pName = "main";
++			sci.setLayoutCount = 0u;
++			sci.pSetLayouts = nullptr;
++			sci.pushConstantRangeCount = 0u;
++			sci.pPushConstantRanges = nullptr;
++			sci.pNext = sd.map;
++			shaders2.push_back(createShader(vkd, device, sci));
++		}
+ 	}
+ 
+ 	// ---- record ----
+@@ -772,14 +910,14 @@
+ 			pushWords[2] = segRows;
+ 			if (heap)
+ 			{
+-				// push data snapshots at RECORD time: refresh host contents AND re-record the
+-				// push command before every segment draw (one push per draw = engine drawOne shape)
++				// push data snapshots at RECORD time: refresh host AND re-record the push command
++				// before every segment draw (one push per draw = engine drawOne shape)
+ 				memcpy(pushBuf.map, pushWords, sizeof(pushWords));
+-				VkPushDataInfoEXT pdi = initVulkanStructure();
+-				pdi.offset = 0u;
+-				pdi.data.address = pushBuf.map;
+-				pdi.data.size = 12u;
+-				vkd.cmdPushDataEXT(cmdH, &pdi);
++				VkPushDataInfoEXT pdiSeg = initVulkanStructure();
++				pdiSeg.offset = 0u;
++				pdiSeg.data.address = pushBuf.map;
++				pdiSeg.data.size = 12u;
++				vkd.cmdPushDataEXT(cmdH, &pdiSeg);
+ 			}
+ 			if (!heap)
+ 			{
+@@ -792,6 +930,32 @@
+ 		}
+ 	}
+ 
++	// step04: interleaved direct mesh-only dispatch (engine main-scene shape: no task, real
++	// per-group reads of a 4 MB table). Marker pixels use alpha bit 6 -> invisible to detector.
++	if (!eso)
++	{
++		vkd.cmdBindPipeline(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, rawPipe2.get());
++		if (!heap)
++		{
++			const auto set2 = *descriptorSet;
++			vkd.cmdBindDescriptorSets(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, pl.get(), 0u, 1u, &set2, 0u, nullptr);
++		}
++	}
++	else if (pipeWrap2)
++	{
++		pipeWrap2->bind(cmdH);
++	}
++	else
++	{
++		const VkShaderStageFlagBits d2Stages[2] = {VK_SHADER_STAGE_MESH_BIT_EXT, VK_SHADER_STAGE_FRAGMENT_BIT};
++		for (size_t i = 0u; i < shaders2.size(); ++i)
++		{
++			const auto sh2 = *shaders2[i];
++			vkd.cmdBindShadersEXT(cmdH, 1u, &d2Stages[i], &sh2);
++		}
++	}
++	vkd.cmdDrawMeshTasksEXT(cmdH, 8192u, 1u, 1u);
++
+ 	if (!eso)
+ 		endRenderPass(vkd, cmdH);
+ 	else
+@@ -900,7 +1064,7 @@
+ 				const uint32_t g = px[idx * 4u + 1u];
+ 				const uint32_t b = px[idx * 4u + 2u];
+ 				const uint32_t a = px[idx * 4u + 3u];
+-				const bool actual = (a & 0x80u) != 0u;
++				const bool actual = (a & 0xC0u) == 0x80u; // bit6 marker pixels (direct dispatch) are ignored
+ 				const uint32_t actRow = r | (g << 8u);
+ 				const uint32_t actGroups = b;
+ 				const uint32_t actZ = a & 0x7Fu;
+@@ -953,7 +1117,7 @@
+ 					    px[idx * 4u + 2u] != px2[idx * 4u + 2u] || px[idx * 4u + 3u] != px2[idx * 4u + 3u])
+ 						++diffBytes;
+ 					const uint32_t a = px2[idx * 4u + 3u];
+-					const bool actual = (a & 0x80u) != 0u;
++					const bool actual = (a & 0xC0u) == 0x80u; // bit6 marker pixels (direct dispatch) are ignored
+ 					const uint32_t actRow = uint32_t(px2[idx * 4u + 0u]) | (uint32_t(px2[idx * 4u + 1u]) << 8u);
+ 					const uint32_t actGroups = px2[idx * 4u + 2u];
+ 					const uint32_t actZ = a & 0x7Fu;
+# step04: 簇2c+5(合成部分) —— 每帧 MDI 段后交错一次 mesh-only 直派（引擎主场景形态：无 task、
+# 8192 组、每组真读 4MB 大表 1KB）；marker 像素 alpha 位6，检测器 actual 改判 (a&0xC0)==0x80
+# 忽略 marker（首版 marker 溢槽被当 extra，冒烟抓到即修）。heap 臂 per-seg 重录 push data 的修复
+# 一并落此版（step03 快照回丢过一次，冒烟抓到即补）。

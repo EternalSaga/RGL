@@ -1,0 +1,554 @@
+--- /tmp/step01_before.cpp	2026-10-22 23:15:45.412943155 +0800
++++ vktMeshShaderMdiMergeTestsEXT.cpp	2026-10-22 23:23:56.344878171 +0800
+@@ -105,14 +105,16 @@
+ 	"#extension GL_EXT_mesh_shader : require\n"
+ 	"layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+ 	"layout(std430, set = 0, binding = 0) buffer RowTable { uint t[]; } rows;\n"
+-	"struct MeshPayload { uint rowId; uint groups; };\n"
++	"layout(push_constant) uniform Push { uint rowBase; uint cascade; uint selfCheck; } pc;\n"
++	"struct MeshPayload { uint rowId; uint groups; uint obj; };\n"
+ 	"taskPayloadSharedEXT MeshPayload payload;\n"
+ 	"void main() {\n"
+-	"    uint rid = gl_DrawID;\n"
+-	"    uint g = rows.t[(rid % 1800u) * 6u + 5u];\n"
+-	"    payload.rowId = rid;\n"
++	"    uint row = pc.rowBase + gl_DrawID;\n"
++	"    uint g = rows.t[row * 6u + 5u];\n"
++	"    payload.rowId = gl_DrawID;\n"
+ 	"    payload.groups = g;\n"
+-	"    EmitMeshTasksEXT(1u, 1u, g);\n"
++	"    payload.obj = rows.t[row * 6u + 3u];\n"
++	"    EmitMeshTasksEXT(g, 1u, 1u);\n"
+ 	"}\n";
+ 
+ const char *MESH_GLSL =
+@@ -127,10 +129,10 @@
+ 	"void main() {\n"
+ 	"    SetMeshOutputsEXT(3u, 1u);\n"
+ 	"    uint v = gl_LocalInvocationID.x;\n"
+-	"    uint idx = payload.rowId * 64u + gl_WorkGroupID.z;\n"
++	"    uint idx = payload.rowId * 64u + gl_WorkGroupID.x;\n"
+ 	"    uint px = idx % 512u;\n"
+ 	"    uint py = idx / 512u;\n"
+-	"    slotInfo[v] = uvec3(payload.rowId, payload.groups, gl_WorkGroupID.z);\n"
++	"    slotInfo[v] = uvec3(payload.rowId, payload.groups, gl_WorkGroupID.x);\n"
+ 	"    vec2 corner[3] = vec2[3](vec2(0.06, 0.06), vec2(0.94, 0.06), vec2(0.5, 0.94));\n"
+ 	"    vec2 p = vec2(float(px), float(py)) + corner[v];\n"
+ 	"    vec2 ndc = (p / 512.0) * 2.0 - 1.0;\n"
+@@ -280,7 +282,9 @@
+ 	if (heap)
+ 		rowUsage = (VkBufferUsageFlags)(rowUsage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+ 	HostBuf rowBuf;
+-	fillHostBuf(vkd, device, alloc, VkDeviceSize(kMaxRows) * 24u, rowUsage, rowBuf, heap);
++	const VkDeviceSize rowBytesTotal = VkDeviceSize(2u) * kMaxRows * 24u; // ring x2 frame slots (engine shape)
++	fillHostBuf(vkd, device, alloc, rowBytesTotal, rowUsage, rowBuf, heap);
++	memset(rowBuf.map, 0, size_t(rowBytesTotal));
+ 
+ 	// ---- color target ----
+ 	const auto colorSRR = makeImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u);
+@@ -308,15 +312,15 @@
+ 		rdi.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+ 		VkDeviceAddressRangeEXT bar = {};
+ 		bar.address = rowBuf.addr;
+-		bar.size = VkDeviceSize(kMaxRows) * 24u;
++		bar.size = rowBytesTotal; // both ring slots (task addresses rowBase + drawID)
+ 		rdi.data.pAddressRange = &bar;
+ 		VkHostAddressRangeEXT dst = {};
+ 		dst.address = heapBuf.map;
+ 		dst.size = resourceStride;
+ 		VK_CHECK(vkd.writeResourceDescriptorsEXT(device, 1u, &rdi, &dst));
+-		// push data: heap index 0 (uint32 at push offset 0)
+-		fillHostBuf(vkd, device, alloc, 8u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pushBuf);
+-		memset(pushBuf.map, 0, 8u);
++		// push data: 12B engine DrawArgs {rowBase, cascade, selfCheck} (engine shape)
++		fillHostBuf(vkd, device, alloc, 12u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pushBuf);
++		memset(pushBuf.map, 0, 12u);
+ 	}
+ 
+ 	// ---- set layout (+ mapping for heap) ----
+@@ -331,18 +335,18 @@
+ 	mapping.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
+ 	if (heap)
+ 	{
+-		mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
+-		mapping.sourceData.pushIndex.heapOffset = 0u;
+-		mapping.sourceData.pushIndex.pushOffset = 0u;
+-		mapping.sourceData.pushIndex.heapIndexStride = uint32_t(resourceStride);
+-		mapping.sourceData.pushIndex.heapArrayStride = uint32_t(resourceStride);
++		// engine shape: heap slot baked at entry time = constant offset, frees push data for push constants
++		mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_CONSTANT_OFFSET_EXT;
++		mapping.sourceData.constantOffset.heapOffset = 0u;
++		mapping.sourceData.constantOffset.heapArrayStride = 0u;
+ 	}
+ 	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo = initVulkanStructure();
+ 	mappingInfo.mappingCount = 1u;
+ 	mappingInfo.pMappings = &mapping;
+ 
+ 	const VkDescriptorSetLayout dslRaw = dsl.get();
+-	const auto pl = makePipelineLayout(vkd, device, dslRaw);
++	const VkPushConstantRange pcRange = {VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u};
++	const auto pl = makePipelineLayout(vkd, device, dslRaw, heap ? nullptr : &pcRange);
+ 
+ 	// classic-set descriptor (bound only in non-heap arms; pool only exists there)
+ 	Move<VkDescriptorPool> descriptorPool;
+@@ -353,8 +357,7 @@
+ 		poolBuilder.addType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+ 		descriptorPool = poolBuilder.build(vkd, device, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, 1u);
+ 		descriptorSet = makeDescriptorSet(vkd, device, *descriptorPool, dsl.get());
+-		const VkDescriptorBufferInfo rowBufInfo =
+-		    makeDescriptorBufferInfo(*rowBuf.buf, 0ull, VkDeviceSize(kMaxRows) * 24u);
++		const VkDescriptorBufferInfo rowBufInfo = makeDescriptorBufferInfo(*rowBuf.buf, 0ull, rowBytesTotal);
+ 		DescriptorSetUpdateBuilder updateBuilder;
+ 		updateBuilder.writeSingle(*descriptorSet, DescriptorSetUpdateBuilder::Location::binding(0u),
+ 		                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &rowBufInfo);
+@@ -430,7 +433,8 @@
+ 		ShaderWrapper meshSh(vkd, device, binaries.get("mesh"), VK_SHADER_STAGE_MESH_BIT_EXT);
+ 		ShaderWrapper fragSh(vkd, device, binaries.get("frag"), VK_SHADER_STAGE_FRAGMENT_BIT);
+ 		VkDescriptorSetLayout dslArr[1] = {dsl.get()};
+-		layoutWrap = PipelineLayoutWrapper(ctype, vkd, device, 1u, dslArr);
++		layoutWrap = PipelineLayoutWrapper(ctype, vkd, device, 1u, dslArr, heap ? 0u : 1u,
++		                                              heap ? nullptr : &pcRange);
+ 		VkPipelineColorBlendAttachmentState cbaEso = {};
+ 		cbaEso.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+ 		                        VK_COLOR_COMPONENT_A_BIT;
+@@ -472,6 +476,10 @@
+ 			// VUID-VkShaderCreateInfoEXT-flags-11290: DESCRIPTOR_HEAP flag requires setLayoutCount == 0
+ 			sci.setLayoutCount = 0u;
+ 			sci.pSetLayouts = nullptr;
++			// VUID-VkShaderCreateInfoEXT-flags-11370: heap flag => pushConstantRangeCount == 0;
++			// push constants are fed from the push data region (engine does exactly this)
++			sci.pushConstantRangeCount = 0u;
++			sci.pPushConstantRanges = nullptr;
+ 			sci.pNext = &mappingInfo;
+ 			shaders.push_back(createShader(vkd, device, sci));
+ 		}
+@@ -479,27 +487,35 @@
+ 
+ 	// ---- record ----
+ 	const auto cmdPool = makeCommandPool(vkd, device, queueIndex, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+-	// resubmitted once per frame: no ONE_TIME_SUBMIT
++	// engine shape: the command buffer is RE-RECORDED every frame (two alternating CBs)
+ 	VkCommandBufferAllocateInfo cbai = initVulkanStructure();
+ 	cbai.commandPool = *cmdPool;
+ 	cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+ 	cbai.commandBufferCount = 1u;
+-	const auto cmd = allocateCommandBuffer(vkd, device, &cbai);
+-	beginCommandBuffer(vkd, *cmd, 0u); // resubmitted once per frame
+-
+-	// color layout -> attachment
+-	{
+-		const auto b = makeImageMemoryBarrier(0u, (VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
+-		                                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+-		                                      color.getImage(), colorSRR);
+-		cmdPipelineImageMemoryBarrier(vkd, *cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++	const auto cmd0 = allocateCommandBuffer(vkd, device, &cbai);
++	const auto cmd1 = allocateCommandBuffer(vkd, device, &cbai);
++	uint32_t pushWords[3] = {0u, 0u, 0u}; // engine DrawArgs {rowBase, cascade, selfCheck}
++	auto cmdH_of = [](const Move<VkCommandBuffer> &m) { return *m; };
++
++	auto recordFrame = [&](VkCommandBuffer cmdH, uint32_t rowBase, bool firstFrame)
++	{
++	beginCommandBuffer(vkd, cmdH, 0u);
++
++	// color layout -> attachment (per-frame: TRANSFER_SRC after the previous frame's copy-out)
++	{
++		const auto b = makeImageMemoryBarrier(firstFrame ? 0u : VK_ACCESS_TRANSFER_READ_BIT,
++		                                      (VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
++		                                      firstFrame ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++		                                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, color.getImage(), colorSRR);
++		cmdPipelineImageMemoryBarrier(vkd, cmdH,
++		                              firstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
+ 		                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, &b);
+ 	}
+ 
+ 	if (!eso)
+ 	{
+ 		const auto clearColorF = makeClearValueColorF32(0.0f, 0.0f, 0.0f, 0.0f);
+-		beginRenderPass(vkd, *cmd, rp.get(), fb.get(), makeRect2D(extent), clearColorF);
++		beginRenderPass(vkd, cmdH, rp.get(), fb.get(), makeRect2D(extent), clearColorF);
+ 	}
+ 	else
+ 	{
+@@ -512,7 +528,7 @@
+ 			VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, cv};
+ 		const VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO, nullptr, 0u,
+ 			VkRect2D{{0, 0}, {extent.width, extent.height}}, 1u, 0u, 1u, &colorAtt, nullptr, nullptr};
+-		vkd.cmdBeginRendering(*cmd, &ri);
++		vkd.cmdBeginRendering(cmdH, &ri);
+ 	}
+ 
+ 	if (heap)
+@@ -522,21 +538,22 @@
+ 		bh.heapRange.size = heapSize;
+ 		bh.reservedRangeOffset = heapSize - heapProps.minResourceHeapReservedRange;
+ 		bh.reservedRangeSize = heapProps.minResourceHeapReservedRange;
+-		vkd.cmdBindResourceHeapEXT(*cmd, &bh);
++		vkd.cmdBindResourceHeapEXT(cmdH, &bh);
+ 		VkPushDataInfoEXT pdi = initVulkanStructure();
+ 		pdi.offset = 0u;
+ 		pdi.data.address = pushBuf.map;
+-		pdi.data.size = 8u;
+-		vkd.cmdPushDataEXT(*cmd, &pdi);
++		pdi.data.size = 12u;
++		vkd.cmdPushDataEXT(cmdH, &pdi);
+ 	}
+ 
+ 	if (eso)
+ 	{
+ 		if (pipeWrap)
+ 		{
+-			pipeWrap->bind(*cmd);
++			pipeWrap->bind(cmdH);
++			vkd.cmdPushConstants(cmdH, layoutWrap.get(), VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u, pushWords);
+ 			const auto dsetEso = *descriptorSet;
+-			layoutWrap.bindDescriptorSets(*cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, 0u, 1u, &dsetEso, 0u, nullptr);
++			layoutWrap.bindDescriptorSets(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, 0u, 1u, &dsetEso, 0u, nullptr);
+ 		}
+ 		else
+ 		{
+@@ -544,7 +561,7 @@
+ 			{
+ 				const auto stage = stages[i].stage;
+ 				const auto sh = *shaders[i];
+-				vkd.cmdBindShadersEXT(*cmd, 1u, &stage, &sh);
++				vkd.cmdBindShadersEXT(cmdH, 1u, &stage, &sh);
+ 			}
+ 			// ESO mesh path: fixed-function stages must be explicitly unbound (VUIDs 08684-08687)
+ 			{
+@@ -553,7 +570,7 @@
+ 				                                               VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
+ 				                                               VK_SHADER_STAGE_GEOMETRY_BIT};
+ 				const VkShaderEXT nullSh[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+-				vkd.cmdBindShadersEXT(*cmd, 4u, nullStages, nullSh);
++				vkd.cmdBindShadersEXT(cmdH, 4u, nullStages, nullSh);
+ 			}
+ 			// ESO base dynamic state (always required; helper list only adds extension-dependent ones)
+ 			{
+@@ -567,41 +584,41 @@
+ 				                                      VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
+ 				const VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+ 				const VkSampleMask sampleMask = 0xFFFFFFFFu;
+-				vkd.cmdSetViewportWithCount(*cmd, 1u, &v);
+-				vkd.cmdSetScissorWithCount(*cmd, 1u, &r);
+-				vkd.cmdSetLineWidth(*cmd, 1.0f);
+-				vkd.cmdSetDepthBiasEnable(*cmd, VK_FALSE);
+-				vkd.cmdSetBlendConstants(*cmd, bc);
+-				vkd.cmdSetDepthBounds(*cmd, 0.0f, 1.0f);
+-				vkd.cmdSetStencilCompareMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
+-				vkd.cmdSetStencilWriteMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
+-				vkd.cmdSetStencilReference(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0u);
+-				vkd.cmdSetCullMode(*cmd, VK_CULL_MODE_NONE);
+-				vkd.cmdSetFrontFace(*cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+-				vkd.cmdSetPrimitiveTopology(*cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+-				vkd.cmdSetPrimitiveRestartEnable(*cmd, VK_FALSE);
+-				vkd.cmdSetRasterizerDiscardEnable(*cmd, VK_FALSE);
+-				vkd.cmdSetDepthTestEnable(*cmd, VK_FALSE);
+-				vkd.cmdSetDepthWriteEnable(*cmd, VK_FALSE);
+-				vkd.cmdSetDepthCompareOp(*cmd, VK_COMPARE_OP_LESS);
+-				vkd.cmdSetDepthBoundsTestEnable(*cmd, VK_FALSE);
+-				vkd.cmdSetStencilTestEnable(*cmd, VK_FALSE);
+-				vkd.cmdSetStencilOp(*cmd, VK_STENCIL_FACE_FRONT_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
++				vkd.cmdSetViewportWithCount(cmdH, 1u, &v);
++				vkd.cmdSetScissorWithCount(cmdH, 1u, &r);
++				vkd.cmdSetLineWidth(cmdH, 1.0f);
++				vkd.cmdSetDepthBiasEnable(cmdH, VK_FALSE);
++				vkd.cmdSetBlendConstants(cmdH, bc);
++				vkd.cmdSetDepthBounds(cmdH, 0.0f, 1.0f);
++				vkd.cmdSetStencilCompareMask(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
++				vkd.cmdSetStencilWriteMask(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
++				vkd.cmdSetStencilReference(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0u);
++				vkd.cmdSetCullMode(cmdH, VK_CULL_MODE_NONE);
++				vkd.cmdSetFrontFace(cmdH, VK_FRONT_FACE_COUNTER_CLOCKWISE);
++				vkd.cmdSetPrimitiveTopology(cmdH, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
++				vkd.cmdSetPrimitiveRestartEnable(cmdH, VK_FALSE);
++				vkd.cmdSetRasterizerDiscardEnable(cmdH, VK_FALSE);
++				vkd.cmdSetDepthTestEnable(cmdH, VK_FALSE);
++				vkd.cmdSetDepthWriteEnable(cmdH, VK_FALSE);
++				vkd.cmdSetDepthCompareOp(cmdH, VK_COMPARE_OP_LESS);
++				vkd.cmdSetDepthBoundsTestEnable(cmdH, VK_FALSE);
++				vkd.cmdSetStencilTestEnable(cmdH, VK_FALSE);
++				vkd.cmdSetStencilOp(cmdH, VK_STENCIL_FACE_FRONT_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
+ 				                           VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
+-				vkd.cmdSetStencilOp(*cmd, VK_STENCIL_FACE_BACK_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
++				vkd.cmdSetStencilOp(cmdH, VK_STENCIL_FACE_BACK_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
+ 				                           VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
+-				vkd.cmdSetLogicOpEnableEXT(*cmd, VK_FALSE);
+-				vkd.cmdSetLogicOpEXT(*cmd, VK_LOGIC_OP_COPY);
+-				vkd.cmdSetColorBlendEnableEXT(*cmd, 0u, 1u, &bFalse);
+-				vkd.cmdSetColorBlendEquationEXT(*cmd, 0u, 1u, &eq);
+-				vkd.cmdSetColorWriteMaskEXT(*cmd, 0u, 1u, &wmask);
+-				vkd.cmdSetAlphaToCoverageEnableEXT(*cmd, VK_FALSE);
+-				vkd.cmdSetAlphaToOneEnableEXT(*cmd, VK_FALSE);
+-				vkd.cmdSetVertexInputEXT(*cmd, 0u, nullptr, 0u, nullptr);
+-				vkd.cmdSetPolygonModeEXT(*cmd, VK_POLYGON_MODE_FILL);
+-				vkd.cmdSetRasterizationSamplesEXT(*cmd, samples);
+-				vkd.cmdSetSampleMaskEXT(*cmd, samples, &sampleMask);
+-				vkd.cmdSetDepthClampEnableEXT(*cmd, VK_FALSE);
++				vkd.cmdSetLogicOpEnableEXT(cmdH, VK_FALSE);
++				vkd.cmdSetLogicOpEXT(cmdH, VK_LOGIC_OP_COPY);
++				vkd.cmdSetColorBlendEnableEXT(cmdH, 0u, 1u, &bFalse);
++				vkd.cmdSetColorBlendEquationEXT(cmdH, 0u, 1u, &eq);
++				vkd.cmdSetColorWriteMaskEXT(cmdH, 0u, 1u, &wmask);
++				vkd.cmdSetAlphaToCoverageEnableEXT(cmdH, VK_FALSE);
++				vkd.cmdSetAlphaToOneEnableEXT(cmdH, VK_FALSE);
++				vkd.cmdSetVertexInputEXT(cmdH, 0u, nullptr, 0u, nullptr);
++				vkd.cmdSetPolygonModeEXT(cmdH, VK_POLYGON_MODE_FILL);
++				vkd.cmdSetRasterizationSamplesEXT(cmdH, samples);
++				vkd.cmdSetSampleMaskEXT(cmdH, samples, &sampleMask);
++				vkd.cmdSetDepthClampEnableEXT(cmdH, VK_FALSE);
+ 			}
+ 			for (const auto ds : dynStates)
+ 			{
+@@ -609,120 +626,120 @@
+ 				{
+ 				case VK_DYNAMIC_STATE_VIEWPORT: {
+ 					const VkViewport v = makeViewport(extent);
+-					vkd.cmdSetViewport(*cmd, 0u, 1u, &v);
++					vkd.cmdSetViewport(cmdH, 0u, 1u, &v);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_SCISSOR: {
+ 					const VkRect2D r = makeRect2D(extent);
+-					vkd.cmdSetScissor(*cmd, 0u, 1u, &r);
++					vkd.cmdSetScissor(cmdH, 0u, 1u, &r);
+ 					break;
+ 				}
+-				case VK_DYNAMIC_STATE_LINE_WIDTH: vkd.cmdSetLineWidth(*cmd, 1.0f); break;
++				case VK_DYNAMIC_STATE_LINE_WIDTH: vkd.cmdSetLineWidth(cmdH, 1.0f); break;
+ 				case VK_DYNAMIC_STATE_DEPTH_BIAS: break; // legacy alias; DEPTH_BIAS_ENABLE set false in base block
+ 				case VK_DYNAMIC_STATE_BLEND_CONSTANTS: {
+ 					const float bc[4] = {0, 0, 0, 0};
+-					vkd.cmdSetBlendConstants(*cmd, bc);
++					vkd.cmdSetBlendConstants(cmdH, bc);
+ 					break;
+ 				}
+-				case VK_DYNAMIC_STATE_DEPTH_BOUNDS: vkd.cmdSetDepthBounds(*cmd, 0.0f, 1.0f); break;
+-				case VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK: vkd.cmdSetStencilCompareMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu); break;
+-				case VK_DYNAMIC_STATE_STENCIL_WRITE_MASK: vkd.cmdSetStencilWriteMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu); break;
+-				case VK_DYNAMIC_STATE_STENCIL_REFERENCE: vkd.cmdSetStencilReference(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0u); break;
+-				case VK_DYNAMIC_STATE_CULL_MODE: vkd.cmdSetCullMode(*cmd, VK_CULL_MODE_NONE); break;
+-				case VK_DYNAMIC_STATE_FRONT_FACE: vkd.cmdSetFrontFace(*cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE); break;
+-				case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY: vkd.cmdSetPrimitiveTopology(*cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST); break;
+-				case VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE: vkd.cmdSetPrimitiveRestartEnable(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE: vkd.cmdSetRasterizerDiscardEnable(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE: vkd.cmdSetDepthTestEnable(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE: vkd.cmdSetDepthWriteEnable(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP: vkd.cmdSetDepthCompareOp(*cmd, VK_COMPARE_OP_LESS); break;
+-				case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE: vkd.cmdSetDepthBoundsTestEnable(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE: vkd.cmdSetStencilTestEnable(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT: vkd.cmdSetLogicOpEnableEXT(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_LOGIC_OP_EXT: vkd.cmdSetLogicOpEXT(*cmd, VK_LOGIC_OP_COPY); break;
++				case VK_DYNAMIC_STATE_DEPTH_BOUNDS: vkd.cmdSetDepthBounds(cmdH, 0.0f, 1.0f); break;
++				case VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK: vkd.cmdSetStencilCompareMask(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu); break;
++				case VK_DYNAMIC_STATE_STENCIL_WRITE_MASK: vkd.cmdSetStencilWriteMask(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu); break;
++				case VK_DYNAMIC_STATE_STENCIL_REFERENCE: vkd.cmdSetStencilReference(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0u); break;
++				case VK_DYNAMIC_STATE_CULL_MODE: vkd.cmdSetCullMode(cmdH, VK_CULL_MODE_NONE); break;
++				case VK_DYNAMIC_STATE_FRONT_FACE: vkd.cmdSetFrontFace(cmdH, VK_FRONT_FACE_COUNTER_CLOCKWISE); break;
++				case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY: vkd.cmdSetPrimitiveTopology(cmdH, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST); break;
++				case VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE: vkd.cmdSetPrimitiveRestartEnable(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE: vkd.cmdSetRasterizerDiscardEnable(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE: vkd.cmdSetDepthTestEnable(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE: vkd.cmdSetDepthWriteEnable(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP: vkd.cmdSetDepthCompareOp(cmdH, VK_COMPARE_OP_LESS); break;
++				case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE: vkd.cmdSetDepthBoundsTestEnable(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE: vkd.cmdSetStencilTestEnable(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT: vkd.cmdSetLogicOpEnableEXT(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_LOGIC_OP_EXT: vkd.cmdSetLogicOpEXT(cmdH, VK_LOGIC_OP_COPY); break;
+ 				case VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT: {
+ 					const VkBool32 blendOff = VK_FALSE;
+-					vkd.cmdSetColorBlendEnableEXT(*cmd, 0u, 1u, &blendOff);
++					vkd.cmdSetColorBlendEnableEXT(cmdH, 0u, 1u, &blendOff);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT: {
+ 					const VkColorBlendEquationEXT eq = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
+ 					                                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
+-					vkd.cmdSetColorBlendEquationEXT(*cmd, 0u, 1u, &eq);
++					vkd.cmdSetColorBlendEquationEXT(cmdH, 0u, 1u, &eq);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT: {
+ 					const VkColorComponentFlags mask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+ 				                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+-					vkd.cmdSetColorWriteMaskEXT(*cmd, 0u, 1u, &mask);
++					vkd.cmdSetColorWriteMaskEXT(cmdH, 0u, 1u, &mask);
+ 					break;
+ 				}
+-				case VK_DYNAMIC_STATE_ALPHA_TO_COVERAGE_ENABLE_EXT: vkd.cmdSetAlphaToCoverageEnableEXT(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_ALPHA_TO_ONE_ENABLE_EXT: vkd.cmdSetAlphaToOneEnableEXT(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_VERTEX_INPUT_EXT: vkd.cmdSetVertexInputEXT(*cmd, 0u, nullptr, 0u, nullptr); break;
+-				case VK_DYNAMIC_STATE_RASTERIZATION_STREAM_EXT: vkd.cmdSetRasterizationStreamEXT(*cmd, 0u); break;
++				case VK_DYNAMIC_STATE_ALPHA_TO_COVERAGE_ENABLE_EXT: vkd.cmdSetAlphaToCoverageEnableEXT(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_ALPHA_TO_ONE_ENABLE_EXT: vkd.cmdSetAlphaToOneEnableEXT(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_VERTEX_INPUT_EXT: vkd.cmdSetVertexInputEXT(cmdH, 0u, nullptr, 0u, nullptr); break;
++				case VK_DYNAMIC_STATE_RASTERIZATION_STREAM_EXT: vkd.cmdSetRasterizationStreamEXT(cmdH, 0u); break;
+ 				case VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT: {
+ 					const VkViewport v = makeViewport(extent);
+-					vkd.cmdSetViewportWithCount(*cmd, 1u, &v);
++					vkd.cmdSetViewportWithCount(cmdH, 1u, &v);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT: {
+ 					const VkRect2D r = makeRect2D(extent);
+-					vkd.cmdSetScissorWithCount(*cmd, 1u, &r);
++					vkd.cmdSetScissorWithCount(cmdH, 1u, &r);
+ 					break;
+ 				}
+-				case VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT: vkd.cmdSetDepthClampEnableEXT(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_DEPTH_CLIP_ENABLE_EXT: vkd.cmdSetDepthClipEnableEXT(*cmd, VK_TRUE); break;
+-				case VK_DYNAMIC_STATE_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE_EXT: vkd.cmdSetDepthClipNegativeOneToOneEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT: vkd.cmdSetDepthClampEnableEXT(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_CLIP_ENABLE_EXT: vkd.cmdSetDepthClipEnableEXT(cmdH, VK_TRUE); break;
++				case VK_DYNAMIC_STATE_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE_EXT: vkd.cmdSetDepthClipNegativeOneToOneEXT(cmdH, VK_FALSE); break;
+ 				case VK_DYNAMIC_STATE_DEPTH_CLAMP_RANGE_EXT: {
+ 					const VkDepthClampRangeEXT r = {0.0f, 1.0f};
+-					vkd.cmdSetDepthClampRangeEXT(*cmd, VK_DEPTH_CLAMP_MODE_USER_DEFINED_RANGE_EXT, &r);
++					vkd.cmdSetDepthClampRangeEXT(cmdH, VK_DEPTH_CLAMP_MODE_USER_DEFINED_RANGE_EXT, &r);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_EXTRA_PRIMITIVE_OVERESTIMATION_SIZE_EXT:
+-					vkd.cmdSetExtraPrimitiveOverestimationSizeEXT(*cmd, 0.0f);
++					vkd.cmdSetExtraPrimitiveOverestimationSizeEXT(cmdH, 0.0f);
+ 					break;
+ 				case VK_DYNAMIC_STATE_CONSERVATIVE_RASTERIZATION_MODE_EXT:
+-					vkd.cmdSetConservativeRasterizationModeEXT(*cmd, VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT);
++					vkd.cmdSetConservativeRasterizationModeEXT(cmdH, VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT);
+ 					break;
+-				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_ENABLE_EXT: vkd.cmdSetDiscardRectangleEnableEXT(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_MODE_EXT: vkd.cmdSetDiscardRectangleModeEXT(*cmd, VK_DISCARD_RECTANGLE_MODE_INCLUSIVE_EXT); break;
++				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_ENABLE_EXT: vkd.cmdSetDiscardRectangleEnableEXT(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_MODE_EXT: vkd.cmdSetDiscardRectangleModeEXT(cmdH, VK_DISCARD_RECTANGLE_MODE_INCLUSIVE_EXT); break;
+ 				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_EXT: break; // enable=false; setting count 0 is illegal
+ 				case VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR: {
+ 					const VkExtent2D fs = {1u, 1u};
+ 					const VkFragmentShadingRateCombinerOpKHR ops[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+ 					                                                 VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+-					vkd.cmdSetFragmentShadingRateKHR(*cmd, &fs, ops);
++					vkd.cmdSetFragmentShadingRateKHR(cmdH, &fs, ops);
+ 					break;
+ 				}
+-				case VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT: vkd.cmdSetLineRasterizationModeEXT(*cmd, VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT); break;
+-				case VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT: vkd.cmdSetLineStippleEnableEXT(*cmd, VK_FALSE); break;
+-				case VK_DYNAMIC_STATE_LINE_STIPPLE_KHR: vkd.cmdSetLineStipple(*cmd, 1u, 0xFFFFu); break;
+-				case VK_DYNAMIC_STATE_PROVOKING_VERTEX_MODE_EXT: vkd.cmdSetProvokingVertexModeEXT(*cmd, VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT); break;
+-				case VK_DYNAMIC_STATE_SAMPLE_LOCATIONS_ENABLE_EXT: vkd.cmdSetSampleLocationsEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT: vkd.cmdSetLineRasterizationModeEXT(cmdH, VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT); break;
++				case VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT: vkd.cmdSetLineStippleEnableEXT(cmdH, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_LINE_STIPPLE_KHR: vkd.cmdSetLineStipple(cmdH, 1u, 0xFFFFu); break;
++				case VK_DYNAMIC_STATE_PROVOKING_VERTEX_MODE_EXT: vkd.cmdSetProvokingVertexModeEXT(cmdH, VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT); break;
++				case VK_DYNAMIC_STATE_SAMPLE_LOCATIONS_ENABLE_EXT: vkd.cmdSetSampleLocationsEnableEXT(cmdH, VK_FALSE); break;
+ 				case VK_DYNAMIC_STATE_SAMPLE_LOCATIONS_EXT: {
+ 					const VkSampleLocationEXT loc = {0.5f, 0.5f};
+ 					const VkSampleLocationsInfoEXT sli = {VK_STRUCTURE_TYPE_SAMPLE_LOCATIONS_INFO_EXT, nullptr,
+ 					                                     VK_SAMPLE_COUNT_1_BIT, {1u, 1u}, 1u, &loc};
+-					vkd.cmdSetSampleLocationsEXT(*cmd, &sli);
++					vkd.cmdSetSampleLocationsEXT(cmdH, &sli);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT:
+-					vkd.cmdSetAttachmentFeedbackLoopEnableEXT(*cmd, VK_IMAGE_ASPECT_COLOR_BIT);
+-					vkd.cmdSetAttachmentFeedbackLoopEnableEXT(*cmd, (VkImageAspectFlags)0u);
++					vkd.cmdSetAttachmentFeedbackLoopEnableEXT(cmdH, VK_IMAGE_ASPECT_COLOR_BIT);
++					vkd.cmdSetAttachmentFeedbackLoopEnableEXT(cmdH, (VkImageAspectFlags)0u);
+ 					break;
+ 				case VK_DYNAMIC_STATE_COLOR_BLEND_ADVANCED_EXT: {
+ 					const VkColorBlendAdvancedEXT adv = {VK_BLEND_OP_ADD, VK_TRUE, VK_TRUE, VK_BLEND_OVERLAP_UNCORRELATED_EXT, VK_TRUE};
+-					vkd.cmdSetColorBlendAdvancedEXT(*cmd, 0u, 1u, &adv);
++					vkd.cmdSetColorBlendAdvancedEXT(cmdH, 0u, 1u, &adv);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT: {
+ 					const VkBool32 on = VK_TRUE;
+-					vkd.cmdSetColorWriteEnableEXT(*cmd, 1u, &on);
++					vkd.cmdSetColorWriteEnableEXT(cmdH, 1u, &on);
+ 					break;
+ 				}
+ 				case VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT:
+-					vkd.cmdBindVertexBuffers2(*cmd, 0u, 0u, nullptr, nullptr, nullptr, nullptr);
++					vkd.cmdBindVertexBuffers2(cmdH, 0u, 0u, nullptr, nullptr, nullptr, nullptr);
+ 					break;
+ 				default:
+ 					TCU_THROW(NotSupportedError, (std::string("unhandled ESO dynamic state ") + std::to_string((int)ds)).c_str());
+@@ -732,24 +749,27 @@
+ 	}
+ 	else
+ 	{
+-		vkd.cmdBindPipeline(*cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rawPipe.get());
++		vkd.cmdBindPipeline(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, rawPipe.get());
++		if (!heap)
++			vkd.cmdPushConstants(cmdH, pl.get(), VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u, pushWords);
+ 		if (!heap)
+ 		{
+ 			const auto set = *descriptorSet;
+-			vkd.cmdBindDescriptorSets(*cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl.get(), 0u, 1u, &set, 0u, nullptr);
++			vkd.cmdBindDescriptorSets(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, pl.get(), 0u, 1u, &set, 0u, nullptr);
+ 		}
+ 	}
+ 
+-	vkd.cmdDrawMeshTasksIndirectEXT(*cmd, *rowBuf.buf, 0ull, rows, 24u);
++	vkd.cmdDrawMeshTasksIndirectEXT(cmdH, *rowBuf.buf, VkDeviceSize(rowBase) * 24u, rows, 24u);
+ 
+ 	if (!eso)
+-		endRenderPass(vkd, *cmd);
++		endRenderPass(vkd, cmdH);
+ 	else
+-		vkd.cmdEndRendering(*cmd);
++		vkd.cmdEndRendering(cmdH);
+ 
+ 	// copy out (helper inserts the layout barrier itself)
+-	copyImageToBuffer(vkd, *cmd, color.getImage(), color.getBuffer(), tcu::IVec2(int(extent.width), int(extent.height)));
+-	endCommandBuffer(vkd, *cmd);
++	copyImageToBuffer(vkd, cmdH, color.getImage(), color.getBuffer(), tcu::IVec2(int(extent.width), int(extent.height)));
++	endCommandBuffer(vkd, cmdH);
++	};
+ 
+ 	// ---- recheck plumbing: a second, separately submitted copy of the color image ----
+ 	// Used only when a frame fails its check: if a later copy of the image shows the
+@@ -770,12 +790,18 @@
+ 	                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+ 	endCommandBuffer(vkd, *cmd2);
+ 
+-	// ---- frames: rewrite the row table, resubmit, verify the dispatched set ----
++	// ---- frames: rewrite the active ring slot, re-record, submit, verify ----
+ 	std::vector<uint32_t> prevGroups(rows, 0u);
+ 	std::vector<uint32_t> curGroups(rows, 0u);
+ 	uint32_t totalGroups = 0u;
+ 	for (uint32_t frame = 0u; frame < kFrames; ++frame)
+ 	{
++		// engine shape: ring x2 frame slots, rowBase alternates, rows land in the active slot only.
++		// Exception: classic+heap cannot express push constants at all (heap flag => NULL layout,
++		// VUID-VkGraphicsPipelineCreateInfo-flags-11311) => that arm pins rowBase to 0.
++		const bool rotates = !(heap && !eso);
++		const uint32_t rowBase = (rotates && (frame & 1u)) ? kMaxRows : 0u;
++		const uint32_t otherBase = (rotates && !(frame & 1u)) ? kMaxRows : 0u;
+ 		uint32_t expectedGroups = 0u;
+ 		const bool rewrite = m_params.vary || frame == 0u;
+ 		for (uint32_t r = 0u; r < rows; ++r)
+@@ -794,11 +820,24 @@
+ 
+ 		if (rewrite)
+ 		{
+-			memcpy(rowBuf.map, host.data(), size_t(kMaxRows) * 24u);
++			memcpy(static_cast<char *>(rowBuf.map) + size_t(rowBase) * 24u, host.data(), size_t(rows) * 24u);
++			if (frame == 0u) // seed the other slot too (fixed mode never rewrites; vary overwrites from f1 on)
++				memcpy(static_cast<char *>(rowBuf.map) + size_t(otherBase) * 24u, host.data(), size_t(rows) * 24u);
+ 			flushAlloc(vkd, device, *rowBuf.alloc);
+ 		}
+ 
+-		submitCommandsAndWait(vkd, device, queue, *cmd);
++		pushWords[0] = rowBase;
++		pushWords[1] = 0u;
++		pushWords[2] = 0u;
++		// heap arms feed the push_constant block from the push data region (engine shape);
++		// refresh host contents before every record (record snapshots them)
++		if (heap)
++			memcpy(pushBuf.map, pushWords, sizeof(pushWords));
++		const auto &cmdSel = (frame & 1u) ? cmd1 : cmd0;
++		if (frame >= 2u)
++			VK_CHECK(vkd.resetCommandBuffer(cmdH_of(cmdSel), 0u));
++		recordFrame(cmdH_of(cmdSel), rowBase, frame == 0u);
++		submitCommandsAndWait(vkd, device, queue, cmdH_of(cmdSel));
+ 
+ 		// ---- verify ----
+ 		// Every mesh workgroup must have landed on the slot of its own (row, z), carrying the
+# step01: 簇3+9+10b+10c —— 行表消费收敛到引擎形状：去取模、ring×2 帧槽 rowBase 经 12B push（ESO 臂 push data / set 臂 push constants；heap-classic 因 11311 无法表达 push=残差钉 rowBase 0）、heap mapping 改常量偏移（描述符范围=双槽）、EmitMeshTasks 改 X 维、payload 补第 3 字 obj、CB 每帧重录 2 枚交替

@@ -1,0 +1,60 @@
+diff --git a/rgl/generated/reflection_manifest.txt b/rgl/generated/reflection_manifest.txt
+index e6e22db..b1ee2a3 100644
+--- a/rgl/generated/reflection_manifest.txt
++++ b/rgl/generated/reflection_manifest.txt
+@@ -58,7 +58,7 @@ c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
+ e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
+ 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
+ b501e48f8a7124fb926c4c5f83f4b994e3ed700c  rgl/shaders/shadow.slang
+-a8ba64181c6d1b8e324090cc37ddb147fa177497  rgl/shaders/shadow_meshlet.mesh.slang
++7ad94bb46ee7c3a9f7a66ebf9cfefc3f1ce52edc  rgl/shaders/shadow_meshlet.mesh.slang
+ 9ff83e9c14edb05ad0a0e69d17f760db9dcf894f  rgl/shaders/shadow_meshlet.task.slang
+ 6c87c17409622362185b8e526d6f3180556c3422  rgl/shaders/sky.slang
+ 998d2afd49fafa909606a8bb8900573153fd2af1  rgl/shaders/ssr_apply.frag.slang
+@@ -109,7 +109,7 @@ c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
+ e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
+ 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
+ b501e48f8a7124fb926c4c5f83f4b994e3ed700c  rgl/shaders/shadow.slang
+-a8ba64181c6d1b8e324090cc37ddb147fa177497  rgl/shaders/shadow_meshlet.mesh.slang
++7ad94bb46ee7c3a9f7a66ebf9cfefc3f1ce52edc  rgl/shaders/shadow_meshlet.mesh.slang
+ 9ff83e9c14edb05ad0a0e69d17f760db9dcf894f  rgl/shaders/shadow_meshlet.task.slang
+ 6c87c17409622362185b8e526d6f3180556c3422  rgl/shaders/sky.slang
+ 998d2afd49fafa909606a8bb8900573153fd2af1  rgl/shaders/ssr_apply.frag.slang
+@@ -160,7 +160,7 @@ c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
+ e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
+ 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
+ b501e48f8a7124fb926c4c5f83f4b994e3ed700c  rgl/shaders/shadow.slang
+-a8ba64181c6d1b8e324090cc37ddb147fa177497  rgl/shaders/shadow_meshlet.mesh.slang
++7ad94bb46ee7c3a9f7a66ebf9cfefc3f1ce52edc  rgl/shaders/shadow_meshlet.mesh.slang
+ 9ff83e9c14edb05ad0a0e69d17f760db9dcf894f  rgl/shaders/shadow_meshlet.task.slang
+ 6c87c17409622362185b8e526d6f3180556c3422  rgl/shaders/sky.slang
+ 998d2afd49fafa909606a8bb8900573153fd2af1  rgl/shaders/ssr_apply.frag.slang
+diff --git a/rgl/shaders/shadow_meshlet.mesh.slang b/rgl/shaders/shadow_meshlet.mesh.slang
+index 1951b81..9d09453 100644
+--- a/rgl/shaders/shadow_meshlet.mesh.slang
++++ b/rgl/shaders/shadow_meshlet.mesh.slang
+@@ -189,6 +189,24 @@ void main(
+     const uint kClusterStride = 44u;   // DiskCluster（format.h static_assert）
+     const uint kVertexStride = 48u;    // ModelVertex（model_schema.lua）
+ 
++#ifdef MDI_SHADOW
++    // 🔴🔴 S1 减法档临时补丁（债-140 任务 12，跑完即还原）：trivial 体——payload 三字段各读一次
++    // （保接口不被 slang 裁掉）但**只参与算术、不派地址**；不读簇 buffer/scene 表/矩阵表；按
++    // groupID.x 写一枚固定深度(0.999)的小三角（光栅与 D32 深度写在场）。派发结构（行表→task→
++    // payload→DispatchMesh(g)）一个不动。裁决语义 → docs/债140 §26。
++    const uint s1Keep =
++        mdiPayload.objectIndex ^ mdiPayload.clusterStart ^ mdiPayload.meshGroupCount;
++    SetMeshOutputCounts(3u, 1u);
++    if (ti == 0u) {
++        const float s1x = float((groupID.x + s1Keep) & 15u) * 0.001f;
++        verts[0].position = float4(-0.25f + s1x, -0.25f, 0.999f, 1.0f);
++        verts[1].position = float4(0.25f + s1x, -0.25f, 0.999f, 1.0f);
++        verts[2].position = float4(s1x, 0.25f, 0.999f, 1.0f);
++        triangles[0] = uint3(0u, 1u, 2u);
++    }
++    return;
++#endif
++
+ #ifdef MDI_SHADOW
+     // 🔴 身份来源 = payload（★M-3T-c）：task 已按 row = rowBase + SV_DrawIndex 从 24B 行表里
+     // 读出这两个值，并把本批的 mesh 组数一次发完。本文件因此**不拼行布局**（口径 → 文件头）。

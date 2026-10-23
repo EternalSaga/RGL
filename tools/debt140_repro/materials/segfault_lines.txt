@@ -1,0 +1,2 @@
+Oct 23 03:36:05 strixhalo-gentoo kernel: repro[489532]: segfault at 0 ip 00007fcb47b5eaa3 sp 00007ffc76956840 error 4 in libvulkan_radeon.so[15eaa3,7fcb47a11000+6d2000] likely on CPU 13 (core 1, socket 0)
+Oct 23 03:36:09 strixhalo-gentoo kernel: repro[489581]: segfault at 0 ip 00007f281e15eaa3 sp 00007ffe18b26a40 error 4 in libvulkan_radeon.so[15eaa3,7f281e011000+6d2000] likely on CPU 5 (core 5, socket 0)

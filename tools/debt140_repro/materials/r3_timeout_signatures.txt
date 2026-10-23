@@ -1,0 +1,3 @@
+Oct 23 03:44:22 strixhalo-gentoo kernel: amdgpu 0000:65:00.0: ring gfx_0.0.0 timeout, signaled seq=24273734, emitted seq=24273735
+Oct 23 03:44:49 strixhalo-gentoo kernel: amdgpu 0000:65:00.0: ring gfx_0.0.0 timeout, signaled seq=24274620, emitted seq=24274621
+Oct 23 03:45:14 strixhalo-gentoo kernel: amdgpu 0000:65:00.0: ring gfx_0.0.0 timeout, signaled seq=24275273, emitted seq=24275274

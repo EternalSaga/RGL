@@ -1,0 +1,13 @@
+diff --git a/rgl/scene_data.cppm b/rgl/scene_data.cppm
+index bf4e103..99a6f71 100644
+--- a/rgl/scene_data.cppm
++++ b/rgl/scene_data.cppm
+@@ -271,7 +271,7 @@ export inline constexpr float kShadowNormalOffsetScale = 1.5f;   // texel 数
+  * 定义放在本模块是为了让 render_list / render_list_impl / render_graph_rtslot 等不引入
+  * scene_context（后者拉 entt，让纯资源模块依赖它不合适）。
+  */
+-export inline constexpr uint32_t kActiveShadowCascades = 4;
++export inline constexpr uint32_t kActiveShadowCascades = 2;  // 🔴 S6 减法档临时（任务 12，跑完即还原：4→2 ⟹ MDI 段 3→1）
+ 
+ export inline constexpr uint32_t kSceneShadowCascadeCount = 4;
+ export inline constexpr uint32_t kSceneDataShadowMatrixOffset =

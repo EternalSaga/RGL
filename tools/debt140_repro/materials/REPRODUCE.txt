@@ -1,0 +1,18 @@
+# 债-140 §27 复现素材包（2026-10-23 任务 13）
+
+金标准命令行（12/14 挂，每轮 400 帧 ~5s；VVL 崩前零错）：
+  cd /home/robin/program/ab/repro && ./repro --chain 1 --mode mdi --rows 1500 --dispatches 3 --frames 400 --rowvary
+heap+ESO 变体（5/8）：同上换 --chain 1 --heap
+净锚：--triv 1（0/14）/ --mode direct（0/14+0/14）
+
+环境：AMD Radeon 8060S (RADV STRIX_HALO, gfx1151) · Mesa 26.2.4 · 内核 7.2.11-lto-sound-fix ·
+固件 MES 0x92 / RLC 0x11530506（与引擎读数同机同栈）
+
+素材：
+- kernel_0336_0338.log      = 首崩窗口内核全文（segfault ×2 + ring timeout → MODE2）
+- r3_timeout_signatures.txt = 矩阵批 gfx timeout 签名（signaled/emitted 差 1）
+- segfault_lines.txt        = libvulkan_radeon.so+0x15eaa3 NULL call *(%rax) 两枚（同址）
+- devcoredump_0337          = md5 c1b661f90baf068d06d3ba50793012a1
+- devcoredump_r3_matrix     = md5 fea9b591aaa8ce060026a15f9ee066ef（互异 = 非陈旧窗副本）
+- repro_segfault_0336*.core = 段错误 core 两枚（栈损坏，ip=libvulkan_radeon+0x15eaa3 可用）
+- 源码 = ../repro.cpp + ../shaders/{task_engine,mesh_chain}.glsl（git 外，本目录同级）

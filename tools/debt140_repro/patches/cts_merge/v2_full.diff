@@ -1,0 +1,993 @@
+--- /home/robin/program/ab/cts/patches/orig/CMakeLists.txt	2026-10-22 20:46:47.295221319 +0800
++++ CMakeLists.txt	2026-10-22 18:29:02.451104181 +0800
+@@ -17,6 +17,8 @@
+ 	vktMeshShaderApiTests.cpp
+ 	vktMeshShaderApiTests.hpp
+ 	vktMeshShaderApiTestsEXT.cpp
++	vktMeshShaderMdiMergeTestsEXT.cpp
++	vktMeshShaderMdiMergeTestsEXT.hpp
+ 	vktMeshShaderApiTestsEXT.hpp
+ 	vktMeshShaderPropertyTests.cpp
+ 	vktMeshShaderPropertyTests.hpp
+--- /home/robin/program/ab/cts/patches/orig/vktMeshShaderTests.cpp	2026-10-22 20:46:47.296221305 +0800
++++ vktMeshShaderTests.cpp	2026-10-22 18:29:05.817012341 +0800
+@@ -29,6 +29,7 @@
+ #include "vktMeshShaderSyncTestsEXT.hpp"
+ #include "vktMeshShaderApiTests.hpp"
+ #include "vktMeshShaderApiTestsEXT.hpp"
++#include "vktMeshShaderMdiMergeTestsEXT.hpp"
+ #include "vktMeshShaderPropertyTests.hpp"
+ #include "vktMeshShaderBuiltinTests.hpp"
+ #include "vktMeshShaderBuiltinTestsEXT.hpp"
+@@ -70,6 +71,7 @@
+ 
+     extGroup->addChild(createMeshShaderSmokeTestsEXT(testCtx));
+     extGroup->addChild(createMeshShaderApiTestsEXT(testCtx));
++    extGroup->addChild(createMeshShaderMdiMergeTestsEXT(testCtx));
+     extGroup->addChild(createMeshShaderSyncTestsEXT(testCtx));
+     extGroup->addChild(createMeshShaderBuiltinTestsEXT(testCtx));
+     extGroup->addChild(createMeshShaderPipelineTestsEXT(testCtx));
+--- /dev/null	2026-10-22 16:06:24.131631299 +0800
++++ vktMeshShaderMdiMergeTestsEXT.hpp	2026-10-22 18:29:02.449083839 +0800
+@@ -0,0 +1,19 @@
++/*-------------------------------------------------------------------------
++ * Merged MDI probe (RGL debt-140 §23) — local, not upstream.
++ *-----------------------------------------------------------------------*/
++
++#ifndef VKTMESHSHADER_MDIMERGETESTSEXT_HPP
++#define VKTMESHSHADER_MDIMERGETESTSEXT_HPP
++
++#include "tcuDefs.hpp"
++#include "tcuTestCase.hpp"
++
++namespace vkt
++{
++namespace MeshShader
++{
++tcu::TestCaseGroup *createMeshShaderMdiMergeTestsEXT(tcu::TestContext &testCtx);
++} // namespace MeshShader
++} // namespace vkt
++
++#endif // VKTMESHSHADER_MDIMERGETESTSEXT_HPP
+--- /dev/null	2026-10-22 16:06:24.131631299 +0800
++++ vktMeshShaderMdiMergeTestsEXT.cpp	2026-10-22 22:47:26.017060213 +0800
+@@ -0,0 +1,939 @@
++/*
++ ** Merged MDI test (RGL debt-140 forensics §23): mesh api-shape MDI × {classic, ESO} ×
++ ** {descriptor-set, descriptor-heap} × dose × {per-frame rewrite, frozen}. NOT upstream —
++ ** local probe for the shader-object + descriptor-heap × mesh-MDI × dose interaction.
++ **
++ ** What the probe measures, and why the verdict is exact:
++ **  - The task shader reads the per-row mesh-group count out of the row table (the one
++ **    descriptor the arm under test has to deliver) and re-emits (row id, count read) as
++ **    task->mesh payload.
++ **  - The mesh shader draws exactly one pixel-sized triangle per mesh workgroup, at a
++ **    position derived from (rowId, workgroupId.z). (rowId, z) -> pixel is injective, and
++ **    the fragment shader writes the payload back into the pixel, so every drawn pixel
++ **    carries the row id the draw reported and the group count it read.
++ **  - The host wrote the row table, so it knows the expected set pixel by pixel. The check
++ **    is a full comparison, not a "something was drawn" smoke test: under-dispatch,
++ **    over-dispatch, a group on the wrong pixel, a wrong row id and a wrong group count
++ **    each fail with the offending slots printed.
++ **  - Failing frames are re-checked with a second, separately submitted copy of the color
++ **    image, which separates "the first copy raced with rendering" from "the workgroups
++ **    really never wrote".
++ **  - Arms: classic pipeline / ESO shader objects x descriptor set / descriptor heap, all
++ **    four running the same data and the same expected set, so they are comparable by
++ **    construction.
++ **  - vary = row table rewritten and resubmitted every frame (engine shape: persistent
++ **    mapping, per-frame rewrite); fixed = written once (control for host-write races).
++ **
++ ** Observed on RADV 26.2.4 (Radeon 8060S / gfx1151): rare frames lose a handful of mesh
++ ** workgroups, and the payload read by the mesh workgroups then carries a (rowId, count)
++ ** pair that does not belong to that draw — including ids beyond drawCount that can only
++ ** come from a previous test case's row table. See RGL doc §23.
++ */
++
++#include "vktMeshShaderMdiMergeTestsEXT.hpp"
++#include "vktMeshShaderUtil.hpp"
++#include "vktTestCaseUtil.hpp"
++
++#include "vkBarrierUtil.hpp"
++#include "vkBuilderUtil.hpp"
++#include "vkBufferWithMemory.hpp"
++#include "vkCmdUtil.hpp"
++#include "vkDefs.hpp"
++#include "vkImageUtil.hpp"
++#include "vkImageWithMemory.hpp"
++#include "vkMemUtil.hpp"
++#include "vkObjUtil.hpp"
++#include "vkPipelineConstructionUtil.hpp"
++#include "vkPrograms.hpp"
++#include "vkQueryUtil.hpp"
++#include "vkRefUtil.hpp"
++#include "vkShaderObjectUtil.hpp"
++#include "vkTypeUtil.hpp"
++
++#include <cstring>
++#include <sstream>
++#include <vector>
++
++namespace vkt
++{
++namespace MeshShader
++{
++namespace
++{
++
++using namespace vk;
++
++// Framebuffer of the probe: one pixel per (row, z) slot.
++const uint32_t kFbWidth  = 512u;
++const uint32_t kFbHeight = 512u;
++// Slots reserved per row. Must match MESH_GLSL. A row dispatches at most 18 groups,
++// the slack lets over-dispatch land on fresh pixels instead of on the next row.
++const uint32_t kGroupStride = 64u;
++// Row table is always allocated for this many rows so a bogus gl_DrawID can never
++// make the task shader read out of bounds (the GLSL mirror of this constant is the
++// "% 1800u" in TASK_GLSL).
++const uint32_t kMaxRows = 1800u;
++// Frames per case: row table is rewritten and resubmitted every frame.
++// 400 frames mirrors the engine arm (RGL §21: hang rate scales with groups per
++// dispatch, engine arm = 400 frames x 1530 rows).
++const uint32_t kFrames = 400u;
++
++struct MergeParams
++{
++	bool			eso;
++	bool			heap;
++	bool			vary;   // rewrite the row table every frame (engine shape) vs write once (control)
++	uint32_t		rows;
++	uint32_t		seed;
++};
++
++// Σ(mesh groups) ≈ rows × mean(2..18) ≈ rows × 10
++static std::string caseName(const MergeParams &p)
++{
++	std::ostringstream nm;
++	nm << (p.heap ? (p.eso ? "soheap" : "heap") : (p.eso ? "so" : "classic")) << ".";
++	nm << (p.vary ? "vary" : "fixed") << ".";
++	if (p.rows <= 8u) nm << "s64";
++	else if (p.rows <= 200u) nm << "s1530";
++	else if (p.rows <= 1000u) nm << "s9200";
++	else nm << "s18400";
++	return nm.str();
++}
++
++const char *TASK_GLSL =
++	"#version 460\n"
++	"#extension GL_EXT_mesh_shader : require\n"
++	"layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
++	"layout(std430, set = 0, binding = 0) buffer RowTable { uint t[]; } rows;\n"
++	"struct MeshPayload { uint rowId; uint groups; };\n"
++	"taskPayloadSharedEXT MeshPayload payload;\n"
++	"void main() {\n"
++	"    uint rid = gl_DrawID;\n"
++	"    uint g = rows.t[(rid % 1800u) * 6u + 5u];\n"
++	"    payload.rowId = rid;\n"
++	"    payload.groups = g;\n"
++	"    EmitMeshTasksEXT(1u, 1u, g);\n"
++	"}\n";
++
++const char *MESH_GLSL =
++	"#version 460\n"
++	"#extension GL_EXT_mesh_shader : require\n"
++	"layout(local_size_x = 3, local_size_y = 1, local_size_z = 1) in;\n"
++	"layout(triangles) out;\n"
++	"layout(max_vertices = 3, max_primitives = 1) out;\n"
++	"struct MeshPayload { uint rowId; uint groups; };\n"
++	"taskPayloadSharedEXT MeshPayload payload;\n"
++	"layout(location = 0) out flat uvec3 slotInfo[3];\n"
++	"void main() {\n"
++	"    SetMeshOutputsEXT(3u, 1u);\n"
++	"    uint v = gl_LocalInvocationID.x;\n"
++	"    uint idx = payload.rowId * 64u + gl_WorkGroupID.z;\n"
++	"    uint px = idx % 512u;\n"
++	"    uint py = idx / 512u;\n"
++	"    slotInfo[v] = uvec3(payload.rowId, payload.groups, gl_WorkGroupID.z);\n"
++	"    vec2 corner[3] = vec2[3](vec2(0.06, 0.06), vec2(0.94, 0.06), vec2(0.5, 0.94));\n"
++	"    vec2 p = vec2(float(px), float(py)) + corner[v];\n"
++	"    vec2 ndc = (p / 512.0) * 2.0 - 1.0;\n"
++	"    gl_MeshVerticesEXT[v].gl_Position = vec4(ndc.x, ndc.y, 0.0, 1.0);\n"
++	"    if (v == 0u)\n"
++	"        gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0, 1, 2);\n"
++	"}\n";
++
++// Pixel payload: R|G = rowId the draw reported, B = group count it read from the row
++// table, A = 0x80 | z (nonzero, so "written" is distinguishable from the black clear).
++const char *FRAG_GLSL =
++	"#version 450\n"
++	"layout(location = 0) in flat uvec3 slotInfo;\n"
++	"layout(location = 0) out vec4 color;\n"
++	"void main() {\n"
++	"    color = vec4(float(slotInfo.x & 0xFFu) / 255.0,\n"
++	"                 float((slotInfo.x >> 8u) & 0xFFu) / 255.0,\n"
++	"                 float(slotInfo.y & 0xFFu) / 255.0,\n"
++	"                 float(128u | (slotInfo.z & 0x7Fu)) / 255.0);\n"
++	"}\n";
++
++// Host-mapped buffer with device address.
++struct HostBuf
++{
++	Move<VkBuffer>			buf;
++	de::MovePtr<Allocation>	alloc;
++	void				   *map = nullptr;
++	VkDeviceAddress			addr = 0;
++};
++
++void fillHostBuf(const DeviceInterface &vkd, VkDevice device, Allocator &alloc, VkDeviceSize size,
++                 VkBufferUsageFlags usage, HostBuf &hb, bool wantAddr = false,
++                 VkBufferUsageFlags2KHR usage2 = 0)
++{
++	VkBufferUsageFlags2CreateInfoKHR u2 = initVulkanStructure();
++	VkBufferCreateInfo bi = initVulkanStructure();
++	bi.size = size;
++	bi.usage = usage;
++	if (usage2 != 0)
++	{
++		u2.usage = usage2;
++		bi.pNext = &u2;
++		bi.usage = VkBufferUsageFlags(usage2 & 0xFFFFFFFFu);
++	}
++	bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++	hb.buf = createBuffer(vkd, device, &bi);
++	VkMemoryRequirements memReq = {};
++	vkd.getBufferMemoryRequirements(device, *hb.buf, &memReq);
++	hb.alloc = wantAddr ? alloc.allocate(memReq, HostIntent::RW, VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT)
++	                       : alloc.allocate(memReq, MemoryRequirement::HostVisible, 1);
++	VK_CHECK(vkd.bindBufferMemory(device, *hb.buf, hb.alloc->getMemory(), 0));
++	hb.map = hb.alloc->getHostPtr();
++	if (wantAddr)
++	{
++		VkBufferDeviceAddressInfo dai = initVulkanStructure();
++		dai.buffer = *hb.buf;
++		hb.addr = vkd.getBufferDeviceAddress(device, &dai);
++	}
++}
++
++class MergeCase : public vkt::TestCase
++{
++public:
++	MergeCase(tcu::TestContext &testCtx, const std::string &name, const MergeParams &params)
++		: vkt::TestCase(testCtx, name)
++		, m_params(params)
++	{
++	}
++	virtual ~MergeCase() = default;
++
++	void initPrograms(SourceCollections &programCollection) const override
++	{
++		const auto buildOptions = getMinMeshEXTBuildOptions(programCollection.usedVulkanVersion);
++		programCollection.glslSources.add("task") << glu::TaskSource(TASK_GLSL) << buildOptions;
++		programCollection.glslSources.add("mesh") << glu::MeshSource(MESH_GLSL) << buildOptions;
++		programCollection.glslSources.add("frag") << glu::FragmentSource(FRAG_GLSL) << buildOptions;
++	}
++
++	void checkSupport(Context &context) const override
++	{
++		checkTaskMeshShaderSupportEXT(context, true, true);
++		context.requireDeviceCoreFeature(DEVICE_CORE_FEATURE_MULTI_DRAW_INDIRECT);
++		// the task shader reads gl_DrawID to find its row
++		if (context.getShaderDrawParametersFeatures().shaderDrawParameters == VK_FALSE)
++			TCU_THROW(NotSupportedError, "shaderDrawParameters feature not supported by the device");
++		if (m_params.eso)
++			context.requireDeviceFunctionality("VK_EXT_shader_object");
++		if (m_params.heap)
++		{
++			context.requireDeviceFunctionality("VK_EXT_descriptor_heap");
++			context.requireDeviceFunctionality("VK_KHR_buffer_device_address");
++		}
++	}
++
++	vkt::TestInstance *createInstance(Context &context) const override;
++
++private:
++	MergeParams m_params;
++};
++
++class MergeInstance : public vkt::TestInstance
++{
++public:
++	MergeInstance(Context &context, const MergeParams &params)
++		: vkt::TestInstance(context)
++		, m_params(params)
++	{
++	}
++	virtual ~MergeInstance() = default;
++
++	tcu::TestStatus iterate(void) override;
++
++private:
++	MergeParams m_params;
++};
++
++vkt::TestInstance *MergeCase::createInstance(Context &context) const
++{
++	return new MergeInstance(context, m_params);
++}
++
++tcu::TestStatus MergeInstance::iterate(void)
++{
++	const auto &vkd = m_context.getDeviceInterface();
++	const auto &device = m_context.getDevice();
++	const auto &vki = m_context.getInstanceInterface();
++	const auto queueIndex = m_context.getUniversalQueueFamilyIndex();
++	const auto queue = m_context.getUniversalQueue();
++	auto &alloc = m_context.getDefaultAllocator();
++	const auto &binaries = m_context.getBinaryCollection();
++
++	const uint32_t rows = m_params.rows;
++	const bool eso = m_params.eso;
++	const bool heap = m_params.heap;
++	const VkExtent3D extent = makeExtent3D(kFbWidth, kFbHeight, 1u);
++	const auto fbFormat = VK_FORMAT_R8G8B8A8_UNORM;
++
++	// ---- row table: engine layout {gcX,1,1, obj,cstart,groups} stride 24 ----
++	std::vector<uint32_t> host(kMaxRows * 6u, 0u); // tail rows stay zero => out-of-range draw ids dispatch nothing
++	uint64_t s = 0x5DEECE66Dull ^ (uint64_t(m_params.seed) * 0x9E3779B97F4A7C15ull);
++	auto rnd = [&]() {
++		s = s * 6364136223846793005ull + 1442695040888963407ull;
++		return uint32_t((s >> 33u) & 0xFFFFFu);
++	};
++
++	auto rowUsage = (VkBufferUsageFlags)(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
++	if (heap)
++		rowUsage = (VkBufferUsageFlags)(rowUsage | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
++	HostBuf rowBuf;
++	fillHostBuf(vkd, device, alloc, VkDeviceSize(kMaxRows) * 24u, rowUsage, rowBuf, heap);
++
++	// ---- color target ----
++	const auto colorSRR = makeImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u);
++	ImageWithBuffer color(vkd, device, alloc, extent, fbFormat,
++	                      (VkImageUsageFlags)(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT),
++	                      VK_IMAGE_TYPE_2D, colorSRR, 1u);
++
++	// ---- heap plumbing ----
++	VkDeviceSize resourceStride = 0;
++	VkDeviceSize heapSize = 0;
++	HostBuf heapBuf;
++	HostBuf pushBuf;
++	VkPhysicalDeviceDescriptorHeapPropertiesEXT heapProps = initVulkanStructure();
++	if (heap)
++	{
++		heapProps = m_context.getDescriptorHeapPropertiesEXT();
++		resourceStride = heapProps.bufferDescriptorSize;
++		const VkDeviceSize heapUser = resourceStride * 4u;
++		heapSize = heapUser + heapProps.minResourceHeapReservedRange;
++		fillHostBuf(vkd, device, alloc, heapSize, VK_BUFFER_USAGE_FLAG_BITS_MAX_ENUM, heapBuf, true,
++		            (VkBufferUsageFlags2KHR)(VK_BUFFER_USAGE_2_DESCRIPTOR_HEAP_BIT_EXT |
++		                                     VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT));
++		// descriptor slot 0 -> row table
++		VkResourceDescriptorInfoEXT rdi = initVulkanStructure();
++		rdi.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
++		VkDeviceAddressRangeEXT bar = {};
++		bar.address = rowBuf.addr;
++		bar.size = VkDeviceSize(kMaxRows) * 24u;
++		rdi.data.pAddressRange = &bar;
++		VkHostAddressRangeEXT dst = {};
++		dst.address = heapBuf.map;
++		dst.size = resourceStride;
++		VK_CHECK(vkd.writeResourceDescriptorsEXT(device, 1u, &rdi, &dst));
++		// push data: heap index 0 (uint32 at push offset 0)
++		fillHostBuf(vkd, device, alloc, 8u, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, pushBuf);
++		memset(pushBuf.map, 0, 8u);
++	}
++
++	// ---- set layout (+ mapping for heap) ----
++	const auto dsl = DescriptorSetLayoutBuilder()
++	                     .addSingleBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_TASK_BIT_EXT)
++	                     .build(vkd, device);
++
++	VkDescriptorSetAndBindingMappingEXT mapping = initVulkanStructure();
++	mapping.descriptorSet = 0u;
++	mapping.firstBinding = 0u;
++	mapping.bindingCount = 1u;
++	mapping.resourceMask = VK_SPIRV_RESOURCE_TYPE_ALL_EXT;
++	if (heap)
++	{
++		mapping.source = VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT;
++		mapping.sourceData.pushIndex.heapOffset = 0u;
++		mapping.sourceData.pushIndex.pushOffset = 0u;
++		mapping.sourceData.pushIndex.heapIndexStride = uint32_t(resourceStride);
++		mapping.sourceData.pushIndex.heapArrayStride = uint32_t(resourceStride);
++	}
++	VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo = initVulkanStructure();
++	mappingInfo.mappingCount = 1u;
++	mappingInfo.pMappings = &mapping;
++
++	const VkDescriptorSetLayout dslRaw = dsl.get();
++	const auto pl = makePipelineLayout(vkd, device, dslRaw);
++
++	// classic-set descriptor (bound only in non-heap arms; pool only exists there)
++	Move<VkDescriptorPool> descriptorPool;
++	Move<VkDescriptorSet> descriptorSet;
++	if (!heap)
++	{
++		DescriptorPoolBuilder poolBuilder;
++		poolBuilder.addType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
++		descriptorPool = poolBuilder.build(vkd, device, VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT, 1u);
++		descriptorSet = makeDescriptorSet(vkd, device, *descriptorPool, dsl.get());
++		const VkDescriptorBufferInfo rowBufInfo =
++		    makeDescriptorBufferInfo(*rowBuf.buf, 0ull, VkDeviceSize(kMaxRows) * 24u);
++		DescriptorSetUpdateBuilder updateBuilder;
++		updateBuilder.writeSingle(*descriptorSet, DescriptorSetUpdateBuilder::Location::binding(0u),
++		                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &rowBufInfo);
++		updateBuilder.update(vkd, device);
++	}
++
++	const std::vector<VkViewport> viewports(1u, makeViewport(extent));
++	const std::vector<VkRect2D> scissors(1u, makeRect2D(extent));
++
++	// classic render pass + framebuffer (used by non-ESO arms; ESO uses dynamic rendering)
++	const auto rp = makeRenderPass(vkd, device, fbFormat);
++	const auto fb = makeFramebuffer(vkd, device, rp.get(), color.getImageView(), extent.width, extent.height);
++
++	// ---- pipeline (classic) or shader objects (ESO) ----
++	const auto ctype = eso ? PIPELINE_CONSTRUCTION_TYPE_SHADER_OBJECT_UNLINKED_SPIRV
++	                       : PIPELINE_CONSTRUCTION_TYPE_MONOLITHIC;
++	std::unique_ptr<GraphicsPipelineWrapper> pipeWrap;
++	PipelineLayoutWrapper layoutWrap;
++	Move<VkPipeline> rawPipe;
++	std::vector<Move<VkShaderEXT>> shaders; // ESO+heap manual path
++	std::vector<VkDynamicState> dynStates;
++
++	if (eso)
++		dynStates = getShaderObjectDynamicStatesFromExtensions(m_context.getDeviceExtensions());
++
++	VkPipelineShaderStageCreateInfo stages[3] = {initVulkanStructure(), initVulkanStructure(), initVulkanStructure()};
++	const auto taskMod = createShaderModule(vkd, device, binaries.get("task"));
++	const auto meshMod = createShaderModule(vkd, device, binaries.get("mesh"));
++	const auto fragMod = createShaderModule(vkd, device, binaries.get("frag"));
++	stages[0].stage = VK_SHADER_STAGE_TASK_BIT_EXT;
++	stages[0].module = *taskMod;
++	stages[0].pName = "main";
++	stages[1].stage = VK_SHADER_STAGE_MESH_BIT_EXT;
++	stages[1].module = *meshMod;
++	stages[1].pName = "main";
++	stages[2].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
++	stages[2].module = *fragMod;
++	stages[2].pName = "main";
++	if (heap)
++	{
++		stages[0].pNext = &mappingInfo; // task stage resolves binding 0 from heap w/ push index
++	}
++
++	if (!eso)
++	{
++		VkPipelineVertexInputStateCreateInfo vinCi = initVulkanStructure();
++		VkPipelineInputAssemblyStateCreateInfo iaCi = initVulkanStructure();
++		iaCi.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
++		VkPipelineRasterizationStateCreateInfo rs = initVulkanStructure();
++		rs.lineWidth = 1.0f;
++		VkPipelineMultisampleStateCreateInfo ms = initVulkanStructure();
++		ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
++		VkPipelineDepthStencilStateCreateInfo ds = initVulkanStructure();
++		VkPipelineColorBlendAttachmentState cba = {};
++		cba.colorWriteMask = 0xF;
++		VkPipelineColorBlendStateCreateInfo cb = initVulkanStructure();
++		cb.attachmentCount = 1u;
++		cb.pAttachments = &cba;
++		VkPipelineDynamicStateCreateInfo dyn = initVulkanStructure();
++		VkPipelineCreateFlags2CreateInfoKHR flags2 = initVulkanStructure();
++		if (heap)
++			flags2.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
++		const std::vector<VkPipelineShaderStageCreateInfo> stageVec(stages, stages + 3);
++		rawPipe = makeGraphicsPipeline(vkd, device, VK_NULL_HANDLE, heap ? (VkPipelineLayout)VK_NULL_HANDLE : pl.get(),
++		                               0u, stageVec, rp.get(), viewports, scissors, 0u, &rs, &ms, &ds, &cb, &dyn,
++		                               heap ? (const void *)&flags2 : nullptr, &vinCi, &iaCi);
++	}
++	else if (!heap)
++	{
++		pipeWrap = std::make_unique<GraphicsPipelineWrapper>(vki, vkd, m_context.getPhysicalDevice(), device,
++		                                                     m_context.getDeviceExtensions(), ctype);
++		ShaderWrapper taskSh(vkd, device, binaries.get("task"), VK_SHADER_STAGE_TASK_BIT_EXT);
++		ShaderWrapper meshSh(vkd, device, binaries.get("mesh"), VK_SHADER_STAGE_MESH_BIT_EXT);
++		ShaderWrapper fragSh(vkd, device, binaries.get("frag"), VK_SHADER_STAGE_FRAGMENT_BIT);
++		VkDescriptorSetLayout dslArr[1] = {dsl.get()};
++		layoutWrap = PipelineLayoutWrapper(ctype, vkd, device, 1u, dslArr);
++		VkPipelineColorBlendAttachmentState cbaEso = {};
++		cbaEso.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
++		                        VK_COLOR_COMPONENT_A_BIT;
++		VkPipelineColorBlendStateCreateInfo cbEso = initVulkanStructure();
++		cbEso.attachmentCount = 1u;
++		cbEso.pAttachments = &cbaEso;
++		VkPipelineMultisampleStateCreateInfo msEso = initVulkanStructure();
++		msEso.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
++		pipeWrap->setupPreRasterizationMeshShaderState(viewports, scissors, layoutWrap, VK_NULL_HANDLE, 0u, taskSh,
++		                                               meshSh);
++		pipeWrap->setupFragmentShaderState(layoutWrap, VK_NULL_HANDLE, 0u, fragSh, nullptr, &msEso);
++		pipeWrap->setupFragmentOutputState(VK_NULL_HANDLE, 0u, &cbEso, &msEso);
++		pipeWrap->buildPipeline();
++	}
++	else
++	{
++		// so+heap: manual shader objects with DESCRIPTOR_HEAP flag + mapping pNext
++		const struct
++		{
++			VkShaderStageFlagBits stage;
++			const ProgramBinary *bin;
++		} soDefs[3] = {
++			{VK_SHADER_STAGE_TASK_BIT_EXT, &binaries.get("task")},
++			{VK_SHADER_STAGE_MESH_BIT_EXT, &binaries.get("mesh")},
++			{VK_SHADER_STAGE_FRAGMENT_BIT, &binaries.get("frag")},
++		};
++		for (const auto &sd : soDefs)
++		{
++			VkShaderCreateInfoEXT sci = initVulkanStructure();
++			sci.flags = VkShaderCreateFlagsEXT(VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT);
++			sci.stage = sd.stage;
++			sci.nextStage = (sd.stage == VK_SHADER_STAGE_TASK_BIT_EXT) ? VK_SHADER_STAGE_MESH_BIT_EXT
++			           : (sd.stage == VK_SHADER_STAGE_MESH_BIT_EXT) ? VK_SHADER_STAGE_FRAGMENT_BIT
++			                                                        : VkShaderStageFlagBits(0u);
++			sci.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
++			sci.codeSize = sd.bin->getSize();
++			sci.pCode = sd.bin->getBinary();
++			sci.pName = "main";
++			// VUID-VkShaderCreateInfoEXT-flags-11290: DESCRIPTOR_HEAP flag requires setLayoutCount == 0
++			sci.setLayoutCount = 0u;
++			sci.pSetLayouts = nullptr;
++			sci.pNext = &mappingInfo;
++			shaders.push_back(createShader(vkd, device, sci));
++		}
++	}
++
++	// ---- record ----
++	const auto cmdPool = makeCommandPool(vkd, device, queueIndex, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
++	// resubmitted once per frame: no ONE_TIME_SUBMIT
++	VkCommandBufferAllocateInfo cbai = initVulkanStructure();
++	cbai.commandPool = *cmdPool;
++	cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++	cbai.commandBufferCount = 1u;
++	const auto cmd = allocateCommandBuffer(vkd, device, &cbai);
++	beginCommandBuffer(vkd, *cmd, 0u); // resubmitted once per frame
++
++	// color layout -> attachment
++	{
++		const auto b = makeImageMemoryBarrier(0u, (VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT),
++		                                      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
++		                                      color.getImage(), colorSRR);
++		cmdPipelineImageMemoryBarrier(vkd, *cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++		                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, &b);
++	}
++
++	if (!eso)
++	{
++		const auto clearColorF = makeClearValueColorF32(0.0f, 0.0f, 0.0f, 0.0f);
++		beginRenderPass(vkd, *cmd, rp.get(), fb.get(), makeRect2D(extent), clearColorF);
++	}
++	else
++	{
++		const float cc[4] = {0.0f, 0.0f, 0.0f, 0.0f}; // alpha 0: writes marked by A
++		VkClearValue cv = {};
++		cv.color = {{cc[0], cc[1], cc[2], cc[3]}};
++		const VkRenderingAttachmentInfo colorAtt = {
++			VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, nullptr, color.getImageView(),
++			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_RESOLVE_MODE_NONE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED,
++			VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE, cv};
++		const VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO, nullptr, 0u,
++			VkRect2D{{0, 0}, {extent.width, extent.height}}, 1u, 0u, 1u, &colorAtt, nullptr, nullptr};
++		vkd.cmdBeginRendering(*cmd, &ri);
++	}
++
++	if (heap)
++	{
++		VkBindHeapInfoEXT bh = initVulkanStructure();
++		bh.heapRange.address = heapBuf.addr;
++		bh.heapRange.size = heapSize;
++		bh.reservedRangeOffset = heapSize - heapProps.minResourceHeapReservedRange;
++		bh.reservedRangeSize = heapProps.minResourceHeapReservedRange;
++		vkd.cmdBindResourceHeapEXT(*cmd, &bh);
++		VkPushDataInfoEXT pdi = initVulkanStructure();
++		pdi.offset = 0u;
++		pdi.data.address = pushBuf.map;
++		pdi.data.size = 8u;
++		vkd.cmdPushDataEXT(*cmd, &pdi);
++	}
++
++	if (eso)
++	{
++		if (pipeWrap)
++		{
++			pipeWrap->bind(*cmd);
++			const auto dsetEso = *descriptorSet;
++			layoutWrap.bindDescriptorSets(*cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, 0u, 1u, &dsetEso, 0u, nullptr);
++		}
++		else
++		{
++			for (size_t i = 0u; i < shaders.size(); ++i)
++			{
++				const auto stage = stages[i].stage;
++				const auto sh = *shaders[i];
++				vkd.cmdBindShadersEXT(*cmd, 1u, &stage, &sh);
++			}
++			// ESO mesh path: fixed-function stages must be explicitly unbound (VUIDs 08684-08687)
++			{
++				const VkShaderStageFlagBits nullStages[4] = {VK_SHADER_STAGE_VERTEX_BIT,
++				                                               VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
++				                                               VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
++				                                               VK_SHADER_STAGE_GEOMETRY_BIT};
++				const VkShaderEXT nullSh[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
++				vkd.cmdBindShadersEXT(*cmd, 4u, nullStages, nullSh);
++			}
++			// ESO base dynamic state (always required; helper list only adds extension-dependent ones)
++			{
++				const VkViewport v = makeViewport(extent);
++				const VkRect2D r = makeRect2D(extent);
++				const float bc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
++				const VkBool32 bFalse = VK_FALSE;
++				const VkColorComponentFlags wmask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
++				                                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
++				const VkColorBlendEquationEXT eq = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
++				                                      VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
++				const VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
++				const VkSampleMask sampleMask = 0xFFFFFFFFu;
++				vkd.cmdSetViewportWithCount(*cmd, 1u, &v);
++				vkd.cmdSetScissorWithCount(*cmd, 1u, &r);
++				vkd.cmdSetLineWidth(*cmd, 1.0f);
++				vkd.cmdSetDepthBiasEnable(*cmd, VK_FALSE);
++				vkd.cmdSetBlendConstants(*cmd, bc);
++				vkd.cmdSetDepthBounds(*cmd, 0.0f, 1.0f);
++				vkd.cmdSetStencilCompareMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
++				vkd.cmdSetStencilWriteMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
++				vkd.cmdSetStencilReference(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0u);
++				vkd.cmdSetCullMode(*cmd, VK_CULL_MODE_NONE);
++				vkd.cmdSetFrontFace(*cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
++				vkd.cmdSetPrimitiveTopology(*cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
++				vkd.cmdSetPrimitiveRestartEnable(*cmd, VK_FALSE);
++				vkd.cmdSetRasterizerDiscardEnable(*cmd, VK_FALSE);
++				vkd.cmdSetDepthTestEnable(*cmd, VK_FALSE);
++				vkd.cmdSetDepthWriteEnable(*cmd, VK_FALSE);
++				vkd.cmdSetDepthCompareOp(*cmd, VK_COMPARE_OP_LESS);
++				vkd.cmdSetDepthBoundsTestEnable(*cmd, VK_FALSE);
++				vkd.cmdSetStencilTestEnable(*cmd, VK_FALSE);
++				vkd.cmdSetStencilOp(*cmd, VK_STENCIL_FACE_FRONT_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
++				                           VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
++				vkd.cmdSetStencilOp(*cmd, VK_STENCIL_FACE_BACK_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
++				                           VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
++				vkd.cmdSetLogicOpEnableEXT(*cmd, VK_FALSE);
++				vkd.cmdSetLogicOpEXT(*cmd, VK_LOGIC_OP_COPY);
++				vkd.cmdSetColorBlendEnableEXT(*cmd, 0u, 1u, &bFalse);
++				vkd.cmdSetColorBlendEquationEXT(*cmd, 0u, 1u, &eq);
++				vkd.cmdSetColorWriteMaskEXT(*cmd, 0u, 1u, &wmask);
++				vkd.cmdSetAlphaToCoverageEnableEXT(*cmd, VK_FALSE);
++				vkd.cmdSetAlphaToOneEnableEXT(*cmd, VK_FALSE);
++				vkd.cmdSetVertexInputEXT(*cmd, 0u, nullptr, 0u, nullptr);
++				vkd.cmdSetPolygonModeEXT(*cmd, VK_POLYGON_MODE_FILL);
++				vkd.cmdSetRasterizationSamplesEXT(*cmd, samples);
++				vkd.cmdSetSampleMaskEXT(*cmd, samples, &sampleMask);
++				vkd.cmdSetDepthClampEnableEXT(*cmd, VK_FALSE);
++			}
++			for (const auto ds : dynStates)
++			{
++				switch (ds)
++				{
++				case VK_DYNAMIC_STATE_VIEWPORT: {
++					const VkViewport v = makeViewport(extent);
++					vkd.cmdSetViewport(*cmd, 0u, 1u, &v);
++					break;
++				}
++				case VK_DYNAMIC_STATE_SCISSOR: {
++					const VkRect2D r = makeRect2D(extent);
++					vkd.cmdSetScissor(*cmd, 0u, 1u, &r);
++					break;
++				}
++				case VK_DYNAMIC_STATE_LINE_WIDTH: vkd.cmdSetLineWidth(*cmd, 1.0f); break;
++				case VK_DYNAMIC_STATE_DEPTH_BIAS: break; // legacy alias; DEPTH_BIAS_ENABLE set false in base block
++				case VK_DYNAMIC_STATE_BLEND_CONSTANTS: {
++					const float bc[4] = {0, 0, 0, 0};
++					vkd.cmdSetBlendConstants(*cmd, bc);
++					break;
++				}
++				case VK_DYNAMIC_STATE_DEPTH_BOUNDS: vkd.cmdSetDepthBounds(*cmd, 0.0f, 1.0f); break;
++				case VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK: vkd.cmdSetStencilCompareMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu); break;
++				case VK_DYNAMIC_STATE_STENCIL_WRITE_MASK: vkd.cmdSetStencilWriteMask(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu); break;
++				case VK_DYNAMIC_STATE_STENCIL_REFERENCE: vkd.cmdSetStencilReference(*cmd, VK_STENCIL_FACE_FRONT_AND_BACK, 0u); break;
++				case VK_DYNAMIC_STATE_CULL_MODE: vkd.cmdSetCullMode(*cmd, VK_CULL_MODE_NONE); break;
++				case VK_DYNAMIC_STATE_FRONT_FACE: vkd.cmdSetFrontFace(*cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE); break;
++				case VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY: vkd.cmdSetPrimitiveTopology(*cmd, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST); break;
++				case VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE: vkd.cmdSetPrimitiveRestartEnable(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE: vkd.cmdSetRasterizerDiscardEnable(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE: vkd.cmdSetDepthTestEnable(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE: vkd.cmdSetDepthWriteEnable(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_COMPARE_OP: vkd.cmdSetDepthCompareOp(*cmd, VK_COMPARE_OP_LESS); break;
++				case VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE: vkd.cmdSetDepthBoundsTestEnable(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE: vkd.cmdSetStencilTestEnable(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT: vkd.cmdSetLogicOpEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_LOGIC_OP_EXT: vkd.cmdSetLogicOpEXT(*cmd, VK_LOGIC_OP_COPY); break;
++				case VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT: {
++					const VkBool32 blendOff = VK_FALSE;
++					vkd.cmdSetColorBlendEnableEXT(*cmd, 0u, 1u, &blendOff);
++					break;
++				}
++				case VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT: {
++					const VkColorBlendEquationEXT eq = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
++					                                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
++					vkd.cmdSetColorBlendEquationEXT(*cmd, 0u, 1u, &eq);
++					break;
++				}
++				case VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT: {
++					const VkColorComponentFlags mask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
++				                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
++					vkd.cmdSetColorWriteMaskEXT(*cmd, 0u, 1u, &mask);
++					break;
++				}
++				case VK_DYNAMIC_STATE_ALPHA_TO_COVERAGE_ENABLE_EXT: vkd.cmdSetAlphaToCoverageEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_ALPHA_TO_ONE_ENABLE_EXT: vkd.cmdSetAlphaToOneEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_VERTEX_INPUT_EXT: vkd.cmdSetVertexInputEXT(*cmd, 0u, nullptr, 0u, nullptr); break;
++				case VK_DYNAMIC_STATE_RASTERIZATION_STREAM_EXT: vkd.cmdSetRasterizationStreamEXT(*cmd, 0u); break;
++				case VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT: {
++					const VkViewport v = makeViewport(extent);
++					vkd.cmdSetViewportWithCount(*cmd, 1u, &v);
++					break;
++				}
++				case VK_DYNAMIC_STATE_SCISSOR_WITH_COUNT: {
++					const VkRect2D r = makeRect2D(extent);
++					vkd.cmdSetScissorWithCount(*cmd, 1u, &r);
++					break;
++				}
++				case VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT: vkd.cmdSetDepthClampEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_CLIP_ENABLE_EXT: vkd.cmdSetDepthClipEnableEXT(*cmd, VK_TRUE); break;
++				case VK_DYNAMIC_STATE_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE_EXT: vkd.cmdSetDepthClipNegativeOneToOneEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DEPTH_CLAMP_RANGE_EXT: {
++					const VkDepthClampRangeEXT r = {0.0f, 1.0f};
++					vkd.cmdSetDepthClampRangeEXT(*cmd, VK_DEPTH_CLAMP_MODE_USER_DEFINED_RANGE_EXT, &r);
++					break;
++				}
++				case VK_DYNAMIC_STATE_EXTRA_PRIMITIVE_OVERESTIMATION_SIZE_EXT:
++					vkd.cmdSetExtraPrimitiveOverestimationSizeEXT(*cmd, 0.0f);
++					break;
++				case VK_DYNAMIC_STATE_CONSERVATIVE_RASTERIZATION_MODE_EXT:
++					vkd.cmdSetConservativeRasterizationModeEXT(*cmd, VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT);
++					break;
++				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_ENABLE_EXT: vkd.cmdSetDiscardRectangleEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_MODE_EXT: vkd.cmdSetDiscardRectangleModeEXT(*cmd, VK_DISCARD_RECTANGLE_MODE_INCLUSIVE_EXT); break;
++				case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_EXT: break; // enable=false; setting count 0 is illegal
++				case VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR: {
++					const VkExtent2D fs = {1u, 1u};
++					const VkFragmentShadingRateCombinerOpKHR ops[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
++					                                                 VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
++					vkd.cmdSetFragmentShadingRateKHR(*cmd, &fs, ops);
++					break;
++				}
++				case VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT: vkd.cmdSetLineRasterizationModeEXT(*cmd, VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT); break;
++				case VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT: vkd.cmdSetLineStippleEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_LINE_STIPPLE_KHR: vkd.cmdSetLineStipple(*cmd, 1u, 0xFFFFu); break;
++				case VK_DYNAMIC_STATE_PROVOKING_VERTEX_MODE_EXT: vkd.cmdSetProvokingVertexModeEXT(*cmd, VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT); break;
++				case VK_DYNAMIC_STATE_SAMPLE_LOCATIONS_ENABLE_EXT: vkd.cmdSetSampleLocationsEnableEXT(*cmd, VK_FALSE); break;
++				case VK_DYNAMIC_STATE_SAMPLE_LOCATIONS_EXT: {
++					const VkSampleLocationEXT loc = {0.5f, 0.5f};
++					const VkSampleLocationsInfoEXT sli = {VK_STRUCTURE_TYPE_SAMPLE_LOCATIONS_INFO_EXT, nullptr,
++					                                     VK_SAMPLE_COUNT_1_BIT, {1u, 1u}, 1u, &loc};
++					vkd.cmdSetSampleLocationsEXT(*cmd, &sli);
++					break;
++				}
++				case VK_DYNAMIC_STATE_ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT:
++					vkd.cmdSetAttachmentFeedbackLoopEnableEXT(*cmd, VK_IMAGE_ASPECT_COLOR_BIT);
++					vkd.cmdSetAttachmentFeedbackLoopEnableEXT(*cmd, (VkImageAspectFlags)0u);
++					break;
++				case VK_DYNAMIC_STATE_COLOR_BLEND_ADVANCED_EXT: {
++					const VkColorBlendAdvancedEXT adv = {VK_BLEND_OP_ADD, VK_TRUE, VK_TRUE, VK_BLEND_OVERLAP_UNCORRELATED_EXT, VK_TRUE};
++					vkd.cmdSetColorBlendAdvancedEXT(*cmd, 0u, 1u, &adv);
++					break;
++				}
++				case VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT: {
++					const VkBool32 on = VK_TRUE;
++					vkd.cmdSetColorWriteEnableEXT(*cmd, 1u, &on);
++					break;
++				}
++				case VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT:
++					vkd.cmdBindVertexBuffers2(*cmd, 0u, 0u, nullptr, nullptr, nullptr, nullptr);
++					break;
++				default:
++					TCU_THROW(NotSupportedError, (std::string("unhandled ESO dynamic state ") + std::to_string((int)ds)).c_str());
++				}
++			}
++		}
++	}
++	else
++	{
++		vkd.cmdBindPipeline(*cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, rawPipe.get());
++		if (!heap)
++		{
++			const auto set = *descriptorSet;
++			vkd.cmdBindDescriptorSets(*cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl.get(), 0u, 1u, &set, 0u, nullptr);
++		}
++	}
++
++	vkd.cmdDrawMeshTasksIndirectEXT(*cmd, *rowBuf.buf, 0ull, rows, 24u);
++
++	if (!eso)
++		endRenderPass(vkd, *cmd);
++	else
++		vkd.cmdEndRendering(*cmd);
++
++	// copy out (helper inserts the layout barrier itself)
++	copyImageToBuffer(vkd, *cmd, color.getImage(), color.getBuffer(), tcu::IVec2(int(extent.width), int(extent.height)));
++	endCommandBuffer(vkd, *cmd);
++
++	// ---- recheck plumbing: a second, separately submitted copy of the color image ----
++	// Used only when a frame fails its check: if a later copy of the image shows the
++	// missing pixels, the first copy raced with rendering; if it shows the same holes,
++	// the workgroups really never wrote.
++	const VkDeviceSize fbBytes = VkDeviceSize(kFbWidth) * kFbHeight * 4u;
++	HostBuf recheckBuf;
++	fillHostBuf(vkd, device, alloc, fbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, recheckBuf);
++	VkCommandBufferAllocateInfo cbai2 = initVulkanStructure();
++	cbai2.commandPool = *cmdPool;
++	cbai2.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++	cbai2.commandBufferCount = 1u;
++	const auto cmd2 = allocateCommandBuffer(vkd, device, &cbai2);
++	beginCommandBuffer(vkd, *cmd2, 0u);
++	copyImageToBuffer(vkd, *cmd2, color.getImage(), *recheckBuf.buf,
++	                  tcu::IVec2(int(extent.width), int(extent.height)), VK_ACCESS_TRANSFER_READ_BIT,
++	                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1u, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
++	                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
++	endCommandBuffer(vkd, *cmd2);
++
++	// ---- frames: rewrite the row table, resubmit, verify the dispatched set ----
++	std::vector<uint32_t> prevGroups(rows, 0u);
++	std::vector<uint32_t> curGroups(rows, 0u);
++	uint32_t totalGroups = 0u;
++	for (uint32_t frame = 0u; frame < kFrames; ++frame)
++	{
++		uint32_t expectedGroups = 0u;
++		const bool rewrite = m_params.vary || frame == 0u;
++		for (uint32_t r = 0u; r < rows; ++r)
++		{
++			host[r * 6u + 0u] = 1u;                       // gcX = 1 task/row
++			host[r * 6u + 1u] = 1u;
++			host[r * 6u + 2u] = 1u;
++			host[r * 6u + 3u] = r;                        // obj
++			host[r * 6u + 4u] = 0u;                       // cstart
++			if (rewrite)
++				curGroups[r] = 2u + rnd() % 17u;              // groups 2..18 data-driven
++			host[r * 6u + 5u] = curGroups[r];
++			expectedGroups += host[r * 6u + 5u];
++		}
++		totalGroups += expectedGroups;
++
++		if (rewrite)
++		{
++			memcpy(rowBuf.map, host.data(), size_t(kMaxRows) * 24u);
++			flushAlloc(vkd, device, *rowBuf.alloc);
++		}
++
++		submitCommandsAndWait(vkd, device, queue, *cmd);
++
++		// ---- verify ----
++		// Every mesh workgroup must have landed on the slot of its own (row, z), carrying the
++		// row id it drew with and the group count it read. The expected set these come from is
++		// the row table the host just wrote, so the check covers the whole dispatch pipeline:
++		// indirect draw -> task shader row-table read -> per-draw identity -> mesh dispatch -> raster.
++		uint32_t lit = 0u;
++		uint32_t missing = 0u;
++		uint32_t extra = 0u;
++		uint32_t wrongId = 0u;
++		uint32_t wrongGroups = 0u;
++		uint32_t firstBad = 0u;
++		uint32_t badCount = 0u;
++		std::ostringstream bad;
++		auto &outAlloc = color.getBufferAllocation();
++		invalidateAlloc(vkd, device, outAlloc);
++		const auto *px = static_cast<const uint8_t *>(outAlloc.getHostPtr());
++		for (uint32_t y = 0u; y < kFbHeight; ++y)
++		{
++			for (uint32_t x = 0u; x < kFbWidth; ++x)
++			{
++				const uint32_t idx = y * kFbWidth + x;
++				const uint32_t row = idx / kGroupStride;
++				const uint32_t z = idx % kGroupStride;
++				const uint32_t rowGroups = (row < rows) ? host[row * 6u + 5u] : 0u;
++				const bool expected = (row < rows) && (z < rowGroups);
++
++				const uint32_t r = px[idx * 4u + 0u];
++				const uint32_t g = px[idx * 4u + 1u];
++				const uint32_t b = px[idx * 4u + 2u];
++				const uint32_t a = px[idx * 4u + 3u];
++				const bool actual = (a & 0x80u) != 0u;
++				const uint32_t actRow = r | (g << 8u);
++				const uint32_t actGroups = b;
++				const uint32_t actZ = a & 0x7Fu;
++
++				if (actual)
++					++lit;
++				if (actual != expected)
++				{
++					if (missing + extra == 0u)
++						firstBad = idx;
++					if (expected)
++						++missing;
++					else
++						++extra;
++				}
++				if (actual && (actRow != row || actZ != z))
++					++wrongId;
++				if (actual && actGroups != rowGroups)
++					++wrongGroups;
++
++				if ((actual != expected || (actual && (actRow != row || actZ != z || actGroups != rowGroups))) &&
++				    badCount < 40u)
++				{
++					++badCount;
++					bad << " [slot row=" << row << " z=" << z << " expected=" << expected << " got=" << actual
++					    << " drawRow=" << actRow << " groups=" << actGroups << " gotZ=" << actZ
++					    << " hostNow=" << rowGroups
++					    << " hostPrev=" << ((row < rows) ? prevGroups[row] : 0u) << "]";
++				}
++			}
++		}
++
++		if (missing != 0u || extra != 0u || lit != expectedGroups || wrongId != 0u || wrongGroups != 0u)
++		{
++			// recheck: same image, copied again in a separate submission
++			submitCommandsAndWait(vkd, device, queue, *cmd2);
++			invalidateAlloc(vkd, device, *recheckBuf.alloc);
++			const auto *px2 = static_cast<const uint8_t *>(recheckBuf.alloc->getHostPtr());
++			uint32_t stillMissing = 0u, stillExtra = 0u, stillWrongId = 0u, stillWrongGroups = 0u, diffBytes = 0u;
++			for (uint32_t y = 0u; y < kFbHeight; ++y)
++			{
++				for (uint32_t x = 0u; x < kFbWidth; ++x)
++				{
++					const uint32_t idx = y * kFbWidth + x;
++					const uint32_t row = idx / kGroupStride;
++					const uint32_t z = idx % kGroupStride;
++					const uint32_t rowGroups = (row < rows) ? host[row * 6u + 5u] : 0u;
++					const bool expected = (row < rows) && (z < rowGroups);
++					if (px[idx * 4u + 0u] != px2[idx * 4u + 0u] || px[idx * 4u + 1u] != px2[idx * 4u + 1u] ||
++					    px[idx * 4u + 2u] != px2[idx * 4u + 2u] || px[idx * 4u + 3u] != px2[idx * 4u + 3u])
++						++diffBytes;
++					const uint32_t a = px2[idx * 4u + 3u];
++					const bool actual = (a & 0x80u) != 0u;
++					const uint32_t actRow = uint32_t(px2[idx * 4u + 0u]) | (uint32_t(px2[idx * 4u + 1u]) << 8u);
++					const uint32_t actGroups = px2[idx * 4u + 2u];
++					const uint32_t actZ = a & 0x7Fu;
++					if (actual != expected)
++						(expected ? stillMissing : stillExtra)++;
++					if (actual && (actRow != row || actZ != z))
++						++stillWrongId;
++					if (actual && actGroups != rowGroups)
++						++stillWrongGroups;
++				}
++			}
++
++			std::ostringstream msg;
++			msg << "frame " << frame << ": dispatched set mismatch (rows=" << rows << ", expected groups="
++			    << expectedGroups << ", lit=" << lit << ", missing=" << missing << ", extra=" << extra
++			    << ", wrongRowIdOrZ=" << wrongId << ", wrongGroups=" << wrongGroups << ", first bad slot=" << firstBad
++			    << ") recheck(diffPixels=" << diffBytes << " missing=" << stillMissing << " extra=" << stillExtra
++			    << " wrongRowIdOrZ=" << stillWrongId << " wrongGroups=" << stillWrongGroups << ")" << bad.str();
++			return tcu::TestStatus::fail(msg.str());
++		}
++
++		prevGroups = curGroups;
++	}
++
++	std::ostringstream ok;
++	ok << "ok rows=" << rows << " frames=" << kFrames << " groups=" << totalGroups;
++	return tcu::TestStatus::pass(ok.str());
++}
++
++} // namespace
++
++tcu::TestCaseGroup *createMeshShaderMdiMergeTestsEXT(tcu::TestContext &testCtx)
++{
++	de::MovePtr<tcu::TestCaseGroup> group(new tcu::TestCaseGroup(testCtx, "mdimerge"));
++	const uint32_t doses[] = {6u, 150u, 900u, 1800u};
++	for (uint32_t h = 0u; h < 2u; ++h)
++		for (uint32_t e = 0u; e < 2u; ++e)
++			for (uint32_t v = 0u; v < 2u; ++v)
++				for (const uint32_t d : doses)
++				{
++					MergeParams p;
++					p.eso = (e != 0u);
++					p.heap = (h != 0u);
++					p.vary = (v != 0u);
++					p.rows = d;
++					p.seed = 1u + d;
++					group->addChild(new MergeCase(testCtx, caseName(p), p));
++				}
++	return group.release();
++}
++
++} // namespace MeshShader
++} // namespace vkt

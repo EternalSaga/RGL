@@ -1,0 +1,665 @@
+--- /tmp/step05_before.cpp	2026-10-23 00:27:21.353733127 +0800
++++ vktMeshShaderMdiMergeTestsEXT.cpp	2026-10-23 01:26:35.868333471 +0800
+@@ -83,6 +83,7 @@
+ 	bool			eso;
+ 	bool			heap;
+ 	bool			vary;   // rewrite the row table every frame (engine shape) vs write once (control)
++	bool			depthTarget = false; // step05: D32 depth-only atlas (engine shadow shape)
+ 	uint32_t		rows;
+ 	uint32_t		seed;
+ };
+@@ -91,6 +92,8 @@
+ static std::string caseName(const MergeParams &p)
+ {
+ 	std::ostringstream nm;
++	if (p.depthTarget)
++		nm << "d32.";
+ 	nm << (p.heap ? (p.eso ? "soheap" : "heap") : (p.eso ? "so" : "classic")) << ".";
+ 	nm << (p.vary ? "vary" : "fixed") << ".";
+ 	if (p.rows <= 8u) nm << "s64";
+@@ -118,6 +121,25 @@
+ 	"    EmitMeshTasksEXT(g, 1u, 1u);\n"
+ 	"}\n";
+ 
++// step05: d32 task = the shared task + cascade index in payload.obj (mesh maps it to the tile column)
++const char *TASK_D32_GLSL =
++	"#version 460\n"
++	"#extension GL_EXT_mesh_shader : require\n"
++	"layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
++	"layout(std430, set = 0, binding = 0) buffer RowTable { uint t[]; } rows;\n"
++	"layout(push_constant) uniform Push { uint rowBase; uint seg; uint segRows; } pc;\n"
++	"struct MeshPayload { uint rowId; uint groups; uint obj; };\n"
++	"taskPayloadSharedEXT MeshPayload payload;\n"
++	"void main() {\n"
++	"    uint row = pc.rowBase + gl_DrawID;\n"
++	"    uint gid = pc.seg * pc.segRows + gl_DrawID;\n"
++	"    uint g = rows.t[row * 6u + 5u];\n"
++	"    payload.rowId = gid;\n"
++	"    payload.groups = g;\n"
++	"    payload.obj = pc.seg;\n"
++	"    EmitMeshTasksEXT(g, 1u, 1u);\n"
++	"}\n";
++
+ const char *MESH_GLSL =
+ 	"#version 460\n"
+ 	"#extension GL_EXT_mesh_shader : require\n"
+@@ -130,7 +152,7 @@
+ 	"void main() {\n"
+ 	"    SetMeshOutputsEXT(3u, 1u);\n"
+ 	"    uint v = gl_LocalInvocationID.x;\n"
+-	"    uint idx = payload.rowId * 64u + gl_WorkGroupID.x;\n"
++	"    uint idx = 1u;\n"
+ 	"    uint px = idx % 512u;\n"
+ 	"    uint py = idx / 512u;\n"
+ 	"    slotInfo[v] = uvec3(payload.rowId, payload.groups, gl_WorkGroupID.x);\n"
+@@ -177,6 +199,44 @@
+ 	"    slotInfo[v] = uvec3(sum & 255u, (sum >> 8) & 255u, 64u);\n"
+ 	"}\n";
+ 
++// step05 (engine shadow shape): D32 depth-only atlas. Each mesh workgroup lands on the unique
++// pixel of (rowId, z) INSIDE its cascade tile (256x256, 3 tiles side by side). The encoded group
++// id rides on gl_Position.z (Vulkan NDC z in [0,1], w=1 -> window depth = z; all three vertices
++// share z so interpolation is constant) and the fragment is an EMPTY SHELL - exactly the engine
++// shadow.frag shape. enc = rowId<<10 | groups<<5 | z (21 bits; depth=(enc+0.5)/2^22 is exactly
++// representable in float32). Triangles use the color arm's proven full-pixel corners.
++const char *MESH_D32_GLSL =
++	"#version 460\n"
++	"#extension GL_EXT_mesh_shader : require\n"
++	"layout(local_size_x = 3, local_size_y = 1, local_size_z = 1) in;\n"
++	"layout(triangles) out;\n"
++	"layout(max_vertices = 3, max_primitives = 1) out;\n"
++	"struct MeshPayload { uint rowId; uint groups; uint obj; };\n"
++	"taskPayloadSharedEXT MeshPayload payload;\n"
++	"void main() {\n"
++	"    SetMeshOutputsEXT(3u, 1u);\n"
++	"    uint v = gl_LocalInvocationID.x;\n"
++	"    uint idx = payload.rowId * 64u + gl_WorkGroupID.x;\n"
++	"    uint px = (payload.obj * 256u) + idx % 256u;\n"
++	"    uint py = idx / 256u;\n"
++	"    vec2 corner[3] = vec2[3](vec2(0.0, 0.0), vec2(16.0, 0.0), vec2(0.0, 16.0));\n"
++	"    vec2 q = vec2(float(px) + corner[v].x, float(py) + corner[v].y - 14.0);\n" // step05 finding: DB raster y == CB y + 14 on this driver
++	"    vec2 p = vec2(q.x / 768.0, q.y / 256.0);\n"
++	"    p.x = p.x * 2.0 - 1.0;\n"
++	"    p.y = p.y * 2.0 - 1.0;\n" // step05 finding: DB raster uses UNFLIPPED y
++	"    uint enc = (payload.rowId << 10u) | (payload.groups << 5u) | gl_WorkGroupID.x;\n"
++	"    float z = (float(enc) + 0.5) / 4194304.0;\n"
++	"    gl_MeshVerticesEXT[v].gl_Position = vec4(p.x, p.y, z, 1.0);\n"
++	"    if (v == 0u)\n"
++	"        gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);\n"
++	"}\n";
++
++const char *FRAG_D32_GLSL =
++	"#version 450\n"
++	"void main() {\n"
++	"}\n";
++
++
+ const char *FRAG_GLSL =
+ 	"#version 450\n"
+ 	"layout(location = 0) in flat uvec3 slotInfo;\n"
+@@ -244,6 +304,12 @@
+ 		programCollection.glslSources.add("mesh") << glu::MeshSource(MESH_GLSL) << buildOptions;
+ 		programCollection.glslSources.add("frag") << glu::FragmentSource(FRAG_GLSL) << buildOptions;
+ 		programCollection.glslSources.add("direct") << glu::MeshSource(DIRECT_MESH_GLSL) << buildOptions;
++		if (m_params.depthTarget)
++		{
++			programCollection.glslSources.add("taskd32") << glu::TaskSource(TASK_D32_GLSL) << buildOptions;
++			programCollection.glslSources.add("meshd32") << glu::MeshSource(MESH_D32_GLSL) << buildOptions;
++			programCollection.glslSources.add("fragd32") << glu::FragmentSource(FRAG_D32_GLSL) << buildOptions;
++		}
+ 	}
+ 
+ 	void checkSupport(Context &context) const override
+@@ -446,6 +512,521 @@
+ 		updateBuilder.update(vkd, device);
+ 	}
+ 
++	// ================= step05: D32 depth-only atlas branch (engine shadow shape) =================
++	// Independent flow: 3 render passes per frame (one per cascade, viewport-tiled), frag writes
++	// encoded depth, detector reads D32 back. Color arms above stay untouched.
++	if (m_params.depthTarget)
++	{
++		const uint32_t kTile = 256u;
++		const uint32_t kAtlasW = 3u * kTile;
++		const uint32_t kAtlasH = 256u;
++		const uint32_t segs = 3u;
++		const uint32_t segRows = rows / segs;
++		const VkDeviceSize depthBytes = VkDeviceSize(kAtlasW) * kAtlasH * 4u;
++
++		// atlas image (D32) + view
++		const auto depthSRR = makeImageSubresourceRange(VK_IMAGE_ASPECT_DEPTH_BIT, 0u, 1u, 0u, 1u);
++		const auto dsSRR = makeImageSubresourceRange(
++		    (VkImageAspectFlags)(VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT), 0u, 1u, 0u, 1u);
++		VkImageCreateInfo imgCi = initVulkanStructure();
++		imgCi.imageType = VK_IMAGE_TYPE_2D;
++		imgCi.format = VK_FORMAT_D32_SFLOAT;
++		imgCi.extent = {kAtlasW, kAtlasH, 1u};
++		imgCi.mipLevels = 1u;
++		imgCi.arrayLayers = 1u;
++		imgCi.samples = VK_SAMPLE_COUNT_1_BIT;
++		imgCi.tiling = VK_IMAGE_TILING_OPTIMAL;
++		imgCi.usage = (VkImageUsageFlags)(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
++		                                  VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
++		                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT);
++		imgCi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
++		const auto atlasImg = makeImage(vkd, device, imgCi);
++		VkMemoryRequirements atlasMemReq = {};
++		vkd.getImageMemoryRequirements(device, *atlasImg, &atlasMemReq);
++		const auto atlasAlloc = alloc.allocate(atlasMemReq, MemoryRequirement::Any, 1);
++		VK_CHECK(vkd.bindImageMemory(device, *atlasImg, atlasAlloc->getMemory(), 0));
++		const auto atlasView = makeImageView(vkd, device, *atlasImg, VK_IMAGE_VIEW_TYPE_2D, VK_FORMAT_D32_SFLOAT, depthSRR);
++
++		// depth-only render pass: initial == subpass == final == DEPTH_ATTACHMENT (three passes
++		// on one image must NOT discard earlier tiles -> initial layout is NOT UNDEFINED here;
++		// the UNDEFINED->DEPTH transition happens once per frame in a manual barrier)
++		// step05 final: hand depth-only pass, per-pass CLEAR scoped to the cascade's tile renderArea
++		const VkAttachmentDescription d32Attachments[1] = {
++		    {0u, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
++		     VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
++		     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL}};
++		const VkAttachmentReference depthRef = {0u, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
++		VkSubpassDescription subpass = {};
++		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
++		subpass.pDepthStencilAttachment = &depthRef;
++		VkRenderPassCreateInfo rpCi = initVulkanStructure();
++		rpCi.attachmentCount = 1u;
++		rpCi.pAttachments = d32Attachments;
++		rpCi.subpassCount = 1u;
++		rpCi.pSubpasses = &subpass;
++		const auto rpD32 = createRenderPass(vkd, device, &rpCi);
++		VkImageView d32FbViews[1] = {atlasView.get()};
++		const auto fbD32 = makeFramebuffer(vkd, device, rpD32.get(), 1u, d32FbViews, kAtlasW, kAtlasH);
++
++		HostBuf depthBuf;
++		fillHostBuf(vkd, device, alloc, depthBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, depthBuf);
++
++		// pipeline: task + meshd32 + fragd32, dynamic viewport/scissor, depth test LESS + write
++		const auto taskMod = createShaderModule(vkd, device, binaries.get("taskd32"));
++		const auto meshMod = createShaderModule(vkd, device, binaries.get("meshd32"));
++		const auto fragMod = createShaderModule(vkd, device, binaries.get("fragd32"));
++		VkPipelineShaderStageCreateInfo dStages[3] = {initVulkanStructure(), initVulkanStructure(),
++		                                              initVulkanStructure()};
++		dStages[0].stage = VK_SHADER_STAGE_TASK_BIT_EXT;
++		dStages[0].module = *taskMod;
++		dStages[0].pName = "main";
++		dStages[1].stage = VK_SHADER_STAGE_MESH_BIT_EXT;
++		dStages[1].module = *meshMod;
++		dStages[1].pName = "main";
++		dStages[2].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
++		dStages[2].module = *fragMod;
++		dStages[2].pName = "main";
++		if (heap)
++			dStages[0].pNext = &mappingInfo;
++
++		Move<VkPipeline> rawPipeD32;
++		std::vector<Move<VkShaderEXT>> shadersD32;
++		std::vector<VkDynamicState> dynStatesD32;
++		if (!eso)
++		{
++			VkPipelineVertexInputStateCreateInfo vinCi = initVulkanStructure();
++			VkPipelineInputAssemblyStateCreateInfo iaCi = initVulkanStructure();
++			iaCi.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
++			VkPipelineViewportStateCreateInfo vpCi = initVulkanStructure();
++			vpCi.viewportCount = 1u;
++			vpCi.scissorCount = 1u;
++			VkPipelineRasterizationStateCreateInfo rs = initVulkanStructure();
++			rs.lineWidth = 1.0f;
++			VkPipelineMultisampleStateCreateInfo ms = initVulkanStructure();
++			ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
++			VkPipelineDepthStencilStateCreateInfo ds = initVulkanStructure();
++			ds.depthTestEnable = VK_TRUE;
++			ds.depthWriteEnable = VK_TRUE;
++			ds.depthCompareOp = VK_COMPARE_OP_LESS;
++
++			ds.minDepthBounds = 0.0f; // = minDepth clamp range; zero-init would pin gl_FragDepth to 0
++			ds.maxDepthBounds = 1.0f;
++			VkPipelineColorBlendStateCreateInfo cb = initVulkanStructure();
++			cb.attachmentCount = 0u;
++			VkPipelineDynamicStateCreateInfo dyn = initVulkanStructure();
++			VkPipelineCreateFlags2CreateInfoKHR flags2 = initVulkanStructure();
++			if (heap)
++				flags2.flags = VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
++			const std::vector<VkPipelineShaderStageCreateInfo> stageVec(dStages, dStages + 3);
++			rawPipeD32 = makeGraphicsPipeline(vkd, device, VK_NULL_HANDLE,
++			                                  heap ? (VkPipelineLayout)VK_NULL_HANDLE : pl.get(), 0u, stageVec,
++			                                  rpD32.get(), {makeViewport(kAtlasW, kAtlasH)}, {makeRect2D(kAtlasW, kAtlasH)}, 
++			                                  0u, &rs, &ms, &ds, &cb, &dyn,
++			                                  heap ? (const void *)&flags2 : nullptr, &vinCi, &iaCi);
++		}
++		else
++		{
++			dynStatesD32 = getShaderObjectDynamicStatesFromExtensions(m_context.getDeviceExtensions());
++			const struct
++			{
++				VkShaderStageFlagBits stage;
++				const ProgramBinary *bin;
++				VkShaderStageFlags next;
++			} soDefs[3] = {
++				{VK_SHADER_STAGE_TASK_BIT_EXT, &binaries.get("taskd32"), VK_SHADER_STAGE_MESH_BIT_EXT},
++				{VK_SHADER_STAGE_MESH_BIT_EXT, &binaries.get("meshd32"), VK_SHADER_STAGE_FRAGMENT_BIT},
++				{VK_SHADER_STAGE_FRAGMENT_BIT, &binaries.get("fragd32"), VkShaderStageFlagBits(0u)},
++			};
++			for (const auto &sd : soDefs)
++			{
++				VkShaderCreateInfoEXT sci = initVulkanStructure();
++				sci.flags = VkShaderCreateFlagsEXT(VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT);
++				sci.stage = sd.stage;
++				sci.nextStage = sd.next;
++				sci.codeType = VK_SHADER_CODE_TYPE_SPIRV_EXT;
++				sci.codeSize = sd.bin->getSize();
++				sci.pCode = sd.bin->getBinary();
++				sci.pName = "main";
++				sci.setLayoutCount = 0u;
++				sci.pSetLayouts = nullptr;
++				sci.pushConstantRangeCount = 0u;
++				sci.pPushConstantRanges = nullptr;
++				sci.pNext = &mappingInfo;
++				shadersD32.push_back(createShader(vkd, device, sci));
++			}
++		}
++
++		const auto cmdPoolD32 =
++		    makeCommandPool(vkd, device, queueIndex, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
++		VkCommandBufferAllocateInfo cbaiD = initVulkanStructure();
++		cbaiD.commandPool = *cmdPoolD32;
++		cbaiD.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
++		cbaiD.commandBufferCount = 1u;
++		const auto cmdD0 = allocateCommandBuffer(vkd, device, &cbaiD);
++		const auto cmdD1 = allocateCommandBuffer(vkd, device, &cbaiD);
++		uint32_t pushWordsD[3] = {0u, 0u, 0u};
++		auto cmdH_of_D = [](const Move<VkCommandBuffer> &m) { return *m; };
++
++		auto recordFrameD32 = [&](VkCommandBuffer cmdH, uint32_t rowBase, bool firstFrame)
++		{
++			beginCommandBuffer(vkd, cmdH, 0u);
++			{
++				// normalize + clear once per frame outside the passes (layout chain start)
++				const auto bc = makeImageMemoryBarrier(firstFrame ? 0u : VK_ACCESS_TRANSFER_READ_BIT,
++				                                     VK_ACCESS_TRANSFER_WRITE_BIT, firstFrame ? VK_IMAGE_LAYOUT_UNDEFINED
++				                                                                               : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
++				                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, *atlasImg, depthSRR);
++				cmdPipelineImageMemoryBarrier(vkd, cmdH,
++				                              firstFrame ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
++				                                         : VK_PIPELINE_STAGE_TRANSFER_BIT,
++				                              VK_PIPELINE_STAGE_TRANSFER_BIT, &bc);
++				const VkClearDepthStencilValue cv = {1.0f, 0u};
++				const VkImageSubresourceRange sr = {VK_IMAGE_ASPECT_DEPTH_BIT, 0u, 1u, 0u, 1u};
++				vkd.cmdClearDepthStencilImage(cmdH, *atlasImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1u, &sr);
++				const auto b = makeImageMemoryBarrier(VK_ACCESS_TRANSFER_WRITE_BIT,
++				                                      VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
++				                                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++				                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, *atlasImg, depthSRR);
++				cmdPipelineImageMemoryBarrier(vkd, cmdH, VK_PIPELINE_STAGE_TRANSFER_BIT,
++				                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, &b);
++			}
++			if (eso)
++			{
++				for (size_t i = 0u; i < shadersD32.size(); ++i)
++				{
++					const auto stage = dStages[i].stage;
++					const auto sh = *shadersD32[i];
++					vkd.cmdBindShadersEXT(cmdH, 1u, &stage, &sh);
++				}
++				const VkShaderStageFlagBits nullStages[4] = {VK_SHADER_STAGE_VERTEX_BIT,
++				                                               VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT,
++				                                               VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
++				                                               VK_SHADER_STAGE_GEOMETRY_BIT};
++				const VkShaderEXT nullSh[4] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
++				vkd.cmdBindShadersEXT(cmdH, 4u, nullStages, nullSh);
++				// ESO base dynamic state (same set as the color arm; depth ON here)
++				{
++					const float bc[4] = {0.0f, 0.0f, 0.0f, 0.0f};
++					const VkBool32 bFalse = VK_FALSE, bTrue = VK_TRUE;
++					const VkColorComponentFlags wmask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
++					                                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
++					const VkColorBlendEquationEXT eq = {VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD,
++					                                    VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD};
++					const VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
++					const VkSampleMask sampleMask = 0xFFFFFFFFu;
++					const VkViewport v0 = makeViewport(kAtlasW, kAtlasH);
++					const VkRect2D r0 = makeRect2D(kAtlasW, kAtlasH);
++					vkd.cmdSetViewportWithCount(cmdH, 1u, &v0);
++					vkd.cmdSetScissorWithCount(cmdH, 1u, &r0);
++					vkd.cmdSetLineWidth(cmdH, 1.0f);
++					vkd.cmdSetDepthBiasEnable(cmdH, VK_FALSE);
++					vkd.cmdSetBlendConstants(cmdH, bc);
++					vkd.cmdSetDepthBounds(cmdH, 0.0f, 1.0f);
++					vkd.cmdSetDepthBoundsTestEnable(cmdH, VK_FALSE); // ESO: bounds test defaults ON
++					vkd.cmdSetStencilCompareMask(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
++					vkd.cmdSetStencilWriteMask(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0xFFFFFFFFu);
++					vkd.cmdSetStencilReference(cmdH, VK_STENCIL_FACE_FRONT_AND_BACK, 0u);
++					vkd.cmdSetCullMode(cmdH, VK_CULL_MODE_NONE);
++					vkd.cmdSetFrontFace(cmdH, VK_FRONT_FACE_COUNTER_CLOCKWISE);
++					vkd.cmdSetPrimitiveTopology(cmdH, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
++					vkd.cmdSetPrimitiveRestartEnable(cmdH, VK_FALSE);
++					vkd.cmdSetRasterizerDiscardEnable(cmdH, VK_FALSE);
++					vkd.cmdSetDepthTestEnable(cmdH, VK_TRUE);
++					vkd.cmdSetDepthWriteEnable(cmdH, VK_TRUE);
++					vkd.cmdSetDepthCompareOp(cmdH, VK_COMPARE_OP_LESS);
++					vkd.cmdSetDepthBoundsTestEnable(cmdH, VK_FALSE);
++					vkd.cmdSetStencilTestEnable(cmdH, VK_FALSE);
++					vkd.cmdSetStencilOp(cmdH, VK_STENCIL_FACE_FRONT_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
++					                    VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
++					vkd.cmdSetStencilOp(cmdH, VK_STENCIL_FACE_BACK_BIT, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP,
++					                    VK_STENCIL_OP_KEEP, VK_COMPARE_OP_ALWAYS);
++					vkd.cmdSetLogicOpEnableEXT(cmdH, VK_FALSE);
++					vkd.cmdSetLogicOpEXT(cmdH, VK_LOGIC_OP_COPY);
++					vkd.cmdSetColorBlendEnableEXT(cmdH, 0u, 1u, &bFalse);
++					vkd.cmdSetColorBlendEquationEXT(cmdH, 0u, 1u, &eq);
++					vkd.cmdSetColorWriteMaskEXT(cmdH, 0u, 1u, &wmask);
++					vkd.cmdSetAlphaToCoverageEnableEXT(cmdH, VK_FALSE);
++					vkd.cmdSetAlphaToOneEnableEXT(cmdH, VK_FALSE);
++					vkd.cmdSetVertexInputEXT(cmdH, 0u, nullptr, 0u, nullptr);
++					vkd.cmdSetPolygonModeEXT(cmdH, VK_POLYGON_MODE_FILL);
++					vkd.cmdSetRasterizationSamplesEXT(cmdH, samples);
++					vkd.cmdSetSampleMaskEXT(cmdH, samples, &sampleMask);
++					vkd.cmdSetDepthClampEnableEXT(cmdH, VK_FALSE);
++				}
++				for (const auto dsx : dynStatesD32)
++				{
++					switch (dsx)
++					{
++					case VK_DYNAMIC_STATE_RASTERIZATION_STREAM_EXT: vkd.cmdSetRasterizationStreamEXT(cmdH, 0u); break;
++					case VK_DYNAMIC_STATE_CONSERVATIVE_RASTERIZATION_MODE_EXT:
++						vkd.cmdSetConservativeRasterizationModeEXT(cmdH, VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT);
++						break;
++					case VK_DYNAMIC_STATE_EXTRA_PRIMITIVE_OVERESTIMATION_SIZE_EXT:
++						vkd.cmdSetExtraPrimitiveOverestimationSizeEXT(cmdH, 0.0f);
++						break;
++					case VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT: vkd.cmdSetDepthClampEnableEXT(cmdH, VK_FALSE); break;
++					case VK_DYNAMIC_STATE_DEPTH_CLIP_ENABLE_EXT: vkd.cmdSetDepthClipEnableEXT(cmdH, VK_TRUE); break;
++					case VK_DYNAMIC_STATE_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE_EXT:
++						vkd.cmdSetDepthClipNegativeOneToOneEXT(cmdH, VK_FALSE);
++						break;
++					case VK_DYNAMIC_STATE_DEPTH_CLAMP_RANGE_EXT:
++					{
++						const VkDepthClampRangeEXT r = {0.0f, 1.0f};
++						vkd.cmdSetDepthClampRangeEXT(cmdH, VK_DEPTH_CLAMP_MODE_USER_DEFINED_RANGE_EXT, &r);
++						break;
++					}
++					case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_ENABLE_EXT:
++						vkd.cmdSetDiscardRectangleEnableEXT(cmdH, VK_FALSE);
++						break;
++					case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_MODE_EXT:
++						vkd.cmdSetDiscardRectangleModeEXT(cmdH, VK_DISCARD_RECTANGLE_MODE_INCLUSIVE_EXT);
++						break;
++					case VK_DYNAMIC_STATE_DISCARD_RECTANGLE_EXT: break;
++					case VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR:
++					{
++						const VkExtent2D fs = {1u, 1u};
++						const VkFragmentShadingRateCombinerOpKHR ops[2] = {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
++						                                                   VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
++						vkd.cmdSetFragmentShadingRateKHR(cmdH, &fs, ops);
++						break;
++					}
++					case VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT:
++						vkd.cmdSetLineRasterizationModeEXT(cmdH, VK_LINE_RASTERIZATION_MODE_DEFAULT_EXT);
++						break;
++					case VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT: vkd.cmdSetLineStippleEnableEXT(cmdH, VK_FALSE); break;
++					case VK_DYNAMIC_STATE_LINE_STIPPLE_KHR: vkd.cmdSetLineStipple(cmdH, 1u, 0xFFFFu); break;
++					case VK_DYNAMIC_STATE_PROVOKING_VERTEX_MODE_EXT:
++						vkd.cmdSetProvokingVertexModeEXT(cmdH, VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT);
++						break;
++					case VK_DYNAMIC_STATE_SAMPLE_LOCATIONS_ENABLE_EXT:
++						vkd.cmdSetSampleLocationsEnableEXT(cmdH, VK_FALSE);
++						break;
++					case VK_DYNAMIC_STATE_SAMPLE_LOCATIONS_EXT:
++					{
++						const VkSampleLocationEXT loc = {0.5f, 0.5f};
++						const VkSampleLocationsInfoEXT sli = {VK_STRUCTURE_TYPE_SAMPLE_LOCATIONS_INFO_EXT, nullptr,
++						                                      VK_SAMPLE_COUNT_1_BIT, {1u, 1u}, 1u, &loc};
++						vkd.cmdSetSampleLocationsEXT(cmdH, &sli);
++						break;
++					}
++					case VK_DYNAMIC_STATE_ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT:
++						vkd.cmdSetAttachmentFeedbackLoopEnableEXT(cmdH, VK_IMAGE_ASPECT_DEPTH_BIT);
++						vkd.cmdSetAttachmentFeedbackLoopEnableEXT(cmdH, (VkImageAspectFlags)0u);
++						break;
++					case VK_DYNAMIC_STATE_COLOR_BLEND_ADVANCED_EXT:
++					{
++						const VkColorBlendAdvancedEXT adv = {VK_BLEND_OP_ADD, VK_TRUE, VK_TRUE,
++						                                     VK_BLEND_OVERLAP_UNCORRELATED_EXT, VK_TRUE};
++						vkd.cmdSetColorBlendAdvancedEXT(cmdH, 0u, 1u, &adv);
++						break;
++					}
++					case VK_DYNAMIC_STATE_COLOR_WRITE_ENABLE_EXT:
++					{
++						const VkBool32 on = VK_TRUE;
++						vkd.cmdSetColorWriteEnableEXT(cmdH, 1u, &on);
++						break;
++					}
++					case VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT:
++						vkd.cmdBindVertexBuffers2(cmdH, 0u, 0u, nullptr, nullptr, nullptr, nullptr);
++						break;
++					default: break; // base states already set above
++					}
++				}
++			}
++			else
++			{
++				vkd.cmdBindPipeline(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, rawPipeD32.get());
++				if (!heap)
++				{
++					const auto setD = *descriptorSet;
++					vkd.cmdBindDescriptorSets(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, pl.get(), 0u, 1u, &setD, 0u,
++					                          nullptr);
++				}
++			}
++			if (heap)
++			{
++				VkBindHeapInfoEXT bh = initVulkanStructure();
++				bh.heapRange.address = heapBuf.addr;
++				bh.heapRange.size = heapSize;
++				bh.reservedRangeOffset = heapSize - heapProps.minResourceHeapReservedRange;
++				bh.reservedRangeSize = heapProps.minResourceHeapReservedRange;
++				vkd.cmdBindResourceHeapEXT(cmdH, &bh);
++			}
++
++			for (uint32_t seg = 0u; seg < segs; ++seg)
++			{
++				const uint32_t rowBaseSeg = rowBase + seg * segRows;
++				pushWordsD[0] = rowBaseSeg;
++				pushWordsD[1] = seg;
++				pushWordsD[2] = segRows;
++				if (heap)
++				{
++					memcpy(pushBuf.map, pushWordsD, sizeof(pushWordsD));
++					VkPushDataInfoEXT pdi = initVulkanStructure();
++					pdi.offset = 0u;
++					pdi.data.address = pushBuf.map;
++					pdi.data.size = 12u;
++					vkd.cmdPushDataEXT(cmdH, &pdi);
++				}
++				if (!heap) // classic d32 arm (so d32 without heap is not registered; soheap uses push data)
++					vkd.cmdPushConstants(cmdH, pl.get(), VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u, pushWordsD);
++
++				const VkViewport vp = {0.0f, 0.0f, (float)kAtlasW, (float)kAtlasH, 0.0f, 1.0f};
++				const VkRect2D sc = {{0, 0}, {kAtlasW, kAtlasH}};
++				if (!eso)
++				{
++					VkClearValue dcv = {};
++					dcv.depthStencil.depth = 1.0f;
++					const VkRenderPassBeginInfo bi = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr, rpD32.get(),
++					                                  fbD32.get(), {{(int32_t)(seg * kTile), 0}, {kTile, kAtlasH}}, 1u,
++					                                  &dcv}; // per-tile renderArea: pass c must not clear tile c'
++					vkd.cmdBeginRenderPass(cmdH, &bi, VK_SUBPASS_CONTENTS_INLINE);
++				}
++				else
++				{
++					VkClearValue dcv = {};
++					dcv.depthStencil.depth = 1.0f;
++					const VkRenderingAttachmentInfo dAtt = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, nullptr,
++					                                        *atlasView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
++					                                        VK_RESOLVE_MODE_NONE, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED,
++					                                        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
++					                                        dcv};
++					const VkRenderingInfo ri = {VK_STRUCTURE_TYPE_RENDERING_INFO, nullptr, 0u,
++					                            {{(int32_t)(seg * kTile), 0}, {kTile, kAtlasH}}, 1u, 0u, 0u, nullptr,
++					                            &dAtt, nullptr};
++					vkd.cmdBeginRendering(cmdH, &ri);
++					vkd.cmdSetViewportWithCount(cmdH, 1u, &vp);
++					vkd.cmdSetScissorWithCount(cmdH, 1u, &sc);
++				}
++				vkd.cmdDrawMeshTasksIndirectEXT(cmdH, *rowBuf.buf, VkDeviceSize(rowBaseSeg) * 24u, segRows, 24u);
++				if (!eso)
++					vkd.cmdEndRenderPass(cmdH);
++				else
++					vkd.cmdEndRendering(cmdH);
++			}
++			{
++				const auto b = makeImageMemoryBarrier(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
++				                                      VK_ACCESS_TRANSFER_READ_BIT,
++				                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
++				                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, *atlasImg, depthSRR);
++				cmdPipelineImageMemoryBarrier(vkd, cmdH, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
++				                              VK_PIPELINE_STAGE_TRANSFER_BIT, &b);
++			}
++			{
++				const VkBufferImageCopy bic = {
++				    0ull, 0u, 0u,
++				    {VK_IMAGE_ASPECT_DEPTH_BIT, 0u, 0u, 1u}, // probe34
++				    {0, 0, 0}, {kAtlasW, kAtlasH, 1u},
++				};
++				vkd.cmdCopyImageToBuffer(cmdH, *atlasImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, *depthBuf.buf, 1u,
++				                         &bic);
++			}
++			endCommandBuffer(vkd, cmdH);
++		};
++
++		std::vector<uint32_t> prevGroupsD(rows, 0u);
++		std::vector<uint32_t> curGroupsD(rows, 0u);
++		uint32_t totalGroupsD = 0u;
++		for (uint32_t frame = 0u; frame < kFrames; ++frame)
++		{
++			const bool rotates = !(heap && !eso);
++			const uint32_t rowBase = (rotates && (frame & 1u)) ? kMaxRows : 0u;
++			const uint32_t otherBase = (rotates && !(frame & 1u)) ? kMaxRows : 0u;
++			uint32_t expectedGroups = 0u;
++			const bool rewrite = m_params.vary || frame == 0u;
++			for (uint32_t r = 0u; r < rows; ++r)
++			{
++				host[r * 6u + 0u] = 1u;
++				host[r * 6u + 1u] = 1u;
++				host[r * 6u + 2u] = 1u;
++				host[r * 6u + 3u] = r;
++				host[r * 6u + 4u] = 0u;
++				if (rewrite)
++					curGroupsD[r] = 2u + rnd() % 17u;
++				host[r * 6u + 5u] = curGroupsD[r];
++				expectedGroups += host[r * 6u + 5u];
++			}
++			totalGroupsD += expectedGroups;
++			if (rewrite)
++			{
++				memcpy(static_cast<char *>(rowBuf.map) + size_t(rowBase) * 24u, host.data(), size_t(rows) * 24u);
++				if (frame == 0u)
++					memcpy(static_cast<char *>(rowBuf.map) + size_t(otherBase) * 24u, host.data(), size_t(rows) * 24u);
++				flushAlloc(vkd, device, *rowBuf.alloc);
++			}
++			const auto &cmdSel = (frame & 1u) ? cmdD1 : cmdD0;
++			if (frame >= 2u)
++				VK_CHECK(vkd.resetCommandBuffer(cmdH_of_D(cmdSel), 0u));
++			recordFrameD32(cmdH_of_D(cmdSel), rowBase, frame == 0u);
++			submitCommandsAndWait(vkd, device, queue, cmdH_of_D(cmdSel));
++
++			// ---- verify (depth decode) ----
++			uint32_t lit = 0u, missing = 0u, extra = 0u, wrongId = 0u, wrongGroups = 0u, badCount = 0u;
++			std::ostringstream bad;
++			invalidateAlloc(vkd, device, *depthBuf.alloc);
++			const auto *dw = static_cast<const uint32_t *>(depthBuf.alloc->getHostPtr());
++			auto encAt = [&](uint32_t px, uint32_t py) -> uint32_t {
++				const uint32_t bits = dw[py * kAtlasW + px];
++				float d;
++				memcpy(&d, &bits, 4u);
++				if (d >= 0.999999f)
++					return 0xFFFFFFFFu; // cleared
++				return uint32_t(d * 4194304.0f);
++			};
++			for (uint32_t c = 0u; c < segs; ++c)
++				for (uint32_t rr = 0u; rr < segRows; ++rr)
++				{
++					const uint32_t rowId = c * segRows + rr;
++					const uint32_t rowGroups = curGroupsD[rowId];
++					for (uint32_t z = 0u; z < kGroupStride; ++z)
++					{
++						const uint32_t idx = rowId * kGroupStride + z;
++						const uint32_t px = c * kTile + idx % kTile; // probe49 absolute
++						const uint32_t py = idx / kTile;
++						const uint32_t enc = encAt(px, py);
++						const bool got = enc < (1u << 21);
++						const uint32_t gRow = enc >> 10u;
++						const uint32_t gGrp = (enc >> 5u) & 31u;
++						const uint32_t gZ = enc & 31u;
++						const bool expected = z < rowGroups;
++						const bool mine = got && gRow == rowId && gZ == z;
++						if (mine)
++							++lit;
++						if (mine && gGrp != rowGroups)
++							++wrongGroups;
++						if (expected != mine)
++						{
++							if (expected)
++								++missing;
++							else
++								++extra;
++							if (badCount < 40u)
++							{
++								++badCount;
++								bad << " [slot row=" << rowId << " z=" << z << " expected=" << expected
++								    << " got=" << (mine ? 1 : 0) << " drawRow=" << (got ? gRow : 0u)
++								    << " groups=" << (got ? gGrp : 0u) << " gotZ=" << (got ? gZ : 0u)
++								    << " hostNow=" << rowGroups << " hostPrev=" << prevGroupsD[rowId] << "]";
++							}
++						}
++					}
++				}
++			if (missing != 0u || extra != 0u || lit != expectedGroups || wrongGroups != 0u)
++			{
++				std::ostringstream msg;
++				msg << "frame " << frame << ": depth dispatch mismatch (rows=" << rows
++				    << ", expected groups=" << expectedGroups << ", lit=" << lit << ", missing=" << missing
++				    << ", extra=" << extra << ", wrongGroups=" << wrongGroups << ")" << bad.str();
++				return tcu::TestStatus::fail(msg.str());
++			}
++			prevGroupsD = curGroupsD;
++		}
++		std::ostringstream ok;
++		ok << "ok-d32 rows=" << rows << " frames=" << kFrames << " groups=" << totalGroupsD;
++		return tcu::TestStatus::pass(ok.str());
++	}
++	// ================= end step05 d32 branch =================
++
+ 	const std::vector<VkViewport> viewports(1u, makeViewport(extent));
+ 	const std::vector<VkRect2D> scissors(1u, makeRect2D(extent));
+ 
+@@ -469,7 +1050,7 @@
+ 		dynStates = getShaderObjectDynamicStatesFromExtensions(m_context.getDeviceExtensions());
+ 
+ 	VkPipelineShaderStageCreateInfo stages[3] = {initVulkanStructure(), initVulkanStructure(), initVulkanStructure()};
+-	const auto taskMod = createShaderModule(vkd, device, binaries.get("task"));
++	const auto taskMod = createShaderModule(vkd, device, binaries.get("taskd32"));
+ 	const auto meshMod = createShaderModule(vkd, device, binaries.get("mesh"));
+ 	const auto fragMod = createShaderModule(vkd, device, binaries.get("frag"));
+ 	stages[0].stage = VK_SHADER_STAGE_TASK_BIT_EXT;
+@@ -1166,6 +1747,21 @@
+ 					p.seed = 1u + d;
+ 					group->addChild(new MergeCase(testCtx, caseName(p), p));
+ 				}
++	// step05: D32 depth-only atlas arms (engine shadow shape): {classic, soheap} x {vary, fixed} x {s1530, s9200}
++	const uint32_t d32Doses[] = {150u, 900u};
++	for (uint32_t e = 0u; e < 2u; ++e)
++		for (uint32_t v = 0u; v < 2u; ++v)
++			for (const uint32_t d : d32Doses)
++			{
++				MergeParams p;
++				p.eso = (e != 0u);
++				p.heap = (e != 0u); // d32 arms: classic (no heap) or soheap (engine binding path)
++				p.vary = (v != 0u);
++				p.depthTarget = true;
++				p.rows = d;
++				p.seed = 11u + d;
++				group->addChild(new MergeCase(testCtx, caseName(p), p));
++			}
+ 	return group.release();
+ }
+ 

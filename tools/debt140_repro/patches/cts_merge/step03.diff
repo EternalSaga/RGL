@@ -1,0 +1,90 @@
+--- /tmp/step03_before.cpp	2026-10-22 23:31:57.020811094 +0800
++++ vktMeshShaderMdiMergeTestsEXT.cpp	2026-10-22 23:35:58.239829398 +0800
+@@ -105,13 +105,15 @@
+ 	"#extension GL_EXT_mesh_shader : require\n"
+ 	"layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;\n"
+ 	"layout(std430, set = 0, binding = 0) buffer RowTable { uint t[]; } rows;\n"
+-	"layout(push_constant) uniform Push { uint rowBase; uint cascade; uint selfCheck; } pc;\n"
++	"layout(push_constant) uniform Push { uint rowBase; uint seg; uint segRows; } pc;\n"
++
+ 	"struct MeshPayload { uint rowId; uint groups; uint obj; };\n"
+ 	"taskPayloadSharedEXT MeshPayload payload;\n"
+ 	"void main() {\n"
+ 	"    uint row = pc.rowBase + gl_DrawID;\n"
++	"    uint gid = pc.seg * pc.segRows + gl_DrawID;\n"
+ 	"    uint g = rows.t[row * 6u + 5u];\n"
+-	"    payload.rowId = gl_DrawID;\n"
++	"    payload.rowId = gid;\n"
+ 	"    payload.groups = g;\n"
+ 	"    payload.obj = rows.t[row * 6u + 3u];\n"
+ 	"    EmitMeshTasksEXT(g, 1u, 1u);\n"
+@@ -551,7 +553,6 @@
+ 		if (pipeWrap)
+ 		{
+ 			pipeWrap->bind(cmdH);
+-			vkd.cmdPushConstants(cmdH, layoutWrap.get(), VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u, pushWords);
+ 			const auto dsetEso = *descriptorSet;
+ 			layoutWrap.bindDescriptorSets(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, 0u, 1u, &dsetEso, 0u, nullptr);
+ 		}
+@@ -751,15 +752,45 @@
+ 	{
+ 		vkd.cmdBindPipeline(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, rawPipe.get());
+ 		if (!heap)
+-			vkd.cmdPushConstants(cmdH, pl.get(), VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u, pushWords);
+-		if (!heap)
+ 		{
+ 			const auto set = *descriptorSet;
+ 			vkd.cmdBindDescriptorSets(cmdH, VK_PIPELINE_BIND_POINT_GRAPHICS, pl.get(), 0u, 1u, &set, 0u, nullptr);
+ 		}
+ 	}
+ 
+-	vkd.cmdDrawMeshTasksIndirectEXT(cmdH, *rowBuf.buf, VkDeviceSize(rowBase) * 24u, rows, 24u);
++	// engine shape (step03): 3 MDI segments per frame = the 3 shadow cascades, each with its
++	// own rowBase range and its own push (word1 = cascade index). Rows split evenly (all doses
++	// are divisible by 3); slot map stays global so the detector is unchanged.
++	{
++		const uint32_t segs = 3u;
++		const uint32_t segRows = rows / segs;
++		for (uint32_t seg = 0u; seg < segs; ++seg)
++		{
++			const uint32_t rowBaseSeg = rowBase + seg * segRows;
++			pushWords[0] = rowBaseSeg;
++			pushWords[1] = seg;
++			pushWords[2] = segRows;
++			if (heap)
++			{
++				// push data snapshots at RECORD time: refresh host contents AND re-record the
++				// push command before every segment draw (one push per draw = engine drawOne shape)
++				memcpy(pushBuf.map, pushWords, sizeof(pushWords));
++				VkPushDataInfoEXT pdi = initVulkanStructure();
++				pdi.offset = 0u;
++				pdi.data.address = pushBuf.map;
++				pdi.data.size = 12u;
++				vkd.cmdPushDataEXT(cmdH, &pdi);
++			}
++			if (!heap)
++			{
++				if (eso)
++					vkd.cmdPushConstants(cmdH, layoutWrap.get(), VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u, pushWords);
++				else
++					vkd.cmdPushConstants(cmdH, pl.get(), VK_SHADER_STAGE_TASK_BIT_EXT, 0u, 12u, pushWords);
++			}
++			vkd.cmdDrawMeshTasksIndirectEXT(cmdH, *rowBuf.buf, VkDeviceSize(rowBaseSeg) * 24u, segRows, 24u);
++		}
++	}
+ 
+ 	if (!eso)
+ 		endRenderPass(vkd, cmdH);
+@@ -828,7 +859,7 @@
+ 
+ 		pushWords[0] = rowBase;
+ 		pushWords[1] = 0u;
+-		pushWords[2] = 0u;
++		pushWords[2] = rows / 3u;
+ 		// heap arms feed the push_constant block from the push data region (engine shape);
+ 		// refresh host contents before every record (record snapshots them)
+ 		if (heap)
+# step03: 簇2b —— 每帧 3 段 MDI 派发（=引擎 3 级联）：行均分 3 段、逐段 push{rowBaseSeg,seg,segRows}
+# + 逐段 drawMeshTasksIndirect；payload.rowId 必须是**全局行号** seg*segRows+DrawID（首版用段内
+# DrawID → 三段互踩同槽，冒烟抓到即修）；heap 臂 push data 是**记录期快照**——只改 host 内容不
+# 重录 cmdPushDataEXT 则全 draw 读同一份（第二版 bug，冒烟抓到即修；引擎 drawOne 每 draw 重录=同款纪律）。
