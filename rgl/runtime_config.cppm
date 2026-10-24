@@ -624,7 +624,7 @@ export struct RuntimeConfig {
 	/**
 	 * 债-140 §26/§27 **直派模拟**三态（`runtime.lua meshlet.mdi_shadow_direct`，默认 `"auto"`）。
 	 *
-	 * gfx1151 的 MDI 间接命令 × mesh 真取数链崩溃（上游 issue 占位 **Mesa#16670**，投递后回填；
+	 * gfx1151 的 MDI 间接命令 × mesh 真取数链崩溃（上游 issue 已投 **Mesa#16670**，2026-10-23；
 	 * 判据 = docs/债140_跨驱动与上游取证.md §26 引擎内减法 + §27 引擎外复现 12/14）。本键把
 	 * 阴影段每级联的派发从 `drawMeshTasksIndirectEXT` 换成等价的 `drawMeshTasksEXT(rowCount,1,1)`
 	 * （行表/push/task 取数/可见性全保留；语义等价 = §26.2 截图 sha256 逐位相同 + §28 复跑）。

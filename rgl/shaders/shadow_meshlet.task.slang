@@ -108,7 +108,7 @@ ByteAddressBuffer mdiShadowArgs;
 // gfx1151 直派模拟变体（`meshlet.mdi_shadow_direct`，债-140 §26/§27 转正的 workaround）：
 // 行号来源从 SV_DrawIndex 换成 SV_GroupID.x（执行器发 vkCmdDrawMeshTasksEXT，grid X = 段行数），
 // **不经 MDI 间接命令**——§27 引擎外复现定案：崩溃 = MDI 派发 × mesh 真取数链 的必要条件组合，
-// 直派形态 0/14 净（上游 issue 占位 Mesa#16670，用户投递后回填）。行表/payload/DispatchMesh
+// 直派形态 0/14 净（上游 issue 已投 Mesa#16670，2026-10-23）。行表/payload/DispatchMesh
 // 与 MDI 变体逐式同；gcX==0 的行（MDI 下本就不启动 task）在此改为 task 启动后早退。
 // 门 = 选 SPV 变体（同 SHADOW_SELFCHECK / §19.2 D2 纪律，运行时 flag 挡不住 slang fp 重排）。
 void main(uint3 directGroupID : SV_GroupID)

@@ -59,7 +59,7 @@ e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
 b501e48f8a7124fb926c4c5f83f4b994e3ed700c  rgl/shaders/shadow.slang
 a8ba64181c6d1b8e324090cc37ddb147fa177497  rgl/shaders/shadow_meshlet.mesh.slang
-22ca8ffceb307be86aba088b2e83e34a8c0bb2ed  rgl/shaders/shadow_meshlet.task.slang
+ca2b409ad4e54968752e2fa704a97d8ab0186656  rgl/shaders/shadow_meshlet.task.slang
 6c87c17409622362185b8e526d6f3180556c3422  rgl/shaders/sky.slang
 998d2afd49fafa909606a8bb8900573153fd2af1  rgl/shaders/ssr_apply.frag.slang
 1a0db7811d5deaa0dea6a2b6ccbe2dffd910d80b  rgl/shaders/ssr_trace.frag.slang
@@ -110,7 +110,7 @@ e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
 b501e48f8a7124fb926c4c5f83f4b994e3ed700c  rgl/shaders/shadow.slang
 a8ba64181c6d1b8e324090cc37ddb147fa177497  rgl/shaders/shadow_meshlet.mesh.slang
-22ca8ffceb307be86aba088b2e83e34a8c0bb2ed  rgl/shaders/shadow_meshlet.task.slang
+ca2b409ad4e54968752e2fa704a97d8ab0186656  rgl/shaders/shadow_meshlet.task.slang
 6c87c17409622362185b8e526d6f3180556c3422  rgl/shaders/sky.slang
 998d2afd49fafa909606a8bb8900573153fd2af1  rgl/shaders/ssr_apply.frag.slang
 1a0db7811d5deaa0dea6a2b6ccbe2dffd910d80b  rgl/shaders/ssr_trace.frag.slang
@@ -161,7 +161,7 @@ e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
 b501e48f8a7124fb926c4c5f83f4b994e3ed700c  rgl/shaders/shadow.slang
 a8ba64181c6d1b8e324090cc37ddb147fa177497  rgl/shaders/shadow_meshlet.mesh.slang
-22ca8ffceb307be86aba088b2e83e34a8c0bb2ed  rgl/shaders/shadow_meshlet.task.slang
+ca2b409ad4e54968752e2fa704a97d8ab0186656  rgl/shaders/shadow_meshlet.task.slang
 6c87c17409622362185b8e526d6f3180556c3422  rgl/shaders/sky.slang
 998d2afd49fafa909606a8bb8900573153fd2af1  rgl/shaders/ssr_apply.frag.slang
 1a0db7811d5deaa0dea6a2b6ccbe2dffd910d80b  rgl/shaders/ssr_trace.frag.slang
