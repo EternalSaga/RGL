@@ -100,7 +100,7 @@
 | 与不透明面**严格共面**的透明面会被整块剔掉：透明段只改 depthWrite / colorBlend / cullMode，深度比较吃 `RenderState` 的默认 `eLess` ⟹ 共面 = 相等 = 拒。水面对齐地形、玻璃贴平墙 = 看不见 | `state_kit` ctor（未设 `depthCompareOp`）+ `shader.cppm::RenderState` 默认值；picking / highlight 当年正是踩了这条才显式写 `eLessOrEqual` | 真实资产出现共面透明。⚠ **照 picking 那样换比较子不是正解**（`eLessOrEqual` 会让透明层与它自己混合），正解是 depth bias——`applyDynamicState` 已把 `setDepthBias` 做成动态状态，机制上通，缺的是"给谁开、开多少"的实测 |
 | 「剔背面 ⟹ 每像素单层」只对**单面封闭网格**成立。loader 是用**复制背面三角形**实现 `doubleSided` 的 ⟹ 一个 `doubleSided=true` 的封闭盒子，除近墙外还留一份远墙的正面副本 = 混两层，正是剔背面要防的那个症状；而 cull 是**按段**的全局状态，按材质调不了 | `state_kit` 的 `transparentState.cullMode = eBack` + `gltf_loader_impl.cppm::duplicateForDoubleSided` | 资产里出现 doubleSided 的 BLEND 封闭网格。修法有先例：`Renderer::executeMeshletOverlay` 已示范"在一小段 draw 前后 set / restore 动态状态"，而 `setCullMode` 本就是动态状态 |
 | 场景含 BLEND 图元**必须有 `environment` 段**，否则装配期抛（刀2 的 `validateBlendSupport`）。这条约束是**装配层的不对称**，不是渲染需要：`addLightEntry` 在 env 缺失时给 binding 9/10 填**占位槽 0**（shader 端 `mipRange=0` 不采样 = 黑天回落），而 `addModelEntry` 在 env 缺失时**干脆不登记** binding 4/5，`transparent.frag` 经 `env.slang` 无条件声明 binding 4 ⟹ 建 shader 失败 | `shader_registry_impl.cppm` 的 `addModelEntry` / `addLightEntry` 两处 env 分支；`main_scene.cppm::validateBlendSupport` | 想在不挂 env 的场景里画透明。修法 = 照 `addLightEntry` 给模型条目补占位槽（几行），补完**同时删掉** `validateBlendSupport` 的 env 那条——留着 = 供一条本可以不存在的前置检查 |
-| 透明段的**常驻像素覆盖 = 零**：出厂场景 0 BLEND ⟹ 每天跑的 `just smoke` / `just regress` 里透明段是一个**空 pass**；唯一常驻的透明检查 `just imgqa blend-sort` 是全 unlit + aa 关 + 无阴影 + 无法线贴图，且要 GPU、不在 `just gates` 里。四支类别变体里 pbr / vegetation / light 三支在"有人会自动跑到"这个意义上零像素覆盖。刀1 验收用的 `transparent.glb` **没有进 `qa/configs/` 任何一份冻结配置** ⟹ 那次"透明资产真出图"是一次性手工读数，现在没有任何命令能重放它 | `qa/configs/` 只有 `blend_sort` 一份透明输入；`Justfile` 的 `gates` / `tools-check`（只编 imgqa + 跑 selftest）；`tools/qa_scenes.py::scene_blend_sort` | 已在做透明改动时立刻需要 → **债-134** |
+| 透明段的**常驻像素覆盖**：出厂场景 0 BLEND ⟹ 每天跑的 `just smoke` / `just regress` 里透明段是一个**空 pass**；而 `blend-sort` 三层全 unlit（早退不采光照）⟹ pbr / vegetation / light 三支类别变体原本零像素覆盖，刀1 那次"透明资产真出图"是一次性手工读数。**✅ 已补常驻可重放仪器（2026-10-24 收账批）= `just imgqa blend-lit`**，六条判据（BLEND 臂条数 = 3 / OPAQUE 反向臂恰 0 / footprint 内确有不同 / footprint 外逐位相同 / 同臂 pane 众数 ≠ 背景板众数 / `[error]` = 0），输入 = `qa/configs/blend_lit/` + `tools/qa_scenes.py::scene_blend_lit(blend=)` 的**双臂同源**资产（只差 alphaMode，仪器跑前逐字段对账）。⚠ **仍是弱判据**：不预测任何像素值，证「透明段对交付图有贡献」，**不证「透明画对了」**（后者归 `blend-sort` 的闭式）；且它是设备级，**不在 `just gates` 里**（gates 四步今天全不要设备，改这条要用户拍板） | 六条容差理由与全部变异读数 = `tools/imgqa/judgments_table_blend_lit.cpp`；仪器 = `tools/imgqa/blend_lit.cpp` + `blend_lit_metric.{h,cpp}`；读数口 = `GET /state` 的 `render.transparentDraws`（口径 = `segmentSpan("transparent")`，与执行器同源，不在 RPC 侧重算） | 强判据（预测像素值）等本表上面哪条边界真被触发再补 → **债-134 先决已结案** |
 
 ## 5. 施工读数
 
@@ -298,3 +298,54 @@ velocity、picking、GPU culling 候选（§4 那几条边界一条没被这份�
 （rc=3）：它们的含义是"这次测量没有意义"，输出一条 PASS 是在撒谎。
 ⚠ 刀3 当时那份写在仓库外（/tmp）的一次性 Python 脚本自本次起作废，不再是任何读数的出处。
 
+
+### 收账批（2026-10-24）：透明段常驻覆盖 = `just imgqa blend-lit`（债-134 先决结案）
+
+**为什么是"双臂 + 六条"而不是一条"图变了"**：债-134 记的是"透明段整段删掉也不会让任何检查红"。
+要让它红，五条独立的门缺一不可（第六条管过程干净）：条数非 0（画了）· 反向臂条数**恰** 0（那条数
+不是恒真）· footprint 内两臂变了（真写进像素）· footprint 外两臂逐位不变（写的就是它该写的那块）·
+同臂内 footprint 众数 ≠ 背景板众数（写的东西看得见）。
+
+**读数口走 RPC 而不是数像素**：`GET /state` → `render.transparentDraws`，口径 =
+`segmentSpan("transparent", …)` = 执行器画那一段用的同一个 span（在 RPC 侧重算一遍
+`calls.size() − transparentStart` 就是第二份口径，会漂）。⚠ 时序是实测出来的：RPC 的 poll 挂在
+system 链**之前** ⟹ 第 1 次 drain 读到的是装配期 emplace 的默认空列表（恒 0，**不是**"场景没有
+透明图元"），消费方必须要求 `frame ≥ 2`。`delay_frames` 从 blend_sort 的 8 提到 **2000**：窗口
+宽度 ≈ delay_frames / 帧率，8 帧只给约 20 ms（实测 8/8 各读到 3–6 条，但余量只有一档机器速度），
+2000 帧实测读到 187–256 次；像素侧无代价（`spin=false` + `aa=off`，同配置两跑 PNG sha256 相同）。
+
+**基线读数**（本机 AMD Radeon 8060S / RADV STRIX_HALO / Mesa 26.2.4，`just imgqa blend-lit` 全程
+5.8 s）：BLEND 臂 `transparentDraws=3`、OPAQUE 臂 `=0`；footprint(+1px) 内 changed =
+185008 / 921600 = 20.07%，max 165 LSB；footprint 外 changed = **0**；同臂 pane 众数与背景板众数
+最小差 119 LSB；`[error]` = 0 + 0。
+
+**三条只有跑出来才知道的事**：
+
+1. **"两臂不同"担不起"透明段画了"**（worker 变异）：删掉 `render_list_impl.cppm` 里"透明段 append
+   进 calls"那个循环（= 正是债-134 记的那个状态），条数判据红，但"footprint 内两臂不同"**照旧绿**
+   ——BLEND 臂露出背景板、OPAQUE 臂在那儿是不透明 pane，两臂还是不同（changed 仍是 185008，只是
+   max 165→226）。⟹ 第六条"同臂众数 ≠ 背景板"是这条洞的补丁，不是想到的，是跑出来的。
+2. **主 agent 复核变异换了形态，又挖出一个洞**：把 BLEND 臂三支 pane 的 α 从 0.25/0.5 压到
+   **0.002**（透明段照旧 3 条 draw、两臂照旧差 185008 像素）⟹ 只有"同臂众数"红（Δ = 0/2/4 LSB），
+   条数与"两臂不同"全绿。⟹ 第六条同时咬住"没画"与"画了但没贡献"两种错，前两条各咬一种。
+   顺带一条事实：`tools/qa_scenes.py` 的 Piece 守卫直接拒 α = 0（`alpha 0.0 不在 (0,1]`）⟹ 这个
+   错形只能以"极小 α"存在，而它恰好落在 8 LSB 判别力下限之下。
+3. **`shadow.mode=none` 是承重的，而且是实验结论不是断言**（worker 变异）：把冻结配置**副本**里的
+   shadow mode 改成 pcss ⟹ footprint **之外** changed = 49371 像素 / 119 LSB，而其余五条全绿。
+   根因 = `collectShadowCasters` 排除 blend 图元（`main_meshlet_tables.cppm`）⟹ 开着阴影时 OPAQUE
+   臂的 pane 会投影、BLEND 臂的不投，**透明段一条没画两臂也照样不同**。处置 = 结构性摘掉旁路
+   （钉 `mode="none"`），不是给"之外逐位相同"加容差。
+   主 agent 复核的另一条变异：把读数口从 `segmentSpan("transparent")` 指到
+   `segmentSpan("opaque")`（一个"看着像对"的错量）⟹ 条数与反向两条同时红，而回显的 1 / 4 恰好
+   互证段划分正确（BLEND 臂 opaque 1 + transparent 3 = OPAQUE 臂 opaque 4）。
+
+**这份输入不覆盖什么**：不预测像素值（弱判据，"闭式成本 > 收益"是台账裁的）；不覆盖阴影遮挡
+（`mode=none` 是刻意的，代价 = `transparent.frag` 的 `sampleShadow1Tap` 只走因子恒 1.0 那一支）、
+MASK discard、velocity/TAA、picking / object_id、GPU culling 候选、多层叠加与排序（pane 共面
+不重叠，次序归 `blend-sort` 管）、自发光电平（pane 的 `emissive` 恒 None，债-131 的 ×1/4 不进
+算式）、法线贴图 / ORM / 湿面。
+
+**顺带的两处共用改动**（不是本批的意图，但别当成误改）：`parseLuaVec3` 从 `blend_sort.cpp` 的匿名
+namespace 提到 `engine_lua_edit.{h,cpp}`（两条仪器要做同一条 camera.lua ↔ manifest 对账）；
+`buildRglDir()` 从 `engine.cpp` 提到 `imgqa.h`（自己再拼一遍 `projectRoot()+"/build/rgl"` 会丢掉
+`RGL_ROOT` 运行期覆盖那条性质）。

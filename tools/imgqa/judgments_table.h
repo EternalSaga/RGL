@@ -100,6 +100,15 @@ namespace RGL::imgqa {
 /// 📄 正文在 `judgments_table_blend.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& blendSortJudgments();
 
+/// 地基族 · **透明段像素贡献**（`blend-lit`，6 条，债-134 的先决）：引擎回显条数 / 反向臂
+/// 条数恰 0 / footprint 内确有不同 / footprint 外逐位相同 / `[error]` 计数为 0。
+/// 与上一条的分工 = 那边证「画对了」（有闭式），这边证「**有**贡献」（无闭式，刻意）。
+/// 族仍是 Foundation（不涉时域比值口径），缝按**仪器**切。📄 正文在 `judgments_table_blend_lit.cpp`。
+/// ⚠ 同一台仪器拆成两个函数 = 单函数代码行上限（120）装不下六条完整容差理由，
+///   切缝在「条数对」与「像素+过程」之间；两条必须**按序**一起 append（现序 = 条数在前）。
+[[nodiscard]] const std::vector<JudgmentInfo>& blendLitDrawCountJudgments();
+[[nodiscard]] const std::vector<JudgmentInfo>& blendLitPixelJudgments();
+
 }  // namespace RGL::imgqa
 
 #endif  // RGL_IMGQA_JUDGMENTS_TABLE_H

@@ -204,6 +204,7 @@ pass 级动态开关（复合事务的安全点入口；toggle_frames = 逐帧�
 - `renderWidth`（uint32）——渲染网格像素（= swapchain 尺寸 × scale）
 - `renderHeight`（uint32）——渲染网格像素
 - `scale`（number）——生效的 render_scale
+- `transparentDraws`（uint32）——透明段 draw 条数 = FrameDrawList::calls.size() − transparentStart（段口径单源 = frame_draw_list::segmentSpan 的 transparent 分支）。⚠ **取的是帧边界上 ctx 里那份 FrameDrawList**，而 RPC 的 drain 点在 system 链**之前** ⟹ 第 N 帧的读数 = 第 N−1 帧的段。首帧（frame==1）读到的是装配期 emplace 的默认空列表（恒 0），**不是**「场景没有透明图元」——消费方必须要求 frame ≥ 2（债-134 的 `imgqa blend-lit` 就按这条拒跑）。0-BLEND 场景（出厂 bistro）恒 0
 
 
 ### `stateGraph`

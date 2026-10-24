@@ -177,9 +177,9 @@ cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 466d23d4488547c694a978f192043fda391ae176  tools/templates/features_cppm.inja
 56b0abc4169eeddac39f5aa8981642a583de52af  rgl/param_semantics.json
 bea192a811bf3d98992a548e32b9a5c3a23df225  tools/templates/param_semantics_cppm.inja
-1d3fb98c76bc0f28fa809c41e2121a5a81f30215  rgl/rpc_schema.lua
+1b98f5073e8d959234fea426a2cf2bddc0781044  rgl/rpc_schema.lua
 edac740d2c3554649433009f6a6ecdeb562930ae  tools/templates/rpc_schema_cppm.inja
-1d3fb98c76bc0f28fa809c41e2121a5a81f30215  rgl/rpc_schema.lua
+1b98f5073e8d959234fea426a2cf2bddc0781044  rgl/rpc_schema.lua
 edac740d2c3554649433009f6a6ecdeb562930ae  tools/templates/rpc_schema_cppm.inja
-1d3fb98c76bc0f28fa809c41e2121a5a81f30215  rgl/rpc_schema.lua
+1b98f5073e8d959234fea426a2cf2bddc0781044  rgl/rpc_schema.lua
 ee1c036d7427f50ffabedcccf07e0ac3ce2dd3b0  tools/templates/rpc_schema_md.inja

@@ -59,6 +59,11 @@ const SubcommandSpec* findSubcommand(const std::string& name);
 /// 位置由 `cli_table.cpp` 的 allSpecs() 决定 = 紧跟 shadow/probe 那一段。
 [[nodiscard]] std::vector<SubcommandSpec> blendSortSpecs();
 
+/// `blend-lit` 段的正文在 `cli_table_blend_lit.cpp`（同 blend 段的拆法：主表撞 500 行、
+/// `specsSwimAndProbe()` 撞 120 行，缝按仪器切）。-h 位置 = blend-sort 段之后（理由见
+/// `cli_table.cpp` 的 allSpecs() 注）。
+[[nodiscard]] std::vector<SubcommandSpec> blendLitSpecs();
+
 /// `shadow-grain` 段的正文在 `cli_table_grain.cpp`（同 blend 段的拆法：主表撞 500 行、
 /// `specsSwimAndProbe()` 撞 120 行，缝按仪器切）。-h 位置 = blend-sort 段之后（理由见
 /// `cli_table.cpp` 的 allSpecs() 注）。

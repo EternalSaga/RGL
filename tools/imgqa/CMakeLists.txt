@@ -20,6 +20,8 @@ add_executable(imgqa
     cli_table_diffblock.cpp
     # `blend-sort` 的 spec 段（债-132，同上一条的拆法：主表撞 500 行、specsSwimAndProbe 撞 120 行）。
     cli_table_blend.cpp
+    # `blend-lit` 的 spec 段（债-134 先决，同 blend 段的拆法：主表撞 500 行，缝按仪器切）。
+    cli_table_blend_lit.cpp
     # `shadow-grain` 的 spec 段（同 blend 段的拆法：主表撞 500 行、specsSwimAndProbe 撞 120 行，
     # 缝按仪器切）。
     cli_table_grain.cpp
@@ -73,6 +75,8 @@ add_executable(imgqa
     judgments_table_block.cpp
     # `blend-sort` 判据段（债-132，4 条），缝按仪器切（同 block / ssr 段）。
     judgments_table_blend.cpp
+    # `blend-lit` 判据段（债-134 先决，5 条），缝按仪器切（同 blend / block / ssr 段）。
+    judgments_table_blend_lit.cpp
     # `shadow-grain` 判据段（2 条：痤疮上界 + slope_bias 接线阳性锚点），缝按仪器切
     # （`judgments_table_shadow.cpp` 把头注缝声明为「三条全部属于 shadow-kernel-scale」）。
     judgments_table_grain.cpp
@@ -113,6 +117,10 @@ add_executable(imgqa
     # `blend-sort` 口径层（债-132）的自检段：投影锚点 / 合成闭式 / 显示链金标准 / 判别力 /
     # 三条拒跑 / 挂号，全部**不启引擎**（合成 BlendPiece 直打 `blend_sort_metric.cpp`）。
     selftest_blend_sort.cpp
+    # `blend-lit` 口径层（债-134 先决）的自检段：投影锚点（命中实机 pane 边界）/ 分桶正解 /
+    # 分桶反例（confined 判据不是恒绿的摆设）/ pad 边界口径 / 四条拒跑 / 五条挂号，
+    # 全部**不启引擎**（合成几何 + 合成两臂小图直打 `blend_lit_metric.cpp`）。
+    selftest_blend_lit.cpp
     # `shadow-grain` 口径层（影场颗粒度）的自检段 = **判据 4**：任务钦定四条算子自检
     # （棋盘/竖条纹 = 恰 1.0、34 宽斜坡 = 恰 1/33、常数 = 恰 0）+ 逐带存活率（在场 = 恰 1 /
     # 半高 = 恰 0.5 / 被抹 = 恰 0 / 抖动 = 恰 2 + 三条守卫）+ 线性域锚点 / eps 守卫 /
@@ -293,6 +301,14 @@ add_executable(imgqa
     # `blend_sort_metric.h`；显示链不在任何一份里，吃 `analytic.cpp` 的 `toBytes`。
     blend_sort_metric.cpp
     blend_sort.cpp
+    # `blend-lit`（债-134 先决：透明段 lit 变体的常驻像素贡献判据）。拆 TU 的缝同上一条
+    # （口径 vs 仪器）：`blend_lit_metric.cpp` 是纯度量（解析投影 → footprint、背景板铺满对账、
+    # 双臂逐像素按 footprint 内外分桶；selftest 用合成两臂小图闭式直测，不启引擎、不读文件），
+    # `blend_lit.cpp` 是仪器（复制冻结配置目录 → 双臂各跑一次 → 轮询 /state 读条数 → 取图 →
+    # 五条判据 → 落台账）。常数唯一出处 = `blend_lit_metric.h`。与 blend-sort 的分工：那边
+    # 证「画对了」（有闭式），这边证「**有**贡献」（无闭式，台账裁「透明光照的闭式成本 > 收益」）。
+    blend_lit_metric.cpp
+    blend_lit.cpp
     # `diffstruct`（批 15.2 子步 D1：把一次性脚本 ssr_subtract_check.py 升成常驻算子）。
     # 拆两 TU 的缝 = **口径 vs 仪器**（同 shadow_kernel_*）：`diff_struct_metric.cpp` 是纯度量
     # （selftest 用合成数组闭式直接测，不读图、不启引擎），`diff_struct.cpp` 是读图 + 报数 + 判决。

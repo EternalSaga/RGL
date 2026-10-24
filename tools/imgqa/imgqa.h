@@ -60,6 +60,13 @@ namespace RGL::imgqa {
 /// 工程根目录（编译期注入 RGL_SOURCE_DIR；= 找 build/rgl、configs、rgl 源码的位置）。
 const std::string& projectRoot();
 
+/// 引擎的运行目录 = `build/rgl`（rgl 二进制、generated_shaders/、screenshots/、imgqa_run.log
+/// 都以它为基准；引擎子进程 chdir 到这里，见 engine.cpp 的 execEngineChild）。
+/// 实现一直在 `engine.cpp`，声明补在这里是因为 `blend_lit.cpp` 要按同一条基准拼
+/// llm_shot.file 的绝对路径——自己再拼一遍 `projectRoot() + "/build/rgl"` 就是第二份真相，
+/// 而运行期可搬运（RGL_ROOT 覆盖）那条性质会跟着丢。
+std::string buildRglDir();
+
 // ═══════════════════════════════════════════ 闭式解（analytic_ref.py 的 C++ 转录）
 // 逐式转录 model_pbr.frag.slang + tonemap.frag.slang + 硬件 sRGB store。
 // **独立第二实现**：不 import 引擎任何代码，与 shader 的对应关系写在行旁注释。
@@ -470,6 +477,18 @@ public:
      * @param label 滑杆 label（真相源 = `rgl/generated/param_semantics_generated.cppm`）
      */
     [[nodiscard]] double paramValue(const std::string& page, const std::string& label);
+
+    /**
+     * `GET /state` 的**原始响应体**（纯观测；解析在调用侧）。
+     *
+     * 为什么要有这根线而不是复用 `paramValue`：`blend-lit` 要读的是 `render.transparentDraws`
+     * ——一个**不在参数页里**的引擎侧读数（它是 draw list 的 span 长度，不是滑杆），而
+     * `paramValue` 的射程只有 pages → entries → value。缺这根线就得在 C++ 侧数像素反推条数，
+     * 那是「用被测量证明被测量」。
+     * @return 响应 body（JSON 文本）。非 200 / 无响应 = **抛**（不返回空串——空串会被
+     *         下游 json::parse 报成"响应不是对象"，指错人）。
+     */
+    [[nodiscard]] std::string stateRaw();
 
     /// 拍一张。attachment=nullptr = 后缓冲；否则具名附件（"object_id"）。返回 PNG 绝对路径。
     /// gbuf ≥ 0 = 诊断直读 G-buffer 契约通道（kGBufferAttachments 下标，dump_gbuf 同路，
@@ -1284,6 +1303,22 @@ int cmdShadowEdgeRuler();
  * 缺 `.glb` 或缺 manifest = 抛，**不 SKIP**。
  */
 int cmdBlendSort();
+
+/**
+ * 透明段 lit 变体的**常驻像素贡献**判据（债-134 的先决；六条判据）。
+ *
+ * 与 `blend-sort` 的分工：那边证「透明段画对了」（三层 unlit ⟹ 混合次序有闭式），
+ * 这边证「透明段对交付图**有**贡献」（三支 lit 变体吃真光照 ⟹ **没有**像素值预测）。
+ * 两臂 = 同一份场景生成两次只差 alphaMode；条数走引擎回显（`GET /state` →
+ * `render.transparentDraws`，**不数像素反推**），像素按解析 footprint 分两桶：
+ * 内必须变（贡献）、外必须逐位不变（归属）。
+ *
+ * 四条前置自检**不做成 Verdict，做成立即抛**（rc=3）：两臂 manifest 的几何事实不一致、
+ * camera.lua 与 manifest 的相机不一致、背景板铺不满整屏、footprint 重叠或同一次运行内
+ * 条数变化。缺 `.glb` / 缺 manifest / 缺设备 = 抛，**不 SKIP**。
+ * 设计与实测读数全文 → `blend_lit.cpp` 头注释。
+ */
+int cmdBlendLit();
 
 // ═══════════════════════════════════════════ 结构差分（diffstruct，Phase 15 批 15.2 子步 D1）
 //

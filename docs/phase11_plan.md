@@ -475,7 +475,7 @@ extendedDynamicState3ExtraPrimitiveOverestimationSize = false
 | depth-only 的管线 | 阴影 pass **无材质分叉**：一条 depth-only 条目 + mesh 管线（顶点变换复用 `model.mesh.slang`） |
 | pass 状态 | `StateKit` 新增 `shadowState`（depthCompare=LESS、depthWrite=true、cull 前背面**朝光**需另议——见下） |
 | 保守光栅 | DynamicState3（§9 结论 3），不进管线表 |
-| 阴影采样 | 走 scene data 或独立 heap 槽；**注意 D1 对等**：forward 的 `model_light.frag.slang` 与 deferred 的 `deferred_geometry_light.frag.slang` 都要接，否则重演批 11.0c 那种"只有一路有"的破口 |
+| 阴影采样 | 走 scene data 或独立 heap 槽；⚠ **「只有一路有」这类破口今天仍然存在，只是换了路名**：当年是 forward / deferred 两路（forward 已随图变体收敛刀②.2 删除，`model_light.frag.slang` 同批删），今天是**不透明段（`deferred_geometry_light.frag.slang`）与透明段（`transparent.frag.slang`）**——每给前者加一档，都要人想起来问透明侧跟不跟（软阴影变体就是现例 → `docs/透明混合管线_plan.md` §4、债-136） |
 
 ### 10.4 两个必须提前定的取舍
 

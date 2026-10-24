@@ -18,6 +18,7 @@
 //
 #include "imgqa.h"
 
+#include <array>
 #include <string>
 
 namespace RGL::imgqa {
@@ -49,6 +50,16 @@ void overrideTopLevelValue(std::string& text, const std::string& file, const std
 /// 读回**顶层键当前的值文本**（去空白），供覆写器写后自检用。
 std::string topLevelValueOf(const std::string& text, const std::string& key,
     const std::string& file);
+
+/**
+ * lua 的 `{ a, b, c }` 文本 → 三元数组（`topLevelValueOf` 的下游读法，两台仪器共用）。
+ *
+ * 为什么进头而不是各抄一份：`blend-sort` 与 `blend-lit` 都要拿 camera.lua 的 position/target
+ * 与 manifest 对账（不一致就拒跑），解析规则是同一份。两处各写一遍 = 两个「什么形态算合法
+ * 三元组」的判据，而它们可以在同一天各自漂一点而都不报错。
+ * 解析失败一律**抛**——形状守卫与 manifest 侧同一条口径（「本命令拒绝猜」）。
+ */
+[[nodiscard]] std::array<double, 3> parseLuaVec3(const std::string& text, const std::string& what);
 
 /// **限定在某个表的括号跨度内**整值替换（表头允许任意空白）。表/键不在或不唯一 = 抛。
 void overrideValueInTable(std::string& text, const std::string& file, const std::string& table,

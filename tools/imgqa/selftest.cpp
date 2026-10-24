@@ -267,8 +267,14 @@ void testJudgmentFamilies(Checker& c)
     // 77 → 80：`shadow-edge-ruler` 三条（真值 = 闭式算术，补两台「拿渲染比渲染」仪器对共模
     // 错误的结构失明）：J1 出厂档绝对误差 / J2 相邻级缝宽（两条界未定只报数）/ J3 |误差| 随 D
     // 单调不减（形状判据），见 judgments_table_edge.cpp。
+    // 80 → 85 → 86：`blend-lit`（债-134 的先决：透明段 lit 变体的常驻像素贡献）——引擎回显
+    // 条数 / 反向臂条数恰 0 / footprint 内确有不同 / footprint 外逐位相同 / 同臂内 pane 众数
+    // ≠ 背景板众数 / [error] 计数为 0。第 6 条不是想到的，是**变异跑出来的**：删掉透明段
+    // append 循环后「两臂不同」那条照旧绿（BLEND 臂露出背景板 vs OPAQUE 臂的不透明 pane），
+    // 详见 judgments_table_blend_lit.cpp 的 blend-lit-visible 正文。
+    // 与 blend-sort 四条的分工 = 那边证「画对了」（有闭式），这边证「**有**贡献」（无闭式，刻意）。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 80（族拆分最容易掉条目）", all.size() == 80, std::to_string(all.size()));
+    c.chk("判据总数 == 86（族拆分最容易掉条目）", all.size() == 86, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -577,6 +583,8 @@ int cmdSelftest()
     testPercentile100(c);
     testCallLedger(c);
     testBlendSort(c);
+    testBlendLit(c);
+    testBlendLitBuckets(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }

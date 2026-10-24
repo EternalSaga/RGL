@@ -15,19 +15,22 @@
 
 ## 0. 已定案的前提（拍板记录，别在实现中途重开）
 
-### 0.1 D1 对等豁免：SSR 只走 deferred
+### 0.1 D1 对等：这条约束已随 forward 路线一起不存在（2026-10-10 豁免 → 前提于刀②.2 消失）
 
-**裁决（2026-10-10 用户拍板）**：SSR 是 deferred-only，forward 路径不跟。
+**现状**：SSR 只有 deferred 一条路可走，因为**只剩一条路**——forward 图本体与专属器官已随图变体
+收敛刀②.2 删除（`docs/archive/图变体收敛_plan.md` §6.1-3，`d1_parity` / `env_band` 两个对拍场景
+同批删），顶层 `variant` 配置键与 `RgGraphVariant` 枚举也已删（写它 = 启动报错，口径见
+`docs/技术概念.md`）。
 
-理由：交付默认已是 `variant = "deferred"`（`configs/render_graph.lua` 顶层 `variant`）；
-`tests/` 里**没有** D1 对等的自动护栏，只有 `tools/qa_scenes.py` 的 `d1_parity` 手工靶；
-AO 当年选 depth-only 是**主动兼容**（开阔地面 AO 本来也不需要法线）而不是被红线逼的。
+**当年的裁决（2026-10-10 用户拍板，留作决策记录）**：SSR 是 deferred-only，forward 路径不跟。
+理由 = 交付默认已是 deferred，而 `tests/` 里没有两路对等的自动护栏，只有 `tools/qa_scenes.py`
+那个手工对拍场景。AO 当年选 depth-only 是**主动兼容**（开阔地面 AO 本来也不需要法线），不是被
+什么约束逼的。
 
-**待同步的旧措辞**（这三处仍把 D1 当硬约束，改完本 phase 才不会有人再查一遍）：
-`docs/phase11_plan.md` 的 §2.5「SSR 属后处理 → deferred-only，破 D1 对等」与 §3 决策表
-「AO 若走后处理会破 D1 对等」、`docs/archive/next_roadmap.md` 的「D1 两路对等需豁免或 forward 补
-G-buffer」。改写口径 = **豁免已给**，不是"待裁决"。另 `rgl/shaders/ao.frag.slang` 头注释
-「默认变体是 forward」是过期陈述，就地改。
+**这条豁免现在意味着什么**：不再意味着什么——被豁免的那条约束本身已经没了。`docs/phase11_plan.md`
+里三处「破 D1 对等」的措辞已就地改成历史陈述。**以后有人要加"只走某条渲染路线"的特性，不需要
+再走一次豁免裁决**（这条负知识带失效条件：若 forward 或第二条渲染路线重新成为交付路径，本节的
+前提就回来了，届时按新形态重新裁决，不要引用本节当先例）。
 
 ### 0.2 「成本不设上限」的准确口径
 
@@ -661,13 +664,6 @@ shader 里把"未命中原因"编码输出（**一次性诊断档，别做成常
   ② "干燥石板路与植被被误反射" —— **错**，那是资产标定的湿面（见上条）。两条都来自
   **只看截图不查数据**：灰度底图上"像水"的纹理其实是 HDR 全景图。教训形态 = **对画面内容
   的身份推断，必须先问资产/通道，视觉形态不构成证据**。
-- ⚠ **顺带查到的潜在静默坑（本场景不触发，未修）**：`variant = "deferred"` 是
-  **exclusive** 的，内建 deferred 图 = `geometry → light → ao → tonemap`，**没有
-  transparent pass**；而 `configs/render_graph.lua` 里写着的 transparent pass 会被**忽略**
-  （文件注释说了 exclusive，但配置面仍然摆着一段不生效的 transparent 声明）。
-  bistro_exterior 的 alphaMode 分布 = 122 OPAQUE + 10 MASK + **0 BLEND**（MASK 走 opaque
-  的 shader 内 discard，见 `render_list_impl.cppm:483`）⟹ 本场景零损失。但**任何带 BLEND
-  材质的资产接进来，在默认配置下会整块消失且无告警**。
 - **注释漂移一并修掉**（调试期实验值没跟上注释）：`kMaxDistance` 注释写 0.55 值 8.0、
   `kMaxSteps` 注释写 144 px 实为 512·2=1024 px、thickness 注释写 5×Δt 实为 2.6×。
   交付态判定：kMaxSteps=512 保留（行程上限 1024 px = 兜底不是预算，真实行程先被
@@ -1402,6 +1398,5 @@ nearest-rank p90 = 最大值；floor 排除近黑处 1 LSB 噪声放大）。**k
 | 号 | 内容 | 触发条件 |
 |---|---|---|
 | 债-77 | SSR 时域去噪（15.3 明确不做的那条） | 空间去噪（15.3）把伪影治到仍不可接受时才开 |
-| 债-78 | forward 路径的反射源（§0.1 豁免掉的账） | forward 重新成为交付路径，或有人要拿 forward 出图 |
 | 债-79 | bloom 与 FSR 在 tonemap 前的先后裁决（§5 排后的账） | bloom 立项时 |
 | 债-80 | **`environment.skybox = false` 在 deferred 下是空开关**：`light.frag` 天空分支只看 `env.mipRange`，既不看这个键也不乘 `intensity`（forward 的 skybox pass 才吃它）。即"deferred 下关不掉天穹"，且配置写了不生效 = 典型的静默门 | 有人要拿 deferred 出无天穹的图，或 gate_lint 扩这一类"键写了但执行侧不读"的检查时 |

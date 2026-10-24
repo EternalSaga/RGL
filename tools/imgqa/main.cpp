@@ -191,6 +191,8 @@ int dispatch(const std::string& cmd, const Args& P)
         // 同上：零 flag；J1/J2 界未定期只出 INFO（不进 rc），J3 是形状判据（容差从闭式推）。
         { "shadow-edge-ruler", cmdShadowEdgeRuler },
         { "blend-sort", cmdBlendSort },
+        // 同上：零 flag。债-134 的先决——透明段 lit 变体的常驻像素贡献（双臂同源 + 引擎回显条数）。
+        { "blend-lit", cmdBlendLit },
     };
     if (const auto meta = kMeta.find(cmd); meta != kMeta.end())
         return meta->second();

@@ -554,6 +554,16 @@ class Piece:
     #                （封闭 + 一致 + 连通 + 一个外向种子 ⟹ 全表面朝外）。
     radial: bool = True
     closed: bool = True
+    # ── blend_lit（债-134）加的一枚：材质名**故意**含 "Emissive"/"Foliage" 以走 material_styles
+    # 连连看（透明/延迟的 vegetation、light 类别变体）。默认 False = 下面那条"名字会被静默改路由"
+    # 的防御照旧生效，既有九个场景一个字节不变。
+    # 🔴 为什么需要这枚旗：那条防御保护的是**闭式颜色预测**（名字改路由 ⟹ 预期值作废），而
+    # blend_lit 按台账裁决**不写闭式**（透明光照的闭式要复刻 BRDF+IBL+CSM，成本 > 收益），
+    # 防御的前提在这里不成立，但防御本身不能拆（blend_sort 还靠它）。⟹ 加显式 opt-in，
+    # 而不是放宽条件。开了这枚 = 作者声明"我知道这个名字会换管线，且本靶不预测像素值"。
+    # ⚠ 它**不**豁免 BLEND+emissive 那条（债-131）：本靶的 light 件 emissive 恒 None，
+    # 走的是"名字换类别变体、自发光电平为 0"的形态，×1/4 那个未决系数根本不进算式。
+    style_routed: bool = False
     # ── 纹理面（默认全关 = 既有五个场景一个字节都不变）────────────────────────
     # 三条加载器契约见文件头「TEXCOORD_0 / TANGENT / normalTexture」段（①index 是 images[]
     # 下标 ②图片必须内嵌 ③normal 走 linear 上传且会生成 mip 链）。
@@ -569,9 +579,17 @@ class Piece:
         # 材质名连连看防御（configs/scene.lua material_styles：材质名含 "Emissive" →
         # light 风格、含 "Foliage" → 植被风格）：非自发光 piece 的名字若意外包含这两个
         # 子串，会被静默改路由、渲染到另一条管线上，piece 颜色对应的"预期值"整个作废。
-        if self.emissive is None and ("Emissive" in self.name or "Foliage" in self.name):
+        # style_routed=True = 作者显式声明这次路由是设计（见字段注）。
+        if (self.emissive is None and not self.style_routed
+                and ("Emissive" in self.name or "Foliage" in self.name)):
             raise ValueError(f"piece {self.name}: name would be style-routed by "
                              f"material_styles pattern; rename it")
+        # 反向对账（阳性锚点，缺则 style_routed 变成"关掉防御的万能钥匙"）：开了旗却名字
+        # 不含任何 pattern ⟹ 防御被白关了一次而路由没换，作者意图与产物不符。
+        if self.style_routed and not ("Emissive" in self.name or "Foliage" in self.name):
+            raise ValueError(f"piece {self.name}: style_routed=True 但名字不含 "
+                             f"Emissive/Foliage —— 这枚旗的唯一作用是声明"
+                             f"「这次静默改路由是设计」，名字不命中 pattern 就是白关防御")
         # 透明混合管线刀3 加的两条构建期闸门（默认值下两条恒不触发 = 既有场景零影响）：
         if not 0.0 < self.alpha <= 1.0:
             raise ValueError(f"piece {self.name}: alpha {self.alpha} 不在 (0,1]")
@@ -1898,6 +1916,159 @@ def scene_blend_sort() -> Scene:
 
 
 # ---------------------------------------------------------------------------
+# 场景 9：blend_lit —— 透明段「lit 类别变体」的同源双臂靶（债-134 的先决输入）
+# ---------------------------------------------------------------------------
+# ## 它存在的唯一理由
+# 出厂场景 0 个 BLEND 图元 ⟹ 每天跑的 just smoke / just regress 里透明段是个**空 pass**，
+# 而唯一常驻的透明检查 blend_sort 三层全 unlit（frag 早退，不采光照/阴影/env）⟹
+# transparent.frag 的 pbr / vegetation / light 三支 lit 变体在「有人会自动跑到」这个意义上
+# **零像素覆盖**（账 → docs/还债总账.md 债-134；边界全文 → docs/透明混合管线_plan.md §4 末行）。
+# 台账规定的修法**不是**再写一条闭式判据（透明光照的闭式要复刻 BRDF + IBL + CSM，成本 > 收益），
+# 先决 = 一份可重放的透明冻结配置 + 一条弱判据。本场景 = 那份弱判据的**单变量输入**。
+#
+# ## 双臂 = 同一份场景生成两次，只差 alphaMode（这是整台仪器的立命处）
+# 判据要证「透明段对交付图真的有贡献」，所以两臂必须只差「这几面是不是 BLEND」。
+# 实现 = 同一个 `blend_lit_panes(blend=...)`，同一个几何/落位/材质，只有 `alpha` 取
+# 1.0（不写 alphaMode 键 = OPAQUE）还是 0.25/0.5（写 alphaMode="BLEND"）之分。
+# ⚠ **同源是构造性的，不是注释里的**：两臂共用同一个 `_BLEND_LIT_PANES` 表与同一个投影，
+# 任何"只给一臂改几何"的写法都会让另一臂跟着变，所以想不同源都难。
+#
+# ## 为什么是三支 lit 变体、为什么 α 取两档
+# 三个 pane 的**材质名**分别命中 configs/scene.lua material_styles 的两条 pattern（"Foliage"
+# → vegetation、"Emissive" → light），第三条不命中 = pbr 回落。⟹ 一次运行把
+# transparent / transparent_vegetation / transparent_light 三支 SPV 全打上像素。
+# （OPAQUE 臂同名字走 deferred_geometry 那三格 —— 名字换的是**族**，两臂各得其所。）
+# α 取 0.25 与 0.5 两档：blend_sort 的教训是单个 α 能被「某种取整恰好蒙对」糊过去，
+# 两个互不相同的 α 各命中一次才堵得掉。本靶不预测像素值，但同一枚纪律不花钱。
+#
+# ## 三条刻意的设计（每条都在堵一条"两臂差异不来自透明段"的旁路）
+# 1. **shadow.lua mode="none"**：`collectShadowCasters` 排 blend ⟹ 开着阴影时 OPAQUE 臂的
+#    pane 会投影、BLEND 臂的不投。那会让「双臂像素不同」在**透明段一条都没画**时也成立
+#    （影子没了也是不同）= 一条恒真的判据。关掉阴影把这个旁路**结构性**摘掉。
+#    ⚠ 代价：transparent.frag 的 sampleShadow1Tap 只走「因子恒 1.0」那一支 → 写进 honesty。
+# 2. **pane 互不重叠、共面（同 z）**：每个 pane 独占一块屏幕区域，"这块像素是谁画的"没有二义，
+#    反向用例（透明段条数 = 0）与像素判据的归因都是一一对应。多层叠加是 blend_sort 的活。
+# 3. **env/light 都不归零**（与 blend_sort 正相反，那边是双保险、这边是被测对象本身）：
+#    env 段还是**硬前置**（含 BLEND 图元而无 environment ⟹ 装配期 validateBlendSupport
+#    直接抛，原因见 docs/透明混合管线_plan.md §4 倒数第二行）。
+#
+# ## 不覆盖什么（honesty 字段的展开，两处必须同步）
+# 不预测任何像素值（弱判据）；不覆盖阴影遮挡（见上 1）、MASK discard、velocity/TAA
+# （透明段不写深度）、picking（透明不入 picking 段）、GPU culling 候选（透明不入候选）、
+# 多层叠加排序（那是 blend_sort）、自发光电平（债-131，本靶 emissive 恒 0 故根本不进算式）。
+BLEND_LIT_CAM = {"position": (0.0, 0.0, 6.0), "target": (0.0, 0.0, 0.0), "fovDegrees": 45.0}
+BLEND_LIT_SIZE = [1280, 720]
+BLEND_LIT_Z = -1.0            # 三个 pane 共面（同 z）：屏幕 footprint 同尺度，区域无二义
+BLEND_LIT_PANE = 2.0          # pane 边长（米）
+BLEND_LIT_XS = (-3.0, 0.0, 3.0)  # 三个 pane 的 node 原点 x（互不重叠：2.0 宽、间距 3.0）
+# 背景板：半尺寸 16 世界单位 @ z=-2（距相机 8）⟹ 该深度视锥半宽 2.95 / 半高 1.66，
+# 铺满整屏且余量极大（改画幅也不穿帮）。**"背景板可见竖条"那条区域归因依赖它铺满**，
+# 故写成常量并由 manifest 带出去给 imgqa 侧对账，不在 C++ 里重抄。
+BLEND_LIT_BACK = 16.0
+BLEND_LIT_BACK_Z = -2.0
+# (piece 名, PAL 色, α, 设计意图)。名字里的 Foliage/Emissive 是**载荷**，不是手滑：
+# material_styles 靠它把类别变体路由出来（见头注），故 style_routed 由名字派生（见下面构造处）。
+_BLEND_LIT_PANES = (
+    ("pane_pbr", "red", 0.25,
+     "不命中 material_styles 任何 pattern ⟹ 回落 transparent 本体（pbr 前向）；α=0.25"),
+    ("pane_Foliage", "green", 0.5,
+     "名字含 Foliage ⟹ style=vegetation ⟹ BLEND 臂走 transparent_vegetation、"
+     "OPAQUE 臂走 deferred_geometry_vegetation；α=0.5"),
+    ("pane_Emissive", "yellow", 0.25,
+     "名字含 Emissive ⟹ style=light ⟹ BLEND 臂走 transparent_light、OPAQUE 臂走 "
+     "deferred_geometry_light；emissive 恒 None（债-131 的 ×1/4 不进算式）；α=0.25"),
+)
+
+
+def blend_lit_projection(z: float):
+    """pane 所在深度 → (半高(米), 每米像素)。
+
+    前提与 blend_sort 同一条：机位沿 −Z **精确**正视（无俯角无偏航）⟹ 世界 x/y → 屏幕 px
+    是纯线性映射。前提不成立时本函数抛，而不是给个"看起来对"的近似 —— 采样点量错几何
+    而闭式/判据照旧自洽，是这类仪器最贵的假绿。
+    """
+    pos = BLEND_LIT_CAM["position"]
+    tgt = BLEND_LIT_CAM["target"]
+    if abs(pos[0] - tgt[0]) > 1e-12 or abs(pos[1] - tgt[1]) > 1e-12 or pos[2] <= tgt[2]:
+        raise ValueError("blend_lit 投影只覆盖「沿 −Z 精确正视」的机位")
+    depth = pos[2] - z
+    if depth <= 0.0:
+        raise ValueError(f"blend_lit: pane 平面 z={z} 不在机位之前（depth={depth}）")
+    half_tan = math.tan(math.radians(BLEND_LIT_CAM["fovDegrees"] / 2.0))
+    half_h = half_tan * depth
+    return half_h, (BLEND_LIT_SIZE[1] / 2.0) / half_h
+
+
+def scene_blend_lit(blend: bool = True) -> Scene:
+    arm = "blend" if blend else "opaque"
+    s = Scene(
+        name=f"blend_lit{'' if blend else '_opaque'}",
+        purpose="透明段 lit 类别变体的常驻像素覆盖靶（债-134 先决）：与 blend_lit_opaque "
+                "同源、只差 alphaMode，三支 lit 变体（pbr/vegetation/light）各占一块不重叠"
+                "屏幕区域；配 imgqa blend-lit 用",
+        honesty=(
+            "弱判据输入：**不预测任何像素值**（透明光照的闭式要复刻 BRDF+IBL+CSM，台账裁"
+            "「成本 > 收益」）。只证三件事——透明段有 draw、VVL 干净、交付图相对 OPAQUE 臂"
+            "变了。⟹ 它证「透明段对交付图有贡献」，**不证「透明画对了」**（画对了归 "
+            "blend-sort 的闭式与将来的强判据）。逐条不覆盖：① 阴影（shadow mode=none 是"
+            "刻意的——collectShadowCasters 排 blend，开着阴影会让「双臂不同」在透明段一条"
+            "没画时也成立），故 transparent.frag 的 sampleShadow1Tap 只走因子恒 1.0 那一支；"
+            "② MASK discard（透明段没有 MASK 图元）；③ velocity/TAA（透明段不写深度，§4）；"
+            "④ picking / object_id（透明不入 picking 段，§4）；⑤ GPU culling 候选（透明不"
+            "入候选，§4）；⑥ 多层叠加与排序（pane 共面不重叠，那是 blend_sort 的射程）；"
+            "⑦ 自发光电平（pane 的 emissive 恒 None，债-131 的 ×1/4 不进算式）；"
+            "⑧ 法线贴图 / ORM / 湿面（无纹理面，且湿面调制只住在 deferred 路）。"),
+        cameras={"lit": dict(BLEND_LIT_CAM)},
+    )
+    s.pieces.append(Piece(
+        "backdrop", _xy_quad(BLEND_LIT_BACK), PAL["blue"], translation=(0.0, 0.0, BLEND_LIT_BACK_Z),
+        radial=False, closed=False, roughness=0.9,
+        intent="OPAQUE PBR 背景（**两臂都 OPAQUE**）：给混合提供 dst，也是「无 pane 参考点」"
+               "所在。α 恒 1 = 两臂同值，不参与单变量"))
+    for (name, color, alpha, intent), x in zip(_BLEND_LIT_PANES, BLEND_LIT_XS):
+        # 旗由名字派生而不是逐枚手写：命中 pattern 的那两枚才是"设计过的路由"，
+        # 手写会漂（改名字忘了改旗 → 要么白关防御、要么被反向检查打回）
+        s.pieces.append(Piece(
+            name, _xy_quad(BLEND_LIT_PANE), PAL[color],
+            alpha=(alpha if blend else 1.0),
+            style_routed=("Emissive" in name or "Foliage" in name),
+            translation=(x, 0.0, BLEND_LIT_Z), radial=False, closed=False, roughness=0.35,
+            intent=intent + ("" if blend else "（OPAQUE 臂：α 归 1，本件走 deferred 族）")))
+    # ── 自检：背景板必须在自身深度上铺满整屏（"背景板可见竖条"的区域归因依赖它）────────
+    # 不写死数字：用同一个投影算子在 backdropZ 处算视锥半尺寸，与 BLEND_LIT_BACK 比。
+    bh, _ = blend_lit_projection(BLEND_LIT_BACK_Z)
+    if BLEND_LIT_BACK <= bh * (BLEND_LIT_SIZE[0] / BLEND_LIT_SIZE[1]):
+        raise ValueError(
+            f"blend_lit: 背景板半尺寸 {BLEND_LIT_BACK} 盖不住 z={BLEND_LIT_BACK_Z} 处的视锥"
+            f"（半宽 {bh * (BLEND_LIT_SIZE[0] / BLEND_LIT_SIZE[1]):.2f}）——"
+            "「pane 之外的像素都是背景板」这条归因会失效")
+    # ── 测量接口（harness 吃这里，不在 C++ 里重抄颜色/α/落位 = 第二真相）──────────
+    # 只记**事实**：机位、画幅、pane 的世界落位与 α、期望的类别变体名。屏幕区域由 harness
+    # 侧的投影算子算（与 blend_sort 同一条缝：口径住 imgqa，selftest 直接打）。
+    s.extra["blendLit"] = {
+        "arm": arm,
+        "twin": "blend_lit_opaque" if blend else "blend_lit",
+        "camera": dict(BLEND_LIT_CAM),
+        "aspect": list(BLEND_LIT_SIZE),
+        "paneZ": BLEND_LIT_Z,
+        "paneSize": BLEND_LIT_PANE,
+        "paneXs": list(BLEND_LIT_XS),
+        "backdropHalf": BLEND_LIT_BACK,
+        "backdropZ": BLEND_LIT_BACK_Z,
+        "expectTransparentDraws": sum(1 for p in s.pieces if p.alpha < 1.0),
+        "litVariants": ["transparent", "transparent_vegetation", "transparent_light"],
+        "shadowMode": "none",   # 承重（不是省事）：见头注「刻意的设计」第 1 条
+        "note": ("双臂同源：本文件同一个 scene_blend_lit(blend=) 生成，只差 alphaMode。"
+                 "harness 必须先对账两臂 manifest 的几何/落位/颜色全等，再谈像素差。"),
+    }
+    return s
+
+
+def scene_blend_lit_opaque() -> Scene:
+    return scene_blend_lit(blend=False)
+
+
+# ---------------------------------------------------------------------------
 # 场景 10：shadow_grain —— 影场颗粒度的**槽影带**靶（imgqa shadow-grain 的常驻靶）
 # ---------------------------------------------------------------------------
 # ## 为什么必须新造靶（penumbra_ladder 教训的复刻，别删这段）
@@ -2689,6 +2860,9 @@ SCENES = {
     "ssr_rig": scene_ssr_rig,
     "ssr_rig_empty": scene_ssr_rig_empty,
     "blend_sort": scene_blend_sort,
+    # 债-134 前置：BLEND 臂 + 反向臂（同函数、只差 alphaMode），两臂必须都生成
+    "blend_lit": scene_blend_lit,
+    "blend_lit_opaque": scene_blend_lit_opaque,
     "shadow_grain": scene_shadow_grain,
     "shadow_edge_rig": scene_shadow_edge_rig,
 }

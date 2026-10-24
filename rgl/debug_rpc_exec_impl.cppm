@@ -21,6 +21,7 @@ import debug_rpc_capabilities;  // 能力观测批 1：capabilities 段拼装 + 
                            //   + 批 2：fsr 段拼装（申报侧 × 生效侧八枚事实，同一纯函数模块）
 import debug_rpc_decorate;     // 能力观测批 4：/decorate 探针（词表 + 分类 + 会话 + 结算全在这一家）
 import scene_context;    // 能力观测批 2：SceneEnv 的 FSR 申报侧两枚 + 抖动生效值
+import frame_draw_list;  // 债-134：/state 的透明段条数 = segmentSpan("transparent", …)（段口径单源）
 import rpc_schema_generated;  // 路由表（分发的唯一来源；真相源 = rgl/rpc_schema.lua）
 import asset_table;  // AssetTable（参数页构建）
 import vk_renderer;  // Renderer（/shot 帧捕获 + writeCapturePng 宿主）
@@ -129,6 +130,14 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 	const auto& we = w.registry.ctx().get<WindowExtent>();
 	const auto& re = w.registry.ctx().get<RenderExtent>();
 	const auto graph = w.renderer.graphStatus();  // B2-5 图段快照（取一次，别每字段现取）
+	// 透明段条数（债-134 的先决读数口）。口径**不在此重算**：吃 `segmentSpan("transparent", …)`
+	// = 执行器画那一段时用的同一个 span，所以「RPC 报的条数」与「透明 pass 真录的 draw 数」
+	// 结构上不可能各说各话（写成 `calls.size() − transparentStart` 就是第二份口径，会漂）。
+	// ⚠ 读数时刻 = 上一次帧边界 drain 时 ctx 里那份 FrameDrawList，即**上一帧**的段：
+	//   本端点的 poll 挂在 ConfigReloadHook（system 链**之前**），而 renderListSystem 在链里。
+	//   ⟹ 第 1 次 drain（frame==1）读到的是装配期 emplace 的默认空列表，恒 0，
+	//   **不是**「场景没有透明图元」。消费方（`imgqa blend-lit`）据此要求 frame ≥ 2。
+	const auto transparentSpan = segmentSpan("transparent", w.registry.ctx().get<FrameDrawList>());
 	// ⚠ **`render` 的值必须显式写成 `nlohmann::json{...}`**，不能只写 `{...}`。
 	//   踩过的坑（批 14.3 引入、本批发现）：写成 `{{"render", {...}}}` 时该元素是
 	//   「单元素数组」而不是 `{"key", value}` 二元对，而 nlohmann 的 initializer-list
@@ -148,6 +157,8 @@ RpcOutcome rpcHandleState(RpcWiring& w) {
 			{"renderWidth", re.width},
 			{"renderHeight", re.height},
 			{"scale", w.renderer.getSwapchainRef().getRenderScale()},
+			// 段条数走 span 的 size（口径见上方 transparentSpan 的注释：与执行器同源）
+			{"transparentDraws", static_cast<uint32_t>(transparentSpan.size())},
 		}},
 		// B2-5 图段（判据「开关真的发生了」的**唯一**观测面）：为什么不能只看截图——
 		// highlight 在无选中时零 draw，画面本来就不该变，于是「图变了没有」必须从别处读。

@@ -235,32 +235,8 @@ BlendTarget loadBlendTarget()
 }
 
 // ── 相机对账：camera.lua 与 manifest 必须是同一组数 ─────────────────────────────
-
-/// lua 的 `{ a, b, c }` → 三元数组（解析失败 = 抛，形状守卫与 manifest 同一条口径）。
-std::array<double, 3> parseLuaVec3(const std::string& text, const std::string& what)
-{
-    const auto open = text.find('{');
-    const auto close = text.find('}');
-    if (open == std::string::npos || close == std::string::npos || close < open)
-        throw std::runtime_error(what + " 不是 `{ a, b, c }` 形态，本命令拒绝猜");
-    std::string body = text.substr(open + 1, close - open - 1);
-    body.erase(std::remove(body.begin(), body.end(), ' '), body.end());
-    std::array<double, 3> out{};
-    size_t pos = 0;
-    for (size_t i = 0; i < 3; ++i) {
-        const auto comma = body.find(',', pos);
-        const auto end = comma == std::string::npos ? body.size() : comma;
-        if (end <= pos)
-            throw std::runtime_error(what + " 第 " + std::to_string(i) + " 元缺失，本命令拒绝猜");
-        try {
-            out[i] = std::stod(body.substr(pos, end - pos));
-        } catch (const std::exception&) {
-            throw std::runtime_error(what + " 第 " + std::to_string(i) + " 元不是数值，本命令拒绝猜");
-        }
-        pos = end + 1;
-    }
-    return out;
-}
+// （`{ a, b, c }` 的解析件在 `engine_lua_edit.cpp` —— `blend-lit` 也要拿它做同一条对账，
+//  两处各写一遍 = 两个「什么形态算合法三元组」的判据。）
 
 /**
  * camera.lua ↔ manifest 的相机对账，不一致即**抛**。

@@ -363,4 +363,29 @@ bool bracesBalanced(const std::string& src)
     return depth == 0;
 }
 
+std::array<double, 3> parseLuaVec3(const std::string& text, const std::string& what)
+{
+    const auto open = text.find('{');
+    const auto close = text.find('}');
+    if (open == std::string::npos || close == std::string::npos || close < open)
+        throw std::runtime_error(what + " 不是 `{ a, b, c }` 形态，本命令拒绝猜");
+    std::string body = text.substr(open + 1, close - open - 1);
+    body.erase(std::remove(body.begin(), body.end(), ' '), body.end());
+    std::array<double, 3> out{};
+    size_t pos = 0;
+    for (size_t i = 0; i < 3; ++i) {
+        const auto comma = body.find(',', pos);
+        const auto end = comma == std::string::npos ? body.size() : comma;
+        if (end <= pos)
+            throw std::runtime_error(what + " 第 " + std::to_string(i) + " 元缺失，本命令拒绝猜");
+        try {
+            out[i] = std::stod(body.substr(pos, end - pos));
+        } catch (const std::exception&) {
+            throw std::runtime_error(what + " 第 " + std::to_string(i) + " 元不是数值，本命令拒绝猜");
+        }
+        pos = end + 1;
+    }
+    return out;
+}
+
 }  // namespace RGL::imgqa

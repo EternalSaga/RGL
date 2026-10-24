@@ -40,9 +40,13 @@ const std::string& projectRoot()
     return root;
 }
 
-namespace {
-
+/// 引擎运行目录（声明在 `imgqa.h`，`blend_lit.cpp` 也吃它）。原先住本文件的匿名 namespace，
+/// 提出来的理由不是"要给外面用"这一句空话，而是：`blend_lit.cpp` 要按**同一条基准**拼
+/// llm_shot.file 的绝对路径，自己再拼一遍 `projectRoot() + "/build/rgl"` 就是第二份真相，
+/// 而运行期可搬运（RGL_ROOT 覆盖 projectRoot）那条性质会跟着丢。
 std::string buildRglDir() { return projectRoot() + "/build/rgl"; }
+
+namespace {
 
 // ── SPV 新鲜度守卫的三枚小件（口径全文见 `checkShadersFresh`）────────────────────────
 
@@ -382,6 +386,18 @@ double Engine::paramValue(const std::string& page, const std::string& label)
     // 找不到 = 滑杆被摘了 / label 改了名。宁可抛，也不要让调用侧拿到「默认值」当成回显。
     throw std::runtime_error("GET /state 里没有数值滑杆: label=" + label
         + " page=" + (page.empty() ? "<全页>" : page) + "（label 真相源 = 引擎生成的参数语义表）");
+}
+
+std::string Engine::stateRaw()
+{
+    auto res = impl_->http->Get("/state");
+    // 两种失败分开报：无响应 = 连接层（进程已退 / 端口没绑），非 200 = 服务端拒了。
+    // 合成一条会让「引擎跑完了」被读成「RPC 坏了」。
+    if (!res)
+        throw std::runtime_error("GET /state 无响应（连接失败：引擎进程已退出，或 diagnostics.rpc 没开）");
+    if (res->status != 200)
+        throw std::runtime_error("GET /state 失败 status=" + std::to_string(res->status));
+    return res->body;
 }
 
 std::string Engine::shot(const std::string& tag, const char* attachment, int gbuf)
