@@ -48,6 +48,7 @@ def main():
 	label, rounds = sys.argv[1], int(sys.argv[2])
 	args = sys.argv[3:]
 	OUT.mkdir(exist_ok=True)
+	(OUT.parent / "os_live.txt").unlink(missing_ok=True)  # 上一场的实时计数别串进本场显示（2026-10-24 坑）
 	path = OUT / f"{label}.jsonl"
 	fh = open(path, "a")
 	for n in range(1, rounds + 1):
