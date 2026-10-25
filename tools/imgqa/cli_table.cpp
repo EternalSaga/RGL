@@ -536,6 +536,8 @@ std::vector<SubcommandSpec> allSpecs()
     // `shadow-edge-ruler` 排在 shadow-caster-survival 之后（正文住 `cli_table_edge.cpp`）。
     // 同上一条的理由：-h 顺序只是打印序，不挪既有条目。
     append(shadowEdgeRulerSpecs());
+    // `shadow-edge-rebase` 排在 shadow-edge-ruler 之后（同 `cli_table_edge.cpp`，缝按仪器族切）。
+    append(shadowEdgeRebaseSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

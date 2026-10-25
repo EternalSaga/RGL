@@ -635,6 +635,14 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
             "overrideDeliveryEntities 是交付配置模式的例外门（它覆写的是**交付** scene.lua 的顶层 "
             "entities 表），而本 opts 没给 deliveryConfigDir ⟹ 没有实现路径（合成 profile 请直接给 "
             "glb / entitiesLua）。开着门却静默不生效 = 场景里装的根本不是靶，拒绝生成");
+    // 第 9 例外门（coordinate.rebase）同罪同判据：它覆写的是**交付** runtime.lua 里的键，
+    // 合成 profile 的 runtime.lua 里没有 coordinate 块（overrideValueInTable 会抛「没有表
+    // coordinate」，但那是在一半生成状态下抛，排查成本更高），故同样在生成期就拒。
+    if (o.deliveryConfigDir.empty() && o.overrideCoordinateRebase)
+        throw std::runtime_error(
+            "overrideCoordinateRebase 是交付配置模式的例外门（覆写**交付** runtime.lua 的 "
+            "coordinate.rebase），而本 opts 没给 deliveryConfigDir ⟹ 没有实现路径。开着门却静默"
+            "不生效 = 四格对拍里两格跑在同一个开关态上，拒绝生成");
     fs::create_directories(outDir);
     // ── 交付配置模式（批 13.1e）：基底 = 仓库 configs/，只覆写 headless / rpc / taa ──
     // 判据必须在**用户实际跑的那份配置**上求值（ProfileOpts::deliveryConfigDir 的注释里
@@ -664,6 +672,9 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         // 落盘的文本上继续 read-modify-write——换序 = 本门的覆写被 applyDeliverySceneLua
         // 的写盘丢掉（场景装回 bistro 而判据照跑 = 静默换靶）。门闭 = 第一行返回 = 逐位不变。
         applyDeliveryEntitiesGate(outDir, o);
+        // 第 9 例外门（coordinate.rebase）。放在第 8 枚之后：两枚门各自 read-modify-write
+        // 同一批已落盘的 profile 文件，顺序 = 后写的吃前写的结果。门闭 = 第一行返回 = 逐位不变。
+        applyCoordinateRebaseGate(outDir, o);
         // 所有覆写落盘后统一过一遍语法护栏（理由见该函数注释：坏配置必须在生成期点名文件，
         // 不能变成引擎的 `'{' expected` 天书）。
         requireLuaSyntax(outDir);

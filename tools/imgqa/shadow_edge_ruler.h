@@ -85,6 +85,11 @@ struct EdgeTarget {
     std::array<int, 2> capture{};
     std::array<double, 3> boundsCenter{};
     double boundsRadius = 0.0;
+    /// 🔴 整靶的世界平移（manifest 的 `measure.worldOffset`；**缺键 = 零** = 出厂靶）。
+    /// 它是仪器写进 `scene.lua` 的 entity `position`，也是「远工作点」与「出厂工作点」的
+    /// 唯一区别。为什么由 manifest 给而不是在 C++ 里另算一份：manifest = 场景生成器留给
+    /// 测量方的唯一读数接口；真值与平移量分两处真相 = 项目哲学第 2 条点名的形态。
+    std::array<double, 3> worldOffset{};
     std::array<double, 4> splitsPredicted{};
     std::array<double, 4> texelMmPredicted{};
     std::vector<EdgePlate> plates;
@@ -93,12 +98,23 @@ struct EdgeTarget {
 /// 读靶：缺 .glb / .manifest.json / .meshlets.bin = **抛**（静默跳过 = 假绿；缺簇产物 =
 /// 不进簇路径 = 本仪器恒绿的形态，闸门 ① 的运行期兜底之前先给可归因的构建期指路）。
 /// captureSize 与量具常数不符 = 抛（生成器的取景 assert 按它算）。
-[[nodiscard]] EdgeTarget loadEdgeTarget();
+/// `stem` = 靶文件名（不含扩展名）。默认 = 出厂靶；`shadow-edge-rebase` 用它读远工作点靶，
+/// 两枚靶**都从各自的 manifest 拿真值**，C++ 侧不另算一份（第二份真相 = 项目哲学第 2 条）。
+[[nodiscard]] EdgeTarget loadEdgeTarget(const std::string& stem = kEdgeGlbStem);
 
 /// 对账：仪器闭式（`edgeCascadeModel`）vs 生成器预测（manifest.cascadeModel）——同一组
 /// 输入的**两个独立实现**，相对偏差 > 1% ⟹ 抛（有一边的公式链复刻漂了；在哪个数上求值
 /// 从此不可信，先停下）。
 void requireCascadeModelAgreement(const EdgeTarget& t, const EdgeCascadeModel& m);
+
+/**
+ * 闭式预判：板（视深 depth）在钉级/自有级 c 里**量得到影边**吗？判据本体与两条结构条件
+ * （片区外 = 出块旁路 / 近平面 1 纹素精度带内 = 伪影平台）住本函数定义处注释。
+ * 🔴 抬成跨 TU 面的理由 = 别抄第二份：`shadow-edge-rebase`（四格对拍）要把「量不到」分成
+ * 「预期不可量」与「意外失踪」两格，用的就是这条判据；在两台仪器里各写一遍 = 两个会各自
+ * 漂的「什么算可量」。
+ */
+[[nodiscard]] bool plateMeasurableInCascade(const EdgeCascadeModel& m, double depth, int c);
 
 
 // ── shadow_edge_ruler_judge.cpp ─────────────────────────────────────────────────────

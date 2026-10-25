@@ -31,6 +31,11 @@ import rlstd;
  *    空间速度 ⟹ 必须**开**。两处成对，与 `taa.frag.slang` 的「prevViewProj 抖动后 + 减
  *    c_{t−1}」是同一类红线——**本模块看不出喂的是哪一份**，所以配对责任在调用方。
  *    用例「喂抖动后矩阵 ⟹ 输出恰好平移 jitter 差」把这条可推导性钉住。
+ *    ⚠ **同一条纪律管 `sceneMotion` 的原点差**（相对坐标批 4 第一刀）：本模块同样**看不出**
+ *    `sceneMotion` 里有没有复合两帧渲染原点之差，配对责任也在调用方（= `taaSystem`，它同时是
+ *    scene data `TaaParamsBlock::motion` 的唯一生产者）。判据 = `tests/test_velocity_field.cppm`
+ *    的「静止相机 + 移动原点」两条：正向钉「复合了 ⟹ 静止判成静止」，反向钉「不复合 ⟹ 静止
+ *    判成运动」，两条互为反向用例。
  *
  * ## 现状（诚实记录）
  * 本批只落**纯函数层 + 单测**，尚无调用方。渲染 pass 侧的落点已勘察：用**全屏
@@ -60,9 +65,19 @@ export struct VelocityFrame {
 	/** 上一帧 viewProj（世界 → 上一帧 clip）。口径与 `curInvViewProj` 成对，见文件头第 4 条。 */
 	glm::mat4 prevViewProj{1.0f};
 	/**
-	 * 场景自旋补偿 = `prevSpin · inverse(curSpin)`：把「本帧世界坐标」刚体搬回
-	 * 「上一帧世界坐标」。本项目全场景共用一个旋转矩阵，所以一条 mat4 就是**精确**补偿。
-	 * 单位阵 = 无自旋（与 `env.taaMotionCompensation` 关时同形）。
+	 * 场景运动补偿 = 「把本帧世界坐标刚体搬回上一帧世界坐标」的**完整**矩阵。
+	 * 本项目全场景共用一个旋转矩阵，所以一条 mat4 就是**精确**补偿。
+	 *
+	 * 🔴 相对坐标批 4 第一刀起，它**不只是** `prevSpin·inverse(curSpin)`：还复合了两帧渲染
+	 * 原点之差（生产式 = `T(R·O_t − O_{t−1})·R`，闭式推导与三个退化档
+	 * → `coordinate_rebase.cppm::motionWithOriginShift`）。原点一动，上一帧的「世界」与这一帧
+	 * 的「世界」不是同一个空间，只喂纯旋转比会把静止判成运动。
+	 *
+	 * ⟹ **本层不加原点/位移字段**（裁决记录 → docs/相对坐标地基_plan.md §3 批 4 第一刀）：
+	 * GPU 侧 `velocity.frag.slang` 读的是 scene data 的 `TaaParamsBlock::motion`，那一份已经
+	 * 是复合完的矩阵；CPU 镜像多带一个原点 = 镜像比被镜像者**多一个自由度** = 两侧不可能
+	 * 逐式相同（文件头「两者必须互逆」的地基就没了）。门关（原点恒 0）⟹ 本字段逐位退化回
+	 * `prevSpin·inverse(curSpin)`。单位阵 = 无运动（与 `env.taaMotionCompensation` 关时同形）。
 	 */
 	glm::mat4 sceneMotion{1.0f};
 	/**

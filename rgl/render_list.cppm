@@ -173,6 +173,24 @@ export std::array<Bounds, kActiveShadowCascades> computeCascadeSpheres(
 	const ViewProjection& viewProj, float shadowNear, float shadowFar);
 
 /**
+ * 门开路径的本帧原点吸附粒度 = `rebaseSnapGranularity(本帧四级级联纹素)`（相对坐标批 5 第 1 刀；
+ * 定义在 render_list_impl，实现侧不写 export）。
+ *
+ * 导出为**接缝**（`computeCascadeSpheres` / `shadowTexelSize` 的同款理由）：粒度链的三个环节住
+ * rlscene，而 `rebaseSnapGranularity` 住 rlbase，胶水只能住在两侧都够得着的地方；而
+ * 「projectionSystem 内部自己写一遍」= 粒度有两个来源，改一处另一处静默漂。
+ * 🔴 消费方 = `ecs` 的 `projectionSystem`（唯一生产者）；判据 = tests/test_render_origin.cppm
+ * 「两条粒度路径一致」+「粒度 NaN 必须响亮 throw」。为什么粒度不能由 `originSystem` 那样的
+ * 前置 system 算：吸附粒度 ← 级联球半径 ← near/far，而 near/far 只在 `projectionSystem` 里算，
+ * 同时 view 又要吃原点 —— 三者唯一同在的地方就是 `projectionSystem` 内部。
+ * @param proj 本帧投影矩阵（只取 fov/aspect）
+ * @param nearPlane 本帧实际生效近平面（未量化，量化在实现内做，与 renderListSystem 同源）
+ * @param farPlane 本帧实际生效远平面（同上）
+ * @return 吸附格距（2 的幂）；级联几何坏了 = NaN（不替调用方兜，见定义处注释）
+ */
+export double rebaseOriginGranularity(const glm::mat4& proj, float nearPlane, float farPlane);
+
+/**
  * 阴影投影体候选（★18-B2 抬为可测接缝的契约类型；实体遍历内先攒，循环结束后才定光空间体）。
  *
  * 为何要两段：光空间盒的 Z 下界依赖**全部投影体**的 AABB，而剔除要用这个盒——顺序上必须
@@ -347,13 +365,22 @@ export void collectMeshletOverlay(const RGL::MeshAsset& asset, const RGL::Materi
  * render_list_impl（partition impl unit，实现侧不写 export）。导出为**可测接缝**
  * （批 12.3d）：测试栈上 registry 直打落槽契约（按 Light.index 落槽 = 不依赖 view
  * 迭代序；index ≥ kMaxLights 不落槽但计数），回归断言 = tests/test_render_list_light。
+ *
+ * 相对坐标批 4 第二刀：两个**位置量**出口（SceneLight::eyePos@12 与 GpuLight::position）
+ * 都在本函数内**先减渲染原点再收窄**（减法只由 coordinate_rebase::toRelative 的点版做，
+ * 且两处吃**同一个** origin 入参 ⟹ 「三出口同空间」在灯这一侧是结构性的，不靠约定）。
+ * 方向量（direction / 归一化后的 GpuLight.direction）平移不变，**不减**。
  * @param rg 引擎（读 Light 组件）
- * @param eyePos 相机世界位置（头单灯 eyePos 字段）
+ * @param cameraPosition 相机**绝对层**世界位置（Camera::position，double）——收窄必须在
+ *        减原点之后做（先收窄后减 = 大数进过 float32，本刀的全部意义消失）
+ * @param origin 本消费者（渲染管线）自己携带的渲染原点（绝对层，**参数不是全局单例**）；
+ *        门关恒 dvec3(0) ⟹ 两处减法恒等 ⟹ 落库逐位不变
  * @param out 出参：本帧 draw list（写 sceneData.light / lightCount / lightArray）
  * @return 主灯（Light.index == 0；无灯 entity 时 = 默认 Light{}）——阴影矩阵与
  *         ambient 也要它（主灯 = 页面主光源）
  */
-export Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDrawList& out);
+export Light fillLightData(entt::registry& rg, const glm::dvec3& cameraPosition,
+	const glm::dvec3& origin, FrameDrawList& out);
 
 /**
  * 每帧填 SSR 正向矩阵（scene data 尾区 kSceneDataSsrOffset = 本帧**抖动后** proj·view，

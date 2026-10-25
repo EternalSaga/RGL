@@ -299,19 +299,6 @@ void checkPushDataLimits(const DeviceContext& device) {
 }
 
 /**
- * 诊断账的**唯一登记处**（债-140 第四击 ③）：加一笔账 = 在这里加一行 `add(...)`。
- *
- * 为什么放在 main 而不是各模块自己登记：静态自注册要赌初始化顺序、还要赌链接器不把
- * 无人引用的目标文件丢掉——两种失效都是静默的（账没了但没人红）。显式一张表 = 漏没漏
- * 一眼可见，而"漏登记"这件事恰好写不出静态判据（查的就是"没出现的那一处"）。
- * @param ledger 目标账本（生产侧传 `RGL::shutdownLedger()`；测试传自己的实例）
- */
-void registerDiagnosticReporters(RGL::ShutdownLedger& ledger) {
-	ledger.add(RGL::reportDeviceFaultPollSummary);
-	ledger.add(RGL::reportHeapSlotAuditSummary);
-}
-
-/**
  * 退出前的诊断收口（main 保持在 120 行红线内，本函数把三件"帧循环结束后才做"的事收一处）。
  *
  * 顺序有理由：① profiler dump 与 ② gpu profiler 解绑必须在 `gpuProfiler` 这个 main 栈对象
@@ -394,8 +381,9 @@ void wireSceneSpinContext(entt::registry& rg, const SceneConfig& scene) {
 }
 
 /**
- * 每帧调参 context（Phase 15 批 15.1 SSR 系数 + 批 15.2 子步 A 湿面参数）——
- * configs/runtime.lua 的 `ssr`/`wet` 块 → registry context 的映射。
+ * 每帧调参 context（Phase 15 批 15.1 SSR 系数 + 批 15.2 子步 A 湿面参数）+ 渲染原点门
+ * （相对坐标批 3）——configs/runtime.lua 的 `ssr`/`wet` 块与 `coordinate.rebase` 键 →
+ * registry context 的映射。
  *
  * 抽 helper 的直接原因 = `main()` 的 120 行红线（wireSceneSpinContext 同款），顺手把
  * 「配置 → 每帧调参」收成一处。注意分工：这里搬的是**系数**（每帧量：引擎每帧现取现写
@@ -411,6 +399,17 @@ void wireSceneSpinContext(entt::registry& rg, const SceneConfig& scene) {
 void wireTuningContexts(entt::registry& rg, const RuntimeConfig& runtime) {
 	rg.ctx().emplace<SsrTuning>(runtime.ssr);
 	rg.ctx().emplace<WetTuning>(runtime.wet);
+	// 渲染原点（相对坐标批 3 装配置门；批 5 第 1 刀起 position 由 projectionSystem 每帧写）：
+	// 这里**只搬配置门**，一个数都不算。门关 = position 恒 (0,0,0) ⟹ toRelative 减法恒等
+	// ⟹ 逐位不变；门开 = projectionSystem 把相机位置 snap 到级联纹素粒度（粒度 NaN 才抛错拒跑）。
+	// 它是 **渲染这一个消费者的参数**，不是引擎级全局原点（→ scene_context 的 RenderOrigin 注释）。
+	rg.ctx().emplace<RenderOrigin>(RenderOrigin{.enabled = runtime.coordinateRebase});
+	// 门开态的**回显行**（门关一行都不打 = 出厂日志逐字不变）。为什么必须有它：配置覆写器的写后
+	// 读回只证明「文件里是 true」，证明不了「引擎按这个值跑」；而「键没被读到」与「原点恒零」两种
+	// 失效在图像上都长得像绿（同 `shadow: mode=` / `csm.force_cascade=` 两条回显的既有纪律）。
+	// 消费方 = `imgqa shadow-edge-rebase` 的 G3 第 4 查。
+	if (auto* l = runtime.coordinateRebase ? RLLogger::getInstance() : nullptr)
+		l->info("coordinate.rebase = true（原点每帧 snap 到级联纹素粒度；算不出即拒启动）");
 }
 
 /** 渲染图配置加载 + compileRenderGraph（校验 + barrier 布局链推导，错误抛 std::runtime_error）+ deferredMode 求值。

@@ -446,7 +446,15 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 	 * （lambda 独立计分；模型 entity 与 cube entity 共用）
 	 */
 	auto makeRootTransform = [](const SceneEntityDesc& ent) {
-		glm::mat4 t = glm::translate(glm::mat4(1.0f), ent.position);
+		// ent.position 是绝对层（double）：烘进 rootTransform 的 float 矩阵前收窄（批 2
+		// 第一刀的落库点，见 scene_config.cppm 的 SceneEntityDesc 注释）。rotation/scale
+		// 本来就在 float 域。
+		// TODO(相对坐标批 3 第二刀): 本函数在生成时就把 dvec3 position 收窄回了 float ⟹ 绝对层
+		// 拿到的只是 float 影子。改成 double 域合成（glm::translate(glm::dmat4(1.0), ent.position)
+		// 起步，rotation/scale 仍在 float 域、复合时提升）才是真绝对层。⚠ 那会改舍入路径
+		// ⟹ 交付图允许变，必须单独一刀、单独重立截图锚（docs/相对坐标地基_plan.md §3 批 3），
+		// 不许与本刀（门关逐位不变）合并。
+		glm::mat4 t = glm::translate(glm::mat4(1.0f), glm::vec3(ent.position));
 		t = glm::rotate(t, glm::radians(ent.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
 		t = glm::rotate(t, glm::radians(ent.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
 		t = glm::rotate(t, glm::radians(ent.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));

@@ -190,6 +190,9 @@ int dispatch(const std::string& cmd, const Args& P)
         { "shadow-caster-survival", cmdShadowCasterSurvival },
         // 同上：零 flag；J1/J2 界未定期只出 INFO（不进 rc），J3 是形状判据（容差从闭式推）。
         { "shadow-edge-ruler", cmdShadowEdgeRuler },
+        // 同上：零 flag；三条判决线都有闭式可辩护的界（界 = 1 枚本级纹素 + 2 枚像素刻度），
+        // 六道闸门 G1–G6 抛 = rc 3。相对坐标批 5 第 2 刀。
+        { "shadow-edge-rebase", cmdShadowEdgeRebase },
         { "blend-sort", cmdBlendSort },
         // 同上：零 flag。债-134 的先决——透明段 lit 变体的常驻像素贡献（双臂同源 + 引擎回显条数）。
         { "blend-lit", cmdBlendLit },

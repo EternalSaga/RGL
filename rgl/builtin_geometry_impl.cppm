@@ -135,7 +135,9 @@ entt::entity registerBuiltinCube(entt::registry& rg, uint32_t meshAsset,
 	auto e = rg.create();
 	auto& tf = rg.emplace<Transform>(e);
 	tf.local = rootTransform;
-	tf.world = rootTransform;  // cube 几何已在原点 ±0.5
+	// 绝对层 = float 合成的无损提升（float→double 精确）；world 由 absolute 派生，逐位不变。
+	tf.absolute = glm::dmat4(rootTransform);
+	tf.world = glm::mat4(tf.absolute);  // cube 几何已在原点 ±0.5
 	glm::vec3 center{0.0f};
 	float radius = 0.0f;
 	for (const auto& v : cubeVertices)

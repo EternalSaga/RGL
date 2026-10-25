@@ -294,6 +294,12 @@ add_executable(imgqa
     shadow_edge_target.cpp
     shadow_edge_ruler_judge.cpp
     shadow_edge_ruler.cpp
+    # `shadow-edge-rebase`（相对坐标批 5 第 2 刀）：四格对拍（2 工作点 × 2 开关态）的臂表 +
+    # 采集 + 回显四查 + G1–G6 + J-R1/R2/R3。复用 ruler 的口径层与靶读取（`loadEdgeTarget`
+    # 收 stem 参数），🔴 不抄第二份真值——闭式可量性预判 `plateMeasurableInCascade` 已抬成
+    # 跨 TU 面（`shadow_edge_ruler.h`），两台仪器共用。第 9 例外门住 `engine_profile_gates.cpp`。
+    shadow_edge_rebase.cpp
+    shadow_edge_rebase_judge.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器

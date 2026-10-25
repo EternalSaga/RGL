@@ -34,6 +34,7 @@ import meshlet_cull_service;  // MeshletCullService（★1-a2-i 逐簇剔除的 
 import meshlet_shadow_args;   // MeshletShadowArgsService（★M-1a 真 MDI 行表的 GPU 载体，装配层持有）
 import vk_indirect_commands;  // DgcCommands / DgcStaticCommands
 import picking;              // PickingService（wirePicking 签名，Phase 10 批 10.5）
+import shutdown_ledger;      // ShutdownLedger（registerDiagnosticReporters 签名，债-140 第四击 ③）
 import vk_renderer;         // Renderer
 
 namespace RGL {
@@ -642,5 +643,17 @@ export void wireShaderHotReload(entt::registry& registry, ShaderRegistry& pipeli
  */
 export std::unique_ptr<PickingService> wirePicking(entt::registry& registry,
 	Resources& resources, RenderTargetCache& rts, Renderer& renderer);
+
+/**
+ * 诊断账的**唯一登记处**（债-140 第四击 ③；定义在 main:wiring——诊断挂点装配同族，
+ * 随本文件 500 行红线自 main:impl 挪来，登记语义不变）。加一笔账 = 在那里加一行
+ * `add(...)`。
+ *
+ * 为什么放在 main 而不是各模块自己登记：静态自注册要赌初始化顺序、还要赌链接器不把
+ * 无人引用的目标文件丢掉——两种失效都是静默的（账没了但没人红）。显式一张表 = 漏没漏
+ * 一眼可见，而"漏登记"这件事恰好写不出静态判据（查的就是"没出现的那一处"）。
+ * @param ledger 目标账本（生产侧传 `RGL::shutdownLedger()`；测试传自己的实例）
+ */
+export void registerDiagnosticReporters(ShutdownLedger& ledger);
 
 }  // namespace RGL

@@ -96,7 +96,7 @@ struct Pose {
 
 Pose makePose(Camera cam, float fov, float aspect, float nearZ, float farZ) {
 	cam.fov = fov;
-	const glm::mat4 view = cameraView(cam);
+	const glm::mat4 view = cameraView(cam, glm::dvec3{0.0});
 	const glm::mat4 proj = glm::perspective(fov, aspect, nearZ, farZ);
 	return Pose{cam, glm::inverse(proj * view)};
 }
@@ -131,7 +131,9 @@ TEST_CASE("锚点机位：提取式 = (0,0,−1) 约定值 + col2 是平移泄�
 	// col2.xyz ∝ eyePos：−normalize(col2.xyz) 恰为归一化眼位（"它是平移，不是方向"）。
 	// shader 形态 = 先 `.xyz` 截断再 normalize（顺序反过来会把 w 除进 xyz，实测偏 ~1%）。
 	const glm::vec3 wrongForm = -glm::normalize(glm::vec3(col2));
-	const glm::vec3 eyeDir = glm::normalize(p.cam.position);
+	// cam.position 是绝对层（double）：这里要复现的是**喂给 shader 的那份 float eyePos**，
+	// 先收窄再归一化（在 double 里归一化会把本测试的算术换掉，虽然只漂 1 ULP）
+	const glm::vec3 eyeDir = glm::normalize(glm::vec3(p.cam.position));
 	expectNear(glm::dot(wrongForm, eyeDir), 1.0, 1e-5);
 	// 错误形态与真 forward 的点积解析值 = −eye.z/|eye| = −5/√50 ≈ −0.707
 	//（历史实测 −0.43 是另一机位；同一失效形态、不同数值）。

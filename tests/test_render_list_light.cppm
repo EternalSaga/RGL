@@ -9,7 +9,9 @@ module;
  *
  * 接缝（12.3d）：fillLightData 导出到接口，registry 栈上构造直打（entt 非模块化，
  * GMF #include <entt/entt.hpp>，main 同款用法；include 面经 rlbase PUBLIC EnTT::EnTT
- * 传递到测试 target）。
+ * 传递到测试 target）。批 4 第二刀起签名多一个 origin 参数（相机位与灯位置的「减渲染
+ * 原点」收进本函数，两出口吃同一个入参）；本文件的落槽契约与坐标层正交，全部传零原点
+ * （减法恒等），门开态判据 → tests/test_view_light_rebase.cppm。
  *
  * ## 以源码为准的两处行为（与指令预期的差异如实记录）
  *   ① 无灯时 primary = 默认 Light{}，其 direction 默认值 **(0.35,-1,0.25) 非零** →
@@ -59,6 +61,11 @@ using testing::expectNear;
 /** 测试机位（任意非零非整值，头单灯 eyePos 字段直传）。 */
 constexpr glm::vec3 kEye{7.5f, -2.25f, 11.0f};
 
+/** 门关原点（批 4 第二刀：fillLightData 新增 origin 参数）。本文件全部用例是**落槽
+ *  契约**（与坐标层无关），传零原点 = 减法恒等 = 与签名改动前逐位相同的调用；
+ *  门开态（减原点）的判据在 tests/test_view_light_rebase.cppm。 */
+constexpr glm::dvec3 kZeroOrigin{0.0, 0.0, 0.0};
+
 /** 按 index 造可辨识的灯：所有字段随 index 变化且避开退化值
  *  （direction 非零且 |d|≠1 → normalize 必改值，"忘归一化"变异可检）。 */
 Light makeLight(uint32_t i) {
@@ -79,7 +86,10 @@ Light makeLight(uint32_t i) {
 GpuLight expectSlot(const Light& L) {
 	GpuLight G;
 	G.direction = glm::vec4(glm::normalize(L.direction), 0.0f);
-	G.position = glm::vec4(L.position, 0.0f);
+	// 与生产代码同式（render_list_impl::fillLightData）：L.position 是绝对层（double），
+	// 交给 float 契约的 GpuLight 前显式收窄。批 4 第二刀起生产式是 toRelative(L.position,
+	// origin)——本文件全用零原点（kZeroOrigin），减法逐位恒等，期望值退化成纯收窄。
+	G.position = glm::vec4(glm::vec3(L.position), 0.0f);
 	G.color = glm::vec4(L.color * L.intensity, 0.0f);
 	G.params = glm::vec4(L.range, static_cast<float>(L.type), 0.0f, 0.0f);
 	return G;
@@ -109,7 +119,7 @@ TEST_CASE("fillLightData：乱序创建（2,0,1）仍按 Light.index 落槽，pr
 	}
 
 	FrameDrawList list;
-	const Light primary = fillLightData(rg, kEye, list);
+	const Light primary = fillLightData(rg, glm::dvec3{kEye}, kZeroOrigin, list);
 
 	CHECK(list.sceneData.lightCount == 3);
 	// primary（返回值本体 + 头单灯换算）= index 0 的灯，不是先创建的 index 2 灯。
@@ -143,7 +153,7 @@ TEST_CASE("fillLightData：乱序创建（2,0,1）仍按 Light.index 落槽，pr
 TEST_CASE("fillLightData：无灯 entity → lightCount=0、头单灯 = 默认 Light{} 换算") {
 	entt::registry rg;
 	FrameDrawList list;
-	const Light primary = fillLightData(rg, kEye, list);
+	const Light primary = fillLightData(rg, glm::dvec3{kEye}, kZeroOrigin, list);
 
 	const Light def{};
 	CHECK(list.sceneData.lightCount == 0);
@@ -172,7 +182,7 @@ TEST_CASE("fillLightData：index ≥ kMaxLights 不落槽但计数；min(count, 
 		entt::registry rg;
 		rg.emplace<Light>(rg.create(), makeLight(kMaxLights));  // index = kMaxLights → 越界
 		FrameDrawList list;
-		fillLightData(rg, kEye, list);
+		fillLightData(rg, glm::dvec3{kEye}, kZeroOrigin, list);
 		CHECK(list.sceneData.lightCount == 1);  // 计数含越界灯（删计数 → 0 红）
 		checkSlot(list.sceneData.lightArray[0], expectSlot(Light{}),
 			"越界灯不占槽，槽 0 = 默认灯换算");
@@ -189,7 +199,7 @@ TEST_CASE("fillLightData：index ≥ kMaxLights 不落槽但计数；min(count, 
 		expect[kMaxLights] = makeLight(kMaxLights);
 		rg.emplace<Light>(rg.create(), expect[kMaxLights]);
 		FrameDrawList list;
-		fillLightData(rg, kEye, list);
+		fillLightData(rg, glm::dvec3{kEye}, kZeroOrigin, list);
 		CHECK(list.sceneData.lightCount == kMaxLights);  // min(9,8)（删 min → 9 红）
 		for (uint32_t i = 0; i < kMaxLights; ++i)
 			checkSlot(list.sceneData.lightArray[i], expectSlot(expect[i]),
@@ -219,7 +229,7 @@ TEST_CASE("fillLightData：index 重复 → 后写覆盖先写（view 迭代序�
 	CHECK(expectLast.index == 0);  // 三个全是 index 0，最后一个必是
 
 	FrameDrawList list;
-	const Light primary = fillLightData(rg, kEye, list);
+	const Light primary = fillLightData(rg, glm::dvec3{kEye}, kZeroOrigin, list);
 
 	// 计数按 entity 数（3），不按去重槽位——照源码 min(3, kMaxLights) 语义。
 	CHECK(list.sceneData.lightCount == 3);
@@ -242,7 +252,7 @@ TEST_CASE("fillLightData：GpuLight.params = (range, type, 0, 0)（含点光 typ
 	rg.emplace<Light>(rg.create(), makeLight(0u));
 	rg.emplace<Light>(rg.create(), makeLight(1u));
 	FrameDrawList list;
-	fillLightData(rg, kEye, list);
+	fillLightData(rg, glm::dvec3{kEye}, kZeroOrigin, list);
 
 	CHECK(list.sceneData.lightArray[0].params == glm::vec4(5.0f, 0.0f, 0.0f, 0.0f));
 	CHECK(list.sceneData.lightArray[1].params == glm::vec4(6.0f, 1.0f, 0.0f, 0.0f));

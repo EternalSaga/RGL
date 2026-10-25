@@ -136,7 +136,14 @@ static glm::vec3 vec3FromDoubles(const std::vector<double>& v) {
  */
 static glm::mat4 localTransform(const tinygltf::Node& nd) {
 	if (nd.matrix.size() == 16)
-		return glm::make_mat4(nd.matrix.data());
+		// 🔴 `nd.matrix` 是 `std::vector<double>`（tinygltf 的矩阵分量是 double），而
+		// `glm::make_mat4` 按指针类型推导 ⟹ 它返回的是 **`mat4x4<double>`**，再**隐式收窄**成
+		// 本函数的返回类型 `glm::mat4`。这个收窄此前完全静默（连函数注释都没提），是
+		// `GLM_FORCE_EXPLICIT_CTOR` 在本仓抓到的唯一一处**非绝对层**静默收窄——按字段名 grep
+		// 审计结构上抓不到它（债-147）。改成显式：先按 double 读全 16 分量，再一次性收窄。
+		// 数值与改前**逐位相同**（同一条 `mat4(dmat4)` 转换构造、逐分量 `static_cast<float>`，
+		// 只是从隐式变成写出来）。
+		return glm::mat4(glm::make_mat4(nd.matrix.data()));
 	glm::mat4 m(1.0f);
 	if (nd.translation.size() == 3)
 		m = glm::translate(m, vec3FromDoubles(nd.translation));

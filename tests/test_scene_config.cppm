@@ -73,6 +73,16 @@ void expectVec(const glm::vec3& got, const glm::vec3& want, double absTol = 1e-5
 }
 
 /**
+ * dvec3 侧重载 = **绝对层**字段（Camera::position/target、SceneEntityDesc::position、
+ * Light::position）的断言入口。没有它，dvec3 实参会经 glm 的隐式转换收窄成 vec3 再比，
+ * 「读侧偷偷先落了一次 float」这类缺陷就落在容差里看不见了。
+ */
+void expectVec(const glm::dvec3& got, const glm::vec3& want, double absTol = 1e-5) {
+	for (int k = 0; k < 3; ++k)
+		expectNear(got[k], want[k], 0.0, absTol);
+}
+
+/**
  * 日志增量锚点（债-11 阳性锚点的观测通道）：RLLogger 是进程单例劫持不了
  *（tests/test_mdi_shadow_emit 同结论），但它的 file sink **逐条 flush**
  *（flush_on(warn)）且路径 = configs/log_level.json 的 log_file——本文件的 loader
@@ -695,7 +705,7 @@ TEST_CASE("camera_config：position/target 反推朝向——forward ≈ normali
 	// up 正交（world-up 对齐）
 	expectNear(glm::dot(cameraForward(c), c.up), 0.0, 0.0, 1e-5);
 	// 终局判据：cameraView 把 target 投到视轴（0,0,−dist）
-	const glm::vec4 q = cameraView(c) * glm::vec4(c.target, 1.0f);
+	const glm::vec4 q = cameraView(c, glm::dvec3{0.0}) * glm::vec4(c.target, 1.0f);
 	expectNear(q.x, 0.0, 0.0, 1e-3);
 	expectNear(q.y, 0.0, 0.0, 1e-3);
 	expectNear(q.z, -glm::length(c.target - c.position), 1e-4, 1e-3);
@@ -703,7 +713,9 @@ TEST_CASE("camera_config：position/target 反推朝向——forward ≈ normali
 	TempLua g("cc_place2", "return { position = { 2, 2, 2 } }\n");
 	auto r2 = loadCameraConfig(g.pathStr());
 	REQUIRE(r2.has_value());
-	const glm::vec3 want2 = glm::normalize(-r2->camera.position);
+	// camera.position 是绝对层 dvec3；`glm::vec3(...)` 是**显式**收窄回 float32，
+	// 保持与改前**逐位相同**的期望值（少一次收窄会悄悄改变本用例的容差基准，债-147）。
+	const glm::vec3 want2 = glm::vec3(glm::normalize(-r2->camera.position));
 	for (int k = 0; k < 3; ++k)
 		expectNear(cameraForward(r2->camera)[k], want2[k], 1e-5, 1e-5);
 }
@@ -1455,6 +1467,65 @@ TEST_CASE("runtime_config：meshlet.shadow_lod_fallback（★18-B1 回落策略�
 		REQUIRE(r.has_value());
 		CHECK(r->meshletShadowLodFallback == MeshletLodFallbackMode::deepest);
 	}
+}
+
+TEST_CASE("runtime_config：coordinate.rebase 门（相对坐标批 3；缺省 false、显式 true 读得出、块内拼错键被喊）") {
+	// 被测 = readCoordinateBlock（嵌套块 + readBoolKey，形态先例 = readFsrBlock）。
+	// 门关 = 默认 = 出厂态（交付图逐位不变的前提）；门开的行为（projectionSystem 生产动态
+	// 原点，粒度算不出来才抛错）
+	// 不在配置层——tests/test_render_origin.cppm 钉那条，本用例只钉「键读得对」。
+	// 变异红线（每条实测，读数 → 交付报告；2026-10-25）：
+	//   ① 成员初始化 coordinateRebase 翻成 true → 「成员初始化」「缺块」「缺键」三条红
+	//      （默认漂移 = 出厂即开一条没人实现的门，而所有截图基线都在关上拍的）；
+	//   ② 解析器键名 "rebase" 漂了 → 「显式 true」红（读不到 → 保 false）；
+	//   ③ readCoordinateBlock 整个不接进 loadRuntimeConfig → **编译红**（static 函数未用
+	//      = -Werror=unused-function，编译器直接拦死，形态上不可能静默存在）；
+	//   ④ kRuntimeKeys 漏登记 "coordinate.rebase" → rt_cov「表撒谎」红 + 本用例的
+	//      下钻/未知键三条红（coordinate 块不再被下钻，顶层表名反被喊未知）；
+	//   ⑤ 块内拼错的子键不喊（下钻判据坏）→ 最后一条 LogTailer 用例红
+	//      （实测经 ④ 的形态触发：键表没前缀 ⟹ hasUnknownKeyWarn 拿不到 warn 行）。
+	{  // 成员初始化默认路径（不经 lua 文件）
+		CHECK(RuntimeConfig{}.coordinateRebase == false);
+	}
+	{  // 缺块 / 空块 / 缺键 = false（三种「没写」形态同判）
+		TempLua f("rt_coord_empty", "return {}\n");
+		auto r = loadRuntimeConfig(f.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->coordinateRebase == false);
+		TempLua g("rt_coord_block_empty", "return { coordinate = {} }\n");
+		auto r2 = loadRuntimeConfig(g.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->coordinateRebase == false);
+		TempLua h("rt_coord_nokey", "return { coordinate = { other_g5 = 1 } }\n");
+		// other_g5 是块内未知键 → 未知键 warn（判据本体在下方 LogTailer 用例钉），
+		// 这里只要求它**不改门**且加载不炸。
+		auto r3 = loadRuntimeConfig(h.pathStr());
+		REQUIRE(r3.has_value());
+		CHECK(r3->coordinateRebase == false);
+	}
+	{  // 显式 true / 显式 false 都读得出（反向用例：漏读与错映射在两条上各红一次）
+		TempLua t("rt_coord_true", "return { coordinate = { rebase = true } }\n");
+		auto r = loadRuntimeConfig(t.pathStr());
+		REQUIRE(r.has_value());
+		CHECK(r->coordinateRebase == true);  // 配置层**不拦** true（拦 = 静默形态；响亮失败在 projectionSystem）
+		TempLua f2("rt_coord_false", "return { coordinate = { rebase = false } }\n");
+		auto r2 = loadRuntimeConfig(f2.pathStr());
+		REQUIRE(r2.has_value());
+		CHECK(r2->coordinateRebase == false);
+	}
+	// 🔴 未知键仍被拦（任务点名的那条）：coordinate 块被键表声明了点分前缀 ⟹ collectPresentKeys
+	// 下钻一层，块内拼错的子键以 `coordinate.子键` 精确成员判据出声（债-129 第三刀口径）。
+	// 阳性锚点（lintUnknownRuntimeKeys 接线被删 → 前两条 CHECK 红，同债-11 既有用例的判据形状）。
+	LogTailer log;
+	TempLua typo("rt_coord_typo", "return { coordinate = { rebse = true } }\n");
+	RuntimeKeyTrace trace;
+	auto rTypo = loadRuntimeConfig(typo.pathStr(), &trace);
+	REQUIRE(rTypo.has_value());
+	const std::string delta = log.delta();
+	CHECK(hasUnknownKeyWarn(delta, "runtime", "coordinate.rebse"));   // 拼错的子键点名喊
+	CHECK(delta.find("未知键 'coordinate'") == std::string::npos);     // 表名 = 前缀命中，不喊
+	CHECK(std::ranges::find(trace.present, "coordinate.rebse") != trace.present.end());
+	CHECK(rTypo->coordinateRebase == false);  // 拼错键不改门（也不炸）
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

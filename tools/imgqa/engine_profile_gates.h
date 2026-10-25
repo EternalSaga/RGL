@@ -26,5 +26,7 @@ void applyShadowLodGate(const std::string& dir, const ProfileOpts& o);
 void applyShadowForceCascadeGate(const std::string& dir, const ProfileOpts& o);
 /// 第 8 枚门：整值覆写 `scene.lua` 顶层 entities（程序化靶装进交付配置）。
 void applyDeliveryEntitiesGate(const std::string& dir, const ProfileOpts& o);
+/// 第 9 枚门：覆写 `runtime.lua` 的 `coordinate.rebase`（相对坐标原点 rebase 总闸）。
+void applyCoordinateRebaseGate(const std::string& dir, const ProfileOpts& o);
 
 }  // namespace RGL::imgqa

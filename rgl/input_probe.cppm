@@ -124,7 +124,9 @@ CameraProbePhase cameraProbeReleased(RLLogger* logger, bool* flag, uint32_t fram
 	if (frameCount != probe + hold + 2)
 		return CameraProbePhase::Released;
 	const bool released = !*flag;
-	const float distance = glm::length(camera.position - baseline);
+	// 探针的位移读数留在 float 域（`distance > 1e-4f` 这枚容差就是按 float32 定的）：
+	// 绝对层相机位先收窄再比，判据语义与改动前逐字相同。
+	const float distance = glm::length(glm::vec3(camera.position) - baseline);
 	const bool moved = camera.mode != CameraMode::Fps || distance > 1e-4f;
 	if (released && moved) {
 		if (logger)
@@ -192,8 +194,10 @@ export void cameraProbeTick(entt::registry& rg, const ProbeEventSink& sink) {
 
 	switch (phase) {
 		case CameraProbePhase::Idle:
+			// 基准点存在 static glm::vec3 里（float 域探针，见 cameraProbeReleased 的注释）：
+			// 绝对层相机位先收窄再记基准
 			phase = cameraProbeIdle(logger, sink, flag, key, frameCount, probe, hold,
-				camera.position, baseline);
+				glm::vec3(camera.position), baseline);
 			break;
 		case CameraProbePhase::Holding:
 			phase = cameraProbeHolding(logger, sink, flag, key, frameCount, probe, hold);

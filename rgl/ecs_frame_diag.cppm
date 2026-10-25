@@ -7,7 +7,7 @@ export module ecs:frame_diag;
  * ecs:frame_diag —— 帧循环里的**诊断旁路**（批 14.3 自 :impl 拆出）
  *
  * 职责边界（为什么这两个 struct 不跟 system 待在一起）：
- * - `:impl` = **system 语义**：camera / animation / bounds / projection / taa / renderlist
+ * - `:impl` = **system 语义**：camera / origin / animation / bounds / projection / taa / renderlist
  *   与 resize 处理——它们决定"这一帧画什么"。
  * - 本分区 = **观测旁路**：llm_debug 截图时序、帧时间统计。两者都由诊断门控制、
  *   默认关 = 早退零开销，且**不参与本帧画什么的决策**（截图只消费执行器已有的捕获

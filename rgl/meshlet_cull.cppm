@@ -26,7 +26,13 @@ import scene_context;
  *    `render_list_impl.cppm` 的 primitive 粒度 CPU 剔除（node-local 球经 modelMatrix 到世界后测）。
  * 2. **坐标系**：产物里的簇包围球是**源 glb 单位**（未乘 `scene.lua` 的 scale=0.01、未应用 node
  *    transform，见 `tools/meshlet_pack/format.h` 头注释「坐标系」段）。世界换算归消费侧，
- *    即本函数的 `objectMatrix` 入参（= 现行路径的 `spin.matrix * tf.world` 同位）。
+ *    即本函数的 `objectMatrix` 入参。🔴 **该入参必须是「相对渲染原点」的实例矩阵**，生产式 =
+ *    `coordinate_rebase.cppm::toRelativeModel(spin.matrix, tf.absolute, origin.position)`
+ *    （相对坐标计划批 4；旧口径 `spin.matrix * tf.world` 是**绝对**的，批 4 起已不是现行路径）。
+ *    ⚠ 门关（原点恒 0）时两者逐位相同 ⟹ **传错不会立刻出事**，但 GPU 侧 `meshlet_cull.comp.slang`
+ *    读的是 scene data 里那份**相对**矩阵，CPU 参考实现将来要与它逐元素对账 ⟹ 传绝对 = 两侧
+ *    不同空间 = 可见簇集合静默分家（实测变异「丢对象矩阵平移列」→ 可见簇归 0，
+ *    判据 = `tests/test_rebase_consumers.cppm` 判据 3 的错位锚点）。
  *
  * ## 为什么剔除必须保守（半径宁可大不可小）
  * 误剔 = 几何**凭空消失**，画面少一块且没有任何错误信号，事后只能从头排查；多画 = 只花 GPU 时间，

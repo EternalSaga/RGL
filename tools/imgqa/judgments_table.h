@@ -84,6 +84,10 @@ namespace RGL::imgqa {
 /// Foundation，缝按**仪器**切。📄 正文在 `judgments_table_edge.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& shadowEdgeRulerJudgments();
 
+/// `shadow-edge-rebase` 段（相对坐标批 5 第 2 刀：四格对拍的三条判决线），正文与
+/// `shadow-edge-ruler` 段同住 `judgments_table_edge.cpp`（缝按命令切，见该文件段注释）。
+[[nodiscard]] const std::vector<JudgmentInfo>& shadowEdgeRebaseJudgments();
+
 /// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
 /// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
 /// 📄 正文在 `judgments_table_ssr.cpp`。

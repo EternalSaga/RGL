@@ -55,14 +55,18 @@ nlohmann::json rpcCameraJson(const Camera& cam) {
 /**
  * 读 `[x,y,z]` 字段（形状不符抛 json 异常 → `rpcDispatch` 统一转 400）。
  * 调用方先 `contains` 判存在——缺字段 = 不改，存在但畸形 = 400，二者不可混同。
+ * 🔴 **返回 double**（批 2 第一刀）：nlohmann 的 number 本来就是 double，此前逐项
+ * `get<float>()` 是把协议里现成的 double **先舍成 float** 再存进绝对层；现在原样取到
+ * double，收窄（或不收窄）由调用方按字段的层归属决定（position/target 落绝对层，up 落
+ * float 方向量）。形状闸 `rpcFieldTypeOk` 只看 `is_number()`，与精度无关，故不跟着改。
  * @param body 请求体对象
  * @param key 字段名（来自生成表的 `rpc_field::camera::*` 常量）
- * @return 三维值
+ * @return 三维值（double，未经 float 舍入）
  */
-glm::vec3 rpcVec3(const nlohmann::json& body, std::string_view key) {
+glm::dvec3 rpcVec3(const nlohmann::json& body, std::string_view key) {
 	const auto& value = body.at(key);
-	return glm::vec3{value.at(0).get<float>(), value.at(1).get<float>(),
-		value.at(2).get<float>()};
+	return glm::dvec3{value.at(0).get<double>(), value.at(1).get<double>(),
+		value.at(2).get<double>()};
 }
 
 
@@ -263,7 +267,7 @@ RpcOutcome rpcHandleCamera(RpcWiring& w, const nlohmann::json& body) {
 	rpcApplyCameraMode(body, cam);
 	// position 必须先于 target：fps 下的朝向反推要用到新 position
 	if (body.contains(rpc_field::camera::position))
-		cam.position = rpcVec3(body, rpc_field::camera::position);
+		cam.position = rpcVec3(body, rpc_field::camera::position);  // 绝对层，原样吃 double
 	if (body.contains(rpc_field::camera::target)) {
 		// fps 模式的 view 只看 yaw/pitch（cameraView），照直写 target 是死写入——回显会
 		// 显示"已生效"而画面不动。故 fps 下（未显式给 yaw/pitch 时）走 cameraAimAt 反推，
@@ -271,12 +275,14 @@ RpcOutcome rpcHandleCamera(RpcWiring& w, const nlohmann::json& body) {
 		const bool explicitAngles = body.contains(rpc_field::camera::yawDegrees)
 		    || body.contains(rpc_field::camera::pitchDegrees);
 		if (cam.mode == CameraMode::Fps && !explicitAngles)
-			cameraAimAt(cam, rpcVec3(body, rpc_field::camera::target));
+			// cameraAimAt 是 float 域入口（朝向反推的算术保持 float）：绝对层 target 先收窄
+			cameraAimAt(cam, glm::vec3(rpcVec3(body, rpc_field::camera::target)));
 		else
-			cam.target = rpcVec3(body, rpc_field::camera::target);
+			cam.target = rpcVec3(body, rpc_field::camera::target);  // 绝对层，原样吃 double
 	}
 	if (body.contains(rpc_field::camera::up))
-		cam.up = rpcVec3(body, rpc_field::camera::up);
+		// up 是**方向量**（不是位置）⟹ 不进绝对层，落库仍是 float：这里显式收窄
+		cam.up = glm::vec3(rpcVec3(body, rpc_field::camera::up));
 	if (body.contains(rpc_field::camera::yawDegrees))
 		cam.yaw = glm::radians(body.at(rpc_field::camera::yawDegrees).get<float>());
 	if (body.contains(rpc_field::camera::pitchDegrees))

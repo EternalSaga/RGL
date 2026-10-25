@@ -122,6 +122,7 @@ using std::round;
 using std::abs;    // 整数重载来自 <cstdlib>，浮点重载来自 <cmath>，两者都在本模块 GMF
 using std::fabs;
 using std::isfinite;  // 2026-10-08 补（批 14.3）：render_scale 合法性校验用，同 <cmath> 补齐说明
+using std::log10;     // 2026-10-25 补（债-85 批 1）：coordinate_rebase 的数量级余量用，同 <cmath> 补齐说明
 using std::lround;    // 2026-10-08 补（批 14.3）：render extent 取整用
 using std::acos;
 using std::atan;

@@ -142,9 +142,56 @@ export struct PickingHook {
 
 
 /**
+ * 投影 system（Camera + SceneBounds + RenderExtent → ViewProjection context）：
+ * 自适应 near/far + 投影矩阵 + 实际生效深度界写回 + **本帧渲染原点**（相对坐标批 5 第 1 刀起，
+ * 原 `originSystem` 搬进本 system）+ view 矩阵（吃刚写好的原点）。
+ *
+ * ## 🔴 为什么原点的生产者是本 system，而不是一个排在最前面的 originSystem（本批判决）
+ * 吸附粒度 = `rebaseSnapGranularity(texels)`，而 texels ← 级联球半径 ← **near/far**；near/far
+ * 只在本 system 里按 SceneBounds 现算，同时 view 又要吃原点。留在独立的 originSystem 里只有
+ * 两条路：复制一份 near/far 算式（造出第二份会漂的来源），或吃上一帧的值（悄悄错一帧）。
+ * 搬进来之后「先有粒度、再有原点、再有 view」变成**词法顺序**，写不错。
+ * 顺序（承重，别调换）：near/far → proj → 级联球半径 → texels → 粒度 → 原点 → view。
+ *
+ * ## 门关（`RenderOrigin::enabled == false`，默认）
+ * position 钉回 dvec3(0)（幂等：main emplace 的初值也是它）后**不进粒度那条路**，
+ * 与改动前逐位相同（toRelative 在零原点是恒等 ⟹ 交付图逐位不变）。
+ * ## 门开：粒度 NaN 必须响亮 throw
+ * `rebaseSnapGranularity` 对坏输入返回 NaN，而 **NaN 原点会让相机凭空消失**（view 的平移列
+ * 全 NaN ⟹ 整个场景被裁掉，且不报任何错）——那是本项目最难查的形态。取代批 3 留的
+ * 「门开未实现」throw（那条的判据现在由「粒度 NaN 才 throw」+「门开原点闭式」两条接住）。
+ * 🔴 **不许**把 NaN 静默按门关跑（配置开了却没生效 = 本仓反复登记的假绿形态）。
+ *
+ * 🔴 为什么导出（与 taaSystem 同一条理由）：**接线**问题纯函数测不到——
+ * `cameraView(camera, origin)` 只保证「给了原点就减对」，不保证调用点真把刚算出的那份传进去
+ * （调用点改回传 `dvec3{0}` 编译照过、门关照绿、门开静默错位）。栈上 registry 驱动一次就验得到
+ * （tests/test_view_light_rebase.cppm / tests/test_render_origin.cppm）。
+ * @param rg registry（读 Camera/SceneBounds/RenderExtent，**写 RenderOrigin**，写 ViewProjection；
+ *   缺任一 context 时 entt 直接抛）
+ */
+export void projectionSystem(entt::registry& rg);
+
+/**
+ * TAA 帧间 system（批 12.6；顺序 = projection 之后、renderlist 之前）：抖动注入 +
+ * 历史可用性判定 + 本帧 scene data 载荷（prevViewProj / motion / 内容位移）+ 跨帧簿记。
+ *
+ * 相对坐标批 4 第一刀起，载荷 `motion` 还负责**把两帧渲染原点之差复合进去**
+ * （`RenderOrigin::position` 与它自己记的 `TaaState::prevOrigin`）。
+ *
+ * 🔴 为什么导出（与 taaSystem 同一条理由）：帧序契约（`projection` 必须排在 `taa` 之前）
+ * 与「motion 吃的到底是哪两个原点、推进的是哪一个」这类**接线**问题，纯函数
+ * `motionWithOriginShift` 自己测不到——它只保证「给定两个原点算得对」，不保证调用点把
+ * 参数传对、不保证 `prevOrigin` 真的被推进。驱动两帧才验得到
+ * （tests/test_taa_cross_frame.cppm；不这么做就会重演批 3 那条「生产点变异单测不红」）。
+ * @param rg registry（读 SceneEnv/SceneSpin/Camera/RenderExtent/SceneBounds/ViewProjection/
+ *   RenderOrigin，读写 TaaState；缺任一 context 时 entt 直接抛）
+ */
+export void taaSystem(entt::registry& rg);
+
+/**
  * 帧循环（main 启动流末站，运行到 AppExit 为止）：每帧 = eventSystem（事件/窗口状态）
- * → resizeSystem（尺寸变化重建）→ 显式 system 链（camera→animation→bounds→projection→
- * renderlist，顺序即数据流契约）→ drawFrame 盲执行 FrameDrawList。
+ * → resizeSystem（尺寸变化重建）→ 显式 system 链（camera→origin→animation→bounds→
+ * projection→taa→renderlist，顺序即数据流契约）→ drawFrame 盲执行 FrameDrawList。
  *
  * llm 批处理语义：第 llm->delayFrames 帧渲染完成后回读本帧真实输出 + 存 PNG，然后置
  * AppExit 退出——无常驻状态、无 mailbox（config 即控制通道：agent 改

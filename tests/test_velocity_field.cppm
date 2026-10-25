@@ -64,6 +64,8 @@ export module test_velocity_field;
 import rlstd;
 import velocity_field;
 import taa_jitter;  // applyProjectionJitter（jitter 配对用例造"抖动后矩阵"）
+import coordinate_rebase;  // 批 4 第一刀：motionWithOriginShift（生产侧 sceneMotion 的算式）
+import test_support;       // 批 4 第一刀：expectNear（绝对+相对双容差，浮点地板与信号分档）
 
 namespace RGL {
 namespace {
@@ -465,6 +467,157 @@ TEST_CASE("🔴 基空间换算：静止机位 + 逐帧变化的 jitter ⟹ 基�
 	const auto one = pixelVelocity({0.5f, 0.5f}, 0.5f, fr);
 	const glm::vec2 expect = one.velocityPx + (cCur - cPrev);
 	CHECK(glm::length(toBaseSpace(one.velocityPx, cCur, cPrev) - expect) == doctest::Approx(0.0f));
+}
+
+TEST_CASE("🔴 批 4 镜像同步：静止相机 + 静止场景 + **移动原点** ⟹ 速度恒 0") {
+	// 本批（相对坐标批 4 第一刀）在 velocity 这条链上的判据。
+	// ## 期望值出处（闭式，不抄被测码）
+	// 相机眼位与场景点都住在**绝对层**且都不动，变的只有渲染原点 `O`。第 t 帧的世界坐标
+	// `W_t = P_abs − O_t`，同一空间里的相机眼位是 `C_abs − O_t`，于是
+	// `W_t − eye_t = P_abs − C_abs` **与 O_t 无关** ⟹ 两帧的屏幕位置完全相同 ⟹ 真值速度 **恒 0**。
+	// 而 `sceneMotion` 若只是 `prevSpin·inverse(curSpin)`（改前的式子），shader 会把 `W_t`
+	// 直接当 `W_{t−1}` 投给上一帧的 viewProj，差的正是 `ΔO = O_t − O_{t−1}` ⟹ 静止被判成运动。
+	// ## 为什么这条必须存在（与 TAA 那条的本质区别）
+	// velocity.frag → FSR **不吃 `historyValid`**，每帧照算照输出 ⟹ 重定位当帧不能靠
+	// 「丢弃历史」蒙过去。文件头第 4 条明写「本模块看不出 sceneMotion 里喂的是哪一份」，
+	// 这条就是那份配对的机器判据（正向半边；反向半边在下面同一条用例里）。
+	// 原点**贴着相机**（这就是 rebase 的实际形态：原点 = 相机位置 snap 到格点）。
+	// 于是两帧的相对世界坐标都是小量（浮点往返地板低），而它们之差 ΔO = (1,0,0) 是一个
+	// 真实的 snap 跳变量级（粒度 = 最粗级联纹素取 2 的幂 → rebaseSnapGranularity 的产物）。
+	// ⚠ 别把原点摆到离相机很远处：那会让「上一帧的世界坐标」本身变成大数，
+	//   `M⁻¹·M ≠ I` 的往返地板从 1e-2 px 抬到 2e-1 px（实测），判据就被浮点噪声吃掉了。
+	//   量级选择本身是判据成立的前提，不是随手取的。
+	const glm::dvec3 eyeAbs{600.0, 5.0, 0.0};  // 绝对层眼位（两帧同一个 = 静止相机）
+	const glm::dvec3 originPrev{600.0, 0.0, 0.0};
+	const glm::dvec3 originCur{601.0, 0.0, 0.0};  // ΔO = (1, 0, 0)
+	const double yaw = 0.3;
+	const double pitch = -0.2;
+	const RefCamera cur = RefCamera::fromYawPitch(eyeAbs - originCur, yaw, pitch);
+	const RefCamera prev = RefCamera::fromYawPitch(eyeAbs - originPrev, yaw, pitch);
+	const auto proj = glm::perspective(kFovY, kAspect, kNear, kFar);
+
+	VelocityFrame fr;
+	fr.curInvViewProj = glm::inverse(proj * cur.view());
+	fr.prevViewProj = proj * prev.view();
+	// 生产同形：taaSystem 喂给 scene data 的就是 motionWithOriginShift 的产物
+	fr.sceneMotion = motionWithOriginShift(glm::mat4{1.0f}, originPrev, originCur);  // = T(ΔO)
+	fr.extent = kExtent;
+	// 前提守卫（阳性锚点，rgl-test-discipline §锚点回读）：两帧的 view 矩阵**确实不同台**
+	// ——它们差 −ΔO。若两帧 view 相同，「速度恒 0」就是空判据（什么都没测到）。
+	CHECK(glm::length(glm::vec3(cur.view()[3]) - glm::vec3(prev.view()[3])) > 0.5f);
+
+	int checked = 0;
+	int naiveBad = 0;
+	double maxFixedPx = 0.0;
+	double maxNaivePx = 0.0;
+	for (double dx : {-8.0, -3.0, 0.0, 4.0, 9.0}) {
+		for (double dy : {-6.0, -2.0, 1.0, 4.0}) {
+			for (double dz : {6.0, 12.0, 25.0, 60.0}) {
+				const glm::dvec3 pointAbs = eyeAbs + glm::dvec3{dx, dy, -dz};
+				const glm::dvec3 worldCur = pointAbs - originCur;  // 本帧世界坐标
+				REQUIRE(cur.zc(worldCur) > 2.0 * kNear);
+				// ① 正解：复合了 ΔO ⟹ 静止判成静止（必须**有效**且亚像素）
+				const auto fixed = velocityOfPoint(fr, cur, worldCur);
+				REQUIRE(fixed.valid);
+				maxFixedPx = std::max(maxFixedPx, static_cast<double>(glm::length(fixed.velocityPx)));
+				// ② 反向半边：同输入但 sceneMotion 退回纯旋转比（ΔO 项摘掉）⟹ 必须判成在动。
+				//    两种表现都算：给出大速度，或干脆判无效（= 按无历史处理，同样是「没静止」）。
+				VelocityFrame naive = fr;
+				naive.sceneMotion = glm::mat4{1.0f};
+				const auto broken = velocityOfPoint(naive, cur, worldCur);
+				const double brokenPx =
+				    broken.valid ? static_cast<double>(glm::length(broken.velocityPx)) : 1e30;
+				if (!broken.valid || brokenPx > 1.0)
+					++naiveBad;
+				maxNaivePx = std::max(maxNaivePx, brokenPx);
+				++checked;
+			}
+		}
+	}
+	CHECK(checked == 80);   // 空转守卫
+	CHECK(naiveBad == 80);  // 每一个采样点都被错法判成「在动」（没有一个漏网）
+	// 三条互相成就的断言（rgl-test-discipline：容差必须远小于信号，且信号本身要可观测）：
+	//  ① 正解残差落在亚像素内 —— 否则「静止」在屏幕上其实还在动；
+	//  ② 错法是几十像素级的假运动 —— 否则「正解很小」可能只是整条链路恒 0；
+	//  ③ 两者差出 ≥ 3 个数量级 —— 判据取**比值**，不手调一个会被谈崩的噪声常数。
+	// 残差的来源 = `M⁻¹·M ≠ I` 的浮点往返（文件头坑 1），它随世界坐标量级走。
+	// 实测读数（本机、2026-10-25）：maxFixedPx = 1.0e-2、maxNaivePx = 7.1e2 ⟹ 比值 7e4。
+	CHECK(maxFixedPx < 0.05);  // px
+	CHECK(maxNaivePx > 20.0);  // px
+	CHECK(maxNaivePx > 1.0e3 * maxFixedPx);
+}
+
+TEST_CASE("批 4 镜像同步：移动原点 + 在自旋的场景 ⟹ 速度对上「只有场景在动」的闭式参考") {
+	// 上一条的自旋版：spin 在两帧之间变了（R ≠ I）**且**原点也动了。此时真值速度**不是** 0
+	// ——场景确实在转。期望值 = 显式两帧相机基 + 按**定义**算的两帧世界坐标（RefCamera 那条
+	// 独立路径），与被测的矩阵链不同式。
+	// 这条钉的是「ΔO 与 R 的复合顺序不能换」：平移项写成 ΔO（= 把 spin 的枢轴当成绕**渲染
+	// 原点**，批 3 否掉的形态）而不是 `R·O_t − O_{t−1}`，本条红（错法对照在同一循环里量）。
+	// 相机摆在绝对原点附近（离原点近 ⟹ 自旋扫过的量小、浮点往返地板低），
+	// 但两帧渲染原点不同 ⟹ ΔO 与「枢轴在绝对原点」的 (R−I)·O 项都是可测的量。
+	const glm::dvec3 eyeAbs{0.0, 2.0, 0.0};  // 绝对层眼位（两帧同一个 = 相机不动）
+	const glm::dvec3 originPrev{2.0, 0.0, -1.0};
+	const glm::dvec3 originCur{6.0, 0.0, 1.0};  // ΔO = (4, 0, 2)
+	const double yaw = 0.0;
+	const double pitch = -0.15;
+	const glm::mat4 spinCur = glm::rotate(glm::mat4{1.0f}, 0.05f, glm::vec3{0.0f, 1.0f, 0.0f});
+	const glm::mat4 spinPrev{1.0f};  // 上一帧没转 ⟹ R = inverse(spinCur)
+
+	// 按定义算世界坐标：绝对点 P 在第 t 帧的世界坐标 = spin_t·P − O_t。
+	// ⚠ 相机**不**跟着 spin 转（spin 是场景自旋，不是相机轨道）⟹ 眼位只减原点。
+	const auto refWorld = [](glm::dvec3 pointAbs, const glm::mat4& spin, const glm::dvec3& origin) {
+		const glm::dvec4 spun = glm::dmat4(spin) * glm::dvec4(pointAbs, 1.0);
+		return glm::dvec3(spun) - origin;
+	};
+	const RefCamera cur = RefCamera::fromYawPitch(eyeAbs - originCur, yaw, pitch);
+	const RefCamera prev = RefCamera::fromYawPitch(eyeAbs - originPrev, yaw, pitch);
+	const auto proj = glm::perspective(kFovY, kAspect, kNear, kFar);
+
+	VelocityFrame fr;
+	fr.curInvViewProj = glm::inverse(proj * cur.view());
+	fr.prevViewProj = proj * prev.view();
+	fr.sceneMotion =
+	    motionWithOriginShift(spinPrev * glm::inverse(spinCur), originPrev, originCur);
+	fr.extent = kExtent;
+	// 前提守卫：两帧相机基确实不同台（差 −ΔO）
+	CHECK(glm::length(glm::vec3(cur.view()[3]) - glm::vec3(prev.view()[3])) > 0.5f);
+
+	int checked = 0;
+	double maxWrongOrder = 0.0;
+	for (double dx : {-6.0, -2.0, 0.0, 3.0, 7.0}) {
+		for (double dy : {-3.0, 0.0, 2.0}) {
+			for (double dz : {8.0, 16.0, 34.0}) {
+				const glm::dvec3 pointAbs = eyeAbs + glm::dvec3{dx, dy, -dz};
+				const glm::dvec3 worldCur = refWorld(pointAbs, spinCur, originCur);
+				REQUIRE(cur.zc(worldCur) > 2.0 * kNear);
+				const auto got = velocityOfPoint(fr, cur, worldCur);
+				REQUIRE(got.valid);
+				// 闭式期望：prev 帧屏幕位置 − cur 帧屏幕位置（两帧世界坐标各按定义算）
+				const glm::dvec3 worldPrev = refWorld(pointAbs, spinPrev, originPrev);
+				const glm::dvec2 expect =
+				    (prev.uv(worldPrev) - cur.uv(worldCur)) * glm::dvec2{kExtent.x, kExtent.y};
+				INFO("dx/dy/dz = " << dx << "/" << dy << "/" << dz);
+				// 绝对容差 0.05 px = 浮点往返地板（`M⁻¹·M ≠ I`，文件头坑 1）；相对容差只管
+				// 大量程那一半。两者都远小于下面「错法差多远」的信号。
+				testing::expectNear(got.velocityPx.x, expect.x, 5e-3, 0.05);
+				testing::expectNear(got.velocityPx.y, expect.y, 5e-3, 0.05);
+				// 错法对照：平移项取 ΔO（= 把 spin 的枢轴当成绕**渲染原点**，批 3 否掉的形态）
+				VelocityFrame wrong = fr;
+				wrong.sceneMotion =
+				    glm::translate(glm::mat4{1.0f}, glm::vec3(originCur - originPrev));
+				const auto wrongGot = velocityOfPoint(wrong, cur, worldCur);
+				REQUIRE(wrongGot.valid);
+				maxWrongOrder = std::max(maxWrongOrder,
+				    static_cast<double>(glm::length(wrongGot.velocityPx - got.velocityPx)));
+				++checked;
+			}
+		}
+	}
+	CHECK(checked == 45);
+	// 前提守卫：两种复合顺序给出的速度**确实**分得开（否则本条抓不到任何东西）。
+	// 闭式：两者之差 = (R − I)·O_t，|O_t| ≈ 6、角 0.05 rad ⟹ ~0.3 世界单位 ⟹ 十几像素。
+	// 阈值只要求「远大于 0.05 px 的浮点地板」，不贴实测读数（换 libm / 换机器不假红）。
+	CHECK(maxWrongOrder > 1.0);
 }
 
 }  // namespace RGL

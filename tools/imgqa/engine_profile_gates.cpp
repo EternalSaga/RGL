@@ -190,4 +190,22 @@ void applyDeliveryEntitiesGate(const std::string& dir, const ProfileOpts& o)
             + "）——覆写打偏或被别处盖掉，拒绝在交付场景上跑靶判据");
     writeFile(dir + "/scene.lua", sc);
 }
+/**
+ * 第 9 个例外门（`shadow-edge-rebase`，相对坐标批 5 第 2 刀）：覆写交付配置 `runtime.lua` 的
+ * `coordinate.rebase`（渲染原点 rebase 总闸）。四格对拍的自变量**就是这一枚键**，
+ * 与第 6/7 枚同族同判据；门闭 = 第一行返回 = 逐位不变。
+ * ⚠ 本门只保证「写进去的是要的值」；引擎是否真按它跑由消费方查回显行
+ * `coordinate.rebase = true`（写这行的理由与位置 → `rgl/main_impl.cppm` 的 wireTuningContexts）。
+ */
+void applyCoordinateRebaseGate(const std::string& dir, const ProfileOpts& o)
+{
+    if (!o.overrideCoordinateRebase)
+        return;
+    std::string rt = readFile(dir + "/runtime.lua");
+    const std::string v = o.coordinateRebaseValue ? "true" : "false";
+    overrideValueInTable(rt, "runtime.lua", "coordinate", "rebase", v);
+    requireBlockKey(rt, "runtime.lua", "coordinate", "rebase", v);
+    writeFile(dir + "/runtime.lua", rt);
+}
+
 }  // namespace RGL::imgqa

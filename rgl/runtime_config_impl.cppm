@@ -54,6 +54,7 @@ constexpr std::string_view kRuntimeKeys[]{
 	"meshlet.mdi_shadow_direct",
 	"meshlet.shadow_proxy",
 	"meshlet.coplanar",
+	"coordinate.rebase",
 	"show_after",
 	"present_mode",
 	"ui_font",
@@ -436,6 +437,30 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 	readFloatKey(wet, "rough_hi", cfg.wet.roughHi);
 	readFloatKey(wet, "ripple_amp", cfg.wet.rippleAmp);
 	readFloatKey(wet, "puddle_freq_radii", cfg.wet.puddleFreqRadii);
+}
+
+/**
+ * `coordinate` 嵌套块解析（相对坐标计划批 3：原点 rebase 门）。只有一枚布尔
+ * `rebase`，缺块 / 缺键 = 保持结构体默认（`coordinateRebase = false` = 门关 =
+ * 渲染原点恒 dvec3(0) = 交付图逐位不变）。形态先例 = readFsrBlock（嵌套块 +
+ * readBoolKey，无扁平键双读兼容——两个真相源是本项目反复登记的反模式）。
+ *
+ * 🔴 与 ssr/wet 的**每帧调参块**不同，本块只有一枚**创建期**门：它不搬系数，
+ * 门经 main 启动期 emplace 进 `RenderOrigin` ctx，运行期由 projectionSystem 每帧写
+ * position（门关 = 恒 0；门开 = 相机位置 snap 到级联纹素粒度，批 5 第 1 刀）。
+ * 配置层**不拦** true（拦了 = 「写了 true 什么都不知道」的静默形态；交给
+ * system 点名本键的响亮失败——粒度 NaN 才抛，tests 钉住那条）。
+ * 键轨迹在块入口**无条件**记一枚键（覆盖率护栏输入，同 shadow applyTuningBlock 口径）。
+ * @param root runtime.lua 顶层表
+ * @param cfg 写入目标（缺块/缺键时原样保留默认）
+ * @param trace 键轨迹
+ */
+static void readCoordinateBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyTrace& trace) {
+	trace.read.emplace_back("coordinate.rebase");
+	sol::table coordinate = root["coordinate"];
+	if (!coordinate.valid() || !coordinate.is<sol::table>())
+		return;
+	readBoolKey(coordinate, "rebase", cfg.coordinateRebase);
 }
 
 /**
@@ -849,6 +874,9 @@ static void readWetBlock(const sol::table& root, RuntimeConfig& cfg, RuntimeKeyT
 		readFsrBlock(root, cfg, *trace);  // 批 14.6：FSR 调参收进嵌套块（无扁平键双读兼容）
 		readSsrBlock(root, cfg, *trace);  // 批 15.1：SSR 总开关（嵌套块，缺块/缺键 = false = 图里没有 ssr pass）
 		readWetBlock(root, cfg, *trace);  // 批 15.2：湿面参数（嵌套块，缺块/缺键 = WetTuning 默认；消费者 = deferred_geometry 湿面调制）
+		// 相对坐标批 3：coordinate.rebase 门（嵌套块，缺块/缺键 = false = 门关 = 逐位不变；
+		// 门开 = projectionSystem 每帧算动态原点，配置层不拦——理由 → readCoordinateBlock 注释）
+		readCoordinateBlock(root, cfg, *trace);
 		trace->read.emplace_back("show_after");
 		sol::optional<int> showAfter = root["show_after"];
 		if (showAfter)

@@ -269,25 +269,6 @@ void requireSignalGates(const std::vector<cv::Mat>& img, const std::vector<cv::M
         "  读数由**相对阈值**口径负责（shadow_edge_metric.h E1），「量不到」由闸门 ③ 点名。\n");
 }
 
-/// 闭式预判：板（视深 depth）在钉级/自有级 c 里**量得到影边**吗？两个结构条件：
-///  ① 在级 c 的视锥切片区 [splits[c₋₁], splits[c]] 内——片区外 ⟹ shadow.slang ④ 出块旁路
-///    返回全亮 ⟹ 无影可量；
-///  ② 离级 c 的**近平面 ≥ 1 枚本级纹素**——近平面是光空间正交深度范围的起点，深度精度
-///    在近平面附近最差；影缘落在近平面 ~1 纹素内时阴影图把影边糊成一条几十毫米宽的伪影
-///    平台（首跑实测 t003：影缘 9.089m 在级 3 近平面 9.078m 内 11mm < 24.2mm 纹素 ⟹
-///    cov 剖面呈 0.33→0.12→0 的双台阶，最大梯度落在伪影上）。这不是「量到错的边」就是
-///    「量不到」，两种都不该进判据 ⟹ 归入**预期**（表里标 ⊘），不是意外失踪。
-/// ⚠ 保守方向：片区外仍可能落进级 c 的外接球（球比片区胖，实测 f0 够到 5.9m 而
-/// splits[0]=3.75m）——那种格照样量得到、照常出数；本预判**只**用来给「量不到」分家
-/// （片区内且离近平面足够远却量不到 = 意外失踪 = 抛；否则 = 预期 = 标 ⊘）。
-bool plateMeasurableInCascade(const EdgeCascadeModel& m, double depth, int c)
-{
-    const double nearClip = c == 0 ? 0.0 : m.splits[c - 1];
-    if (depth < nearClip || depth > m.splits[c])
-        return false;  // 片区外：出块旁路
-    return depth - nearClip >= m.texelM[c];  // 近平面 1 纹素精度带内：伪影，不可量
-}
-
 /// 缺失分家（闸门 3 的输入）：unexpected = 抛集合（带原因）；expected = 表里标 ⊘ + 打印清单。
 struct MissingSplit {
     std::vector<std::tuple<std::string, std::string, std::string>> unexpected;
@@ -582,6 +563,17 @@ EdgeReadout buildReadout(const std::vector<cv::Mat>& cov, const EdgeTarget& targ
 }
 
 }  // namespace
+
+/// 闭式预判的两个结构条件全文（① 片区外 = 出块旁路 / ② 近平面 1 纹素精度带内 = 伪影平台）
+/// 与「为什么只用来给『量不到』分家」的完整论证 = `shadow_edge_ruler.h` 声明处 + 本文件头注
+/// 闸门 3。抬出匿名 namespace 的理由见声明处（`shadow-edge-rebase` 复用，不抄第二份）。
+bool plateMeasurableInCascade(const EdgeCascadeModel& m, double depth, int c)
+{
+    const double nearClip = c == 0 ? 0.0 : m.splits[c - 1];
+    if (depth < nearClip || depth > m.splits[c])
+        return false;  // 片区外：出块旁路
+    return depth - nearClip >= m.texelM[c];  // 近平面 1 纹素精度带内：伪影，不可量
+}
 
 int cmdShadowEdgeRuler()
 {

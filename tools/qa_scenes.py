@@ -2441,6 +2441,21 @@ def scene_shadow_grain() -> Scene:
 #   · 把某板间距压到 band+t+2·s 以下 → assert ⑧ 红（窗口吞邻影 = 双过零点）。
 #   · 把 H 改矮到带宽 < 6×texel → assert ⑩ 红（PCF 把窄带糊成矮包，50% 点不再是边）。
 #   · 把地面加起伏 → 本靶**写不出**起伏（quad 平面）——前提「接收面水平」是几何事实。
+#
+# ## 远工作点 `shadow_edge_rig_far`（2026-10-25 相对坐标批 5 第 2 刀加）
+# 出厂点 |camera| ≈ 8 m 时门关态精度本来就够 ⟹ 只验「rebase 开不破坏出厂点」会放行一个
+# 「线接完了但一分精度都没买到」的实现。远工作点 = 整靶沿世界 +X 平移 1e6 m（float32 的
+# ULP = 0.0625 m = 123 枚最粗级纹素），门关态在那里**应当**是坏的 —— 「开比关好」才是
+# rebase 的存在理由。仪器 = `imgqa shadow-edge-rebase`（四格对拍：{出厂, 远} × {门关, 门开}）。
+#   ⑪ 纯平移自证（构建期）：工作帧的 eye/tgt/sceneBounds/逐板 far·edge 必须恰等于零帧 +
+#      world_offset，且视深/预测级联/splits/texel 必须与零帧**相同**（它们是相对量）。
+#      前一半拦「真值漏挪」（漏挪 = 影边误差凭空多出 1e6 mm，而 ⑤–⑩ 一条都不红）；
+#      后一半拦「闭式解里藏着未声明的绝对坐标假设」（那才是靶撑不住平移，当场红）。
+#   · 变异红线：把 measure 里任意一处 `edge_u2w(..., off)` 的 `off` 删掉 → ⑪ 红；
+#     把 `EDGE_FAR_OFFSET` 改成非水平（动 y）→ ⑪ 的 far/edge 半边红（地面接收关系破了）。
+#   🔴 大坐标住在 **entity 的 position**，不烘进 GLB 顶点（顶点是 float32，烘进去 = 资产
+#      自己带 ±31 mm 误差，而 `toRelative` 减的是变换平移列、碰不到顶点 ⟹ 那 31 mm 任何
+#      原点方案都消不掉）。实测两种形态在 1e6 下都「阴影整块消失」，所以这不是绕开失效。
 
 EDGE_H = 0.17                              # 板高（米）；带宽 = 0.9014·H = 153 mm
 EDGE_SPACING_K = 1.6                       # 间距 = K·(带宽 + t_max + 40mm)（窗口隔离的闭式下界）
@@ -2514,17 +2529,45 @@ EDGE_PACK_STATS: dict = {
 }
 EDGE_N_PLATES = 8               # 板数 = 自变量档数（调色板 10 色 − 地面 = 上限 9）
 
+# 🔴 远工作点的世界平移（相对坐标批 5 第 2 刀）：**沿世界 +X 平移 1e6 m**。
+# 为什么必须有第二个工作点：rebase 的全部意义 = 「场景离世界原点很远时 float32 还够用」，
+# 而出厂点 |camera| ≈ 8 m 时门关态精度本来就够 ⟹ 只验「门开不坏」会放行一个
+# 「线接完了但一分精度都没买到」的实现。判据表的两条（不坏 / 变好）分别钉这两个工作点。
+#
+# 🔴 平移量住在 **entity 的 position（模型根变换）**，**不烘进 GLB 顶点**。理由不是省事：
+# 顶点缓冲是 float32，`float32(1e6 + 局部)` 的 ULP = 0.0625 m ⟹ **资产自己**就带
+# ±31 mm 的位置误差，而原点对它一无所知（`toRelative` 减的是变换的平移列，不是顶点）
+# ⟹ 烘进顶点的那 31 mm **任何原点方案都消不掉**，「变好」的读数会被它污染到与信号同量级。
+# 真实引擎也不会把 1e6 烘进顶点 —— 瓦片顶点住在瓦片局部空间，大坐标只住在 tile 原点。
+# ⟹ 本靶的 GLB 与出厂靶**逐字节相同**，差别只在 manifest（真值 + 机位 + worldOffset）。
+# 实测两条路都走了一遍：两种形态在 1e6 下都「阴影整块消失」（见下方 honesty ⑥），
+# 所以这条选择不是绕开失效，只是不让资产量化污染掉本该由 rebase 买单的那部分。
+EDGE_FAR_OFFSET = (1e6, 0.0, 0.0)
+ZERO3 = (0.0, 0.0, 0.0)
 
-def edge_u2w(u: float, v: float, y: float = 0.0) -> tuple:
-    """(沿光水平行进方向的坐标 u, 横向 v, 高 y) → 世界 (x, z 平面 + y)。"""
+
+def edge_u2w(u: float, v: float, y: float = 0.0, off: tuple = ZERO3) -> tuple:
+    """(沿光水平行进方向的坐标 u, 横向 v, 高 y) → 世界 (x, z 平面 + y)。
+
+    `off` = 整靶的世界平移（默认零）。🔴 **零偏移时一个算术都不多做**（不是 `+ 0.0`）：
+    加 0.0 会把 `-0.0` 归一成 `+0.0`，而 manifest 是逐字节比对的回归对象（默认零偏移
+    必须让现有靶逐字节不变）。
+    """
     offlen = math.hypot(*SHADOW_OFF)
     ux, uz = SHADOW_OFF[0] / offlen, SHADOW_OFF[1] / offlen
-    return (u * ux + v * (-uz), y, u * uz + v * ux)
+    x, zz = u * ux + v * (-uz), u * uz + v * ux
+    if off != ZERO3:
+        x, y, zz = x + off[0], y + off[1], zz + off[2]
+    return (x, y, zz)
 
 
 def edge_frame(thicknesses: list, cam_b: float, cam_y: float, tgt_frac: float,
-               fov: float) -> dict:
-    """靶的闭式几何帧：板布局 + 地面 + 机位 + 引擎级联公式链复刻。纯函数。"""
+               fov: float, off: tuple = ZERO3) -> dict:
+    """靶的闭式几何帧：板布局 + 地面 + 机位 + 引擎级联公式链复刻。纯函数。
+
+    `off` = 整靶世界平移（只作用于世界坐标；u/v 帧与全部几何关系平移不变，
+    所以级联闭式（near/far/splits/texel）与 `off` 无关 —— 这正是本靶能整体平移的依据）。
+    """
     offlen = math.hypot(*SHADOW_OFF)
     band = offlen * EDGE_H                       # 带宽 = 接触缘→远影缘（沿 u）
     lv = max(EDGE_LV_K * EDGE_H, 0.4)            # 长边
@@ -2545,8 +2588,8 @@ def edge_frame(thicknesses: list, cam_b: float, cam_y: float, tgt_frac: float,
     v_half = lv / 2 + max(0.4, 2 * EDGE_H)
     e0, e7 = plates[0]["edge"], plates[-1]["edge"]
     ut = e0 + tgt_frac * (e7 - e0)
-    eye = edge_u2w(cu, 0.0, cam_y)
-    tgt = edge_u2w(ut, 0.0, 0.0)
+    eye = edge_u2w(cu, 0.0, cam_y, off)
+    tgt = edge_u2w(ut, 0.0, 0.0, off)
     # ── 引擎公式链复刻（见头注「级联自证」；unionSphere = ecs_impl 同款）──
     def _union(a, b):
         ca, ra = a
@@ -2561,9 +2604,10 @@ def edge_frame(thicknesses: list, cam_b: float, cam_y: float, tgt_frac: float,
         k = (d + ra - rb) / (2 * d)
         return tuple(ca[j] + (cb[j] - ca[j]) * k for j in range(3)), (d + ra + rb) / 2.0
     cu_, cv_ = (u0 + u1) / 2.0, 0.0
-    acc = (edge_u2w(cu_, cv_)[0], 0.0, edge_u2w(cu_, cv_)[2]), math.hypot(u1 - cu_, v_half)
+    gc = edge_u2w(cu_, cv_, 0.0, off)
+    acc = (gc[0], gc[1], gc[2]), math.hypot(u1 - cu_, v_half)
     for p in plates:
-        c = edge_u2w(p["uc"], 0.0, EDGE_H / 2.0)
+        c = edge_u2w(p["uc"], 0.0, EDGE_H / 2.0, off)
         r = math.sqrt((p["t"] / 2) ** 2 + (EDGE_H / 2) ** 2 + (lv / 2) ** 2)
         acc = _union(acc, (c, r))
     sb_c, sb_r = acc
@@ -2599,7 +2643,7 @@ def edge_frame(thicknesses: list, cam_b: float, cam_y: float, tgt_frac: float,
     tl = math.sqrt(sum(x * x for x in tv))
     fwd = (tv[0] / tl, tv[1] / tl, tv[2] / tl)
     for p in plates:
-        e = edge_u2w(p["edge"], 0.0)
+        e = edge_u2w(p["edge"], 0.0, 0.0, off)
         p["depth"] = sum((e[k] - eye[k]) * fwd[k] for k in range(3))
         p["cascade"] = sum(1 for c in range(3) if p["depth"] > splits[c])
     return {"plates": plates, "band": band, "lv": lv, "spacing": spacing,
@@ -2652,21 +2696,42 @@ def _edge_slab(uc: float, t: float, h: float, lv: float, nv: int = 36, ny: int =
     return _merge_geoms(faces)
 
 
-def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -> Scene:
+def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False,
+                          world_offset: tuple = ZERO3) -> Scene:
+    """影边绝对尺靶。`world_offset` ≠ 0 = **远工作点**（`shadow_edge_rig_far`）：
+    整靶（板 + 地面 + 相机 + 目标点）沿世界 +X 平移，闭式真值跟着平移并写进 manifest。
+
+    🔴 两帧分工（本函数的全部复杂度都在这一条上）：
+      · `fr`  = **工作帧**（带偏移）→ 构建期断言 ⑤–⑩ 与 manifest 的 measure 块都吃它。
+        断言跑在偏移帧上才有意义：靶的闭式解里若藏着任何未声明的「世界坐标必须小」假设，
+        平移会当场把它抓红（而不是等运行期读出一堆假数）。
+      · `fr0` = **零帧**（不带偏移）→ 写进 GLB 的几何吃它。理由见 EDGE_FAR_OFFSET 头注：
+        大坐标只准住在 entity 的 position（模型根变换），不许烘进 float32 顶点缓冲。
+    `world_offset = 0` 时两帧是同一个对象 ⟹ 现有靶逐字节不变（回归护栏，cmp 证）。
+    """
     th = list(thicknesses if thicknesses is not None else EDGE_THICKNESSES)
-    fr = edge_frame(th, EDGE_SCAN_B if scan else EDGE_CAM_B,
-                    EDGE_SCAN_Y if scan else EDGE_CAM_Y,
-                    EDGE_SCAN_TGT_FRAC if scan else EDGE_CAM_TGT_FRAC,
-                    EDGE_SCAN_FOV if scan else EDGE_FOV)
+    cb, cy, tgf, fov = (EDGE_SCAN_B if scan else EDGE_CAM_B,
+                        EDGE_SCAN_Y if scan else EDGE_CAM_Y,
+                        EDGE_SCAN_TGT_FRAC if scan else EDGE_CAM_TGT_FRAC,
+                        EDGE_SCAN_FOV if scan else EDGE_FOV)
+    off = tuple(float(x) for x in world_offset)
+    moved = off != ZERO3
+    fr = edge_frame(th, cb, cy, tgf, fov, off)
+    fr0 = fr if not moved else edge_frame(th, cb, cy, tgf, fov)
     plates, band = fr["plates"], fr["band"]
     offlen = math.hypot(*SHADOW_OFF)
     texel_max = max(fr["texels"])
     colors = ["red", "magenta", "cyan", "orange", "green", "blue", "purple", "azure"]
 
+    stem = ("shadow_edge_scan" if scan else
+            "shadow_edge_rig_far" if moved else "shadow_edge_rig")
     s = Scene(
-        name="shadow_edge_rig" if not scan else "shadow_edge_scan",
+        name=stem,
+        out_name=stem,
         purpose="影边世界位置绝对尺：竖直板远侧影边 = 板远侧面 + |SHADOW_OFF|·H（闭式），"
-                "误差随板序 = 误差随距离/随级联，台阶 = 级联交界（imgqa shadow-edge-ruler）",
+                "误差随板序 = 误差随距离/随级联，台阶 = 级联交界（imgqa shadow-edge-ruler）"
+                + (f"；**远工作点** = 整靶沿世界 +X 平移 {off[0]:g} m（rebase 的「变好」"
+                   "工作点，imgqa shadow-edge-rebase）" if moved else ""),
         honesty=("闭式解成立的前提（破任何一条读到的是假数，方向注明）：① 接收面水平 "
                  "y=0（本靶唯一平地，无起伏）——接收面一斜，影边在世界 u 上的落点带 "
                  "Δz·cot 项，误差随板位系统漂移；② 板的远侧影缘**竖直且垂直于光的水平"
@@ -2686,7 +2751,15 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -
                   "免疫，它的自变量 = **级间影边分歧**（force_cascade 钉级，四臂 PNG 互不"
                   "相同）。bistro 上真正被 LOD 丢掉的是**贴在更大主体上的细附属结构**"
                   "（花箱/牛腿/窗棂：四级全 LOD 时近场 186 个小阴影丢 24 个），那是下一台"
-                  "「细附属结构」靶的自变量，不在本靶上找。"),
+                  "「细附属结构」靶的自变量，不在本靶上找。"
+                  + ("🔴 ⑥ **本靶是远工作点（`shadow_edge_rig_far`）**：整靶沿世界 +X 平移 "
+                     f"{off[0]:g} m，平移量住在 entity 的 position（**不烘进 GLB 顶点**，"
+                     "理由见 qa_scenes.py 的 EDGE_FAR_OFFSET 头注）。GLB 与出厂靶逐字节相同，"
+                     "本 manifest 的 measure 块（真值 / 机位 / sceneBounds）已跟着平移，"
+                     "并额外给 `worldOffset` 一枚键 = 仪器写进 entities 的平移量。"
+                     "闭式解的全部前提（①–④）与平移无关：级联 near/far/splits/texel 只吃"
+                     "相机到 SceneBounds 的**相对**距离，实测两帧的 cascadeModel 逐数相同。"
+                     if moved else "")),
         cameras={
             "edge": {"position": list(fr["eye"]), "target": list(fr["tgt"]),
                      "fovDegrees": fr["fov"],
@@ -2701,6 +2774,9 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -
             "edgeOffsetPerPlate": band,
             # ── 测量接口（imgqa shadow-edge-ruler 读本块，**不在 C++ 里重抄几何**）──
             "measure": {
+                # 🔴 只在远工作点写这一枚键：默认零偏移必须让现有靶的 manifest **逐字节不变**
+                # （它是回归对象），而多写一个键就多了 40 来个字节。仪器侧的读法 = 缺键即零。
+                **({} if not moved else {"worldOffset": list(off)}),
                 "u": [SHADOW_OFF[0] / offlen, SHADOW_OFF[1] / offlen],
                 "v": [-SHADOW_OFF[1] / offlen, SHADOW_OFF[0] / offlen],
                 "H": EDGE_H,
@@ -2717,14 +2793,14 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -
                     "name": f"plate_t{int(round(p['t'] * 1000)):03d}",
                     "thicknessM": p["t"],
                     "uCenter": p["uc"],
-                    "farFaceX": edge_u2w(p["far"], 0.0)[0],
-                    "farFaceZ": edge_u2w(p["far"], 0.0)[2],
-                    "trueEdgeX": edge_u2w(p["edge"], 0.0)[0],
-                    "trueEdgeZ": edge_u2w(p["edge"], 0.0)[2],
-                    "scanFromX": edge_u2w(p["edge"] - fr["s_up"], 0.0)[0],
-                    "scanFromZ": edge_u2w(p["edge"] - fr["s_up"], 0.0)[2],
-                    "scanToX": edge_u2w(p["edge"] + fr["s_dn"], 0.0)[0],
-                    "scanToZ": edge_u2w(p["edge"] + fr["s_dn"], 0.0)[2],
+                    "farFaceX": edge_u2w(p["far"], 0.0, 0.0, off)[0],
+                    "farFaceZ": edge_u2w(p["far"], 0.0, 0.0, off)[2],
+                    "trueEdgeX": edge_u2w(p["edge"], 0.0, 0.0, off)[0],
+                    "trueEdgeZ": edge_u2w(p["edge"], 0.0, 0.0, off)[2],
+                    "scanFromX": edge_u2w(p["edge"] - fr["s_up"], 0.0, 0.0, off)[0],
+                    "scanFromZ": edge_u2w(p["edge"] - fr["s_up"], 0.0, 0.0, off)[2],
+                    "scanToX": edge_u2w(p["edge"] + fr["s_dn"], 0.0, 0.0, off)[0],
+                    "scanToZ": edge_u2w(p["edge"] + fr["s_dn"], 0.0, 0.0, off)[2],
                     "depthM": p["depth"],
                     "cascadePredicted": p["cascade"],
                 } for p in plates],
@@ -2759,7 +2835,7 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -
         },
     )
     P = s.pieces.append
-    g = fr["ground"]
+    g = fr0["ground"]  # 🔴 零帧：GLB 顶点缓冲里**不许**出现 1e6（见 EDGE_FAR_OFFSET 头注）
     P(Piece("ground", quad(edge_u2w(g[0], g[2]),
                            (edge_u2w(g[1], g[2])[0] - edge_u2w(g[0], g[2])[0], 0.0,
                             edge_u2w(g[1], g[2])[2] - edge_u2w(g[0], g[2])[2]),
@@ -2777,7 +2853,7 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -
                        f"（选级逐图元 min(D, 自身最深级)）"))
 
     # ---- 构建期断言（编号对应头注「级联自证」；口头承诺不算数）----
-    tag = "shadow_edge_scan" if scan else "shadow_edge_rig"
+    tag = stem
     assert all(p["depth"] < fr["sf"] * 0.85 for p in plates), \
         f"{tag}: ⑤ 有影边视深落进末级淡出带（≥0.85·shadowFar={fr['sf']:.2f}）——" \
         f"depths={[round(p['depth'],2) for p in plates]}，cov 被 atten 吃掉读数偏受光"
@@ -2834,7 +2910,10 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -
     for p in plates:
         for wu in (p["edge"] - fr["s_up"], p["edge"] + fr["s_dn"]):
             for vv in (-fr["lv"] / 4, fr["lv"] / 4):
-                pr = _px(edge_u2w(wu, vv))
+                # 🔴 必须带 `off`：`_px` 里的 `fr["eye"]` 是**工作帧**，这里给零帧点 = 两点
+                # 差着 1e6 m ⟹ 投影直接飞出画外。远工作点首跑就是这条抓红的（assert ⑨
+                # 本来管的就是「窗口在不在画内」，它没坏，是靶的取景代码漏了帧口径）。
+                pr = _px(edge_u2w(wu, vv, 0.0, off))
                 assert pr is not None and 30 < pr[0] < EDGE_CAPTURE[0] - 30 \
                     and 30 < pr[1] < EDGE_CAPTURE[1] - 30, \
                     f"{tag}: ⑨ 窗口角点 (u={wu:.2f}, v={vv:.2f}) 投出画外/贴边——换机位重推"
@@ -2848,6 +2927,45 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False) -
     assert len(th) == EDGE_N_PLATES, f"{tag}: 板数必须 = {EDGE_N_PLATES}（调色板/判据窗口按它排）"
     assert all(0.001 <= t <= 0.5 for t in th), f"{tag}: 厚度档越出 1mm…500mm 物理量程"
     assert all(b > a for a, b in zip(th, th[1:])), f"{tag}: 厚度档必须严格升序（板序=自变量序）"
+    # ⑪ 远工作点的**纯平移自证**（只在 `world_offset` ≠ 0 时有内容可查）。
+    # 为什么必须有它，而不是「反正断言 ⑤–⑩ 都跑在工作帧上」：⑤–⑩ 全是**平移不变**的几何
+    # 关系，它们照旧绿只说明「靶的形状没变」，**说明不了「manifest 报的真值真的跟着挪了」**。
+    # 而仪器只信 manifest（manifest = 唯一读数接口）——真值漏挪 = 影边误差凭空多出 1e6 mm，
+    # 而 ⑤–⑩ 一条都不会红。这条断言把「平移是纯几何平移」从口头承诺变成构建期判据。
+    # 反向半边（最后一条）同样承重：级联闭式若真随世界平移漂了，说明公式链里藏着未声明的
+    # 绝对坐标假设 —— 那才是「靶的闭式解撑不住平移」，必须当场红，不许换仪器蒙过去。
+    if moved:
+        # 🔴 读回**已写进 manifest 的那些数**（`s.extra["measure"]`），不是重算一遍工作帧：
+        # 只比 fr 与 fr0 是恒真自检（两边都由同一个 edge_u2w 算出），实测抓不到「measure 块
+        # 里某一处 edge_u2w 漏传 off」这种真破口——变异「trueEdge 不随平移」在 fr 对账下全绿，
+        # 只有读回 manifest 才红。仪器的 G1 也抓它，但构建期就该拦（别把判据押在跑得到运行期）。
+        ms = s.extra["measure"]
+        for key, mk in (("eye", "position"), ("tgt", "target")):
+            w, mp = fr0[key], ms["camera"][mk]
+            assert all(abs(mp[i] - (w[i] + off[i])) < 1e-9 for i in range(3)), \
+                f"{tag}: ⑪ manifest 的 camera.{mk} 不是零帧 + world_offset（真值漏挪）"
+        bc0, mbc = fr0["sceneBounds"][0], ms["sceneBounds"]["center"]
+        assert all(abs(mbc[i] - (bc0[i] + off[i])) < 1e-9 for i in range(3)), \
+            f"{tag}: ⑪ manifest 的 sceneBounds.center 不是零帧 + world_offset"
+        for i, (mp, p0) in enumerate(zip(ms["plates"], fr0["plates"])):
+            for kx, kz, uq in (("farFaceX", "farFaceZ", p0["far"]),
+                               ("trueEdgeX", "trueEdgeZ", p0["edge"]),
+                               ("scanFromX", "scanFromZ", p0["edge"] - fr0["s_up"]),
+                               ("scanToX", "scanToZ", p0["edge"] + fr0["s_dn"])):
+                w = edge_u2w(uq, 0.0)
+                assert abs(mp[kx] - (w[0] + off[0])) < 1e-9 \
+                    and abs(mp[kz] - (w[2] + off[2])) < 1e-9, \
+                    f"{tag}: ⑪ manifest 的第 {i} 块板 {kx}/{kz} 不是零帧 + world_offset" \
+                       "（真值漏挪 = 仪器会读出 1e6 mm 的假误差）"
+        for i, (p0, p1) in enumerate(zip(fr0["plates"], plates)):
+            assert abs(p1["depth"] - p0["depth"]) < 1e-9 \
+                and p1["cascade"] == p0["cascade"], \
+                f"{tag}: ⑪ 第 {i} 块板的视深/预测级联随平移变了（视深是相机到影边的**相对**" \
+                "量，平移不变才对；变了 = 公式链里藏着未声明的绝对坐标假设）"
+        for c in range(4):
+            assert abs(fr["splits"][c] - fr0["splits"][c]) <= 1e-9 * abs(fr0["splits"][c]) \
+                and abs(fr["texels"][c] - fr0["texels"][c]) <= 1e-9 * abs(fr0["texels"][c]), \
+                f"{tag}: ⑪ 级联 splits/texel 随世界平移漂了（相对距离量，本应与 off 无关）"
     return s
 
 
@@ -2865,6 +2983,9 @@ SCENES = {
     "blend_lit_opaque": scene_blend_lit_opaque,
     "shadow_grain": scene_shadow_grain,
     "shadow_edge_rig": scene_shadow_edge_rig,
+    # 远工作点（相对坐标批 5 第 2 刀）：同一台靶整体沿世界 +X 平移 1e6 m，闭式真值跟着平移
+    # 并写进 manifest 的 measure 块。GLB 与出厂靶逐字节相同（大坐标只住 entity position）。
+    "shadow_edge_rig_far": lambda: scene_shadow_edge_rig(world_offset=EDGE_FAR_OFFSET),
 }
 
 

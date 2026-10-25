@@ -11,6 +11,7 @@ import rlstd;
 import rllogger;
 import vkerror;
 import camera;
+import lua_read;  // 批 0（相对坐标计划）：readVec3 的唯一一份实现（readCameraPlacement 内原本另有一份逐行同构的 lambda）
 
 namespace RGL {
 
@@ -239,23 +240,17 @@ std::vector<std::string> cameraConfigKnownKeys() {
 void readCameraPlacement(sol::table root, Camera& camera, CameraKeyTrace& trace) {
 	trace.read.emplace_back("position");
 	trace.read.emplace_back("target");
-	auto readVec3 = [&](const char* key) -> std::optional<glm::vec3> {
-		sol::table v = root[key];
-		if (v.valid() && v.is<sol::table>()) {
-			sol::optional<float> x = v[1];
-			sol::optional<float> y = v[2];
-			sol::optional<float> z = v[3];
-			if (x && y && z)
-				return glm::vec3(*x, *y, *z);
-		}
-		return std::nullopt;
-	};
-	if (auto pos = readVec3("position"))
-		camera.position = *pos;
-	if (auto tgt = readVec3("target"))
-		camera.target = *tgt;
+	// 批 0（相对坐标计划）：这里原本有一份与 scene_config_impl 逐行同构的 readVec3 lambda，
+	// 已收敛进 lua_read::readVec3（两份各改一遍 = 亲手制造两份新漂移）。
+	// 「缺字段 = 不改」的语义由 fallback = 现值承担（回落时写回同一个值，等价于不写）。
+	// position/target 是**绝对层**（dvec3 ↔ dvec3）：Lua 数字原样落 double，不经 float。
+	camera.position = readVec3(root, "position", camera.position);
+	camera.target = readVec3(root, "target", camera.target);
 
-	glm::vec3 fwd = camera.target - camera.position;
+	// 朝向反推仍在 float32（yaw/pitch 是 float 角度量，cameraAimAt 同约定）：绝对层分量
+	// 先收窄再相减 —— 收窄后减 = 改动前的 float 减法，逐位相同（先 double 减再收窄则是
+	// 两次舍入，会把 float32 的减法舍入丢掉，读数会漂）。
+	glm::vec3 fwd = glm::vec3(camera.target) - glm::vec3(camera.position);
 	if (glm::length(fwd) > 1e-6f) {
 		fwd = glm::normalize(fwd);
 		camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));

@@ -54,6 +54,23 @@ include(${PROJECT_SOURCE_DIR}/cmake/FindClangFormat.cmake)
 include(${PROJECT_SOURCE_DIR}/cmake/SlangFetch.cmake)
 rgl_fetch_slang()
 
+# 🔴 **GLM 宏清单的唯一来源**（住顶层：`rgl/` 与 `tests/` 是兄弟目录，子目录里 set 的变量
+# 互相看不见，清单就只能各抄一份——而 glm 是 header-only 模板，宏不一致**不会链接失败**，
+# 只会让某些 TU 静默不受管，正是最坏的那种失效）。引用方：`rgl/CMakeLists.txt`（rlbase
+# PUBLIC 逐层传递）、`tests/CMakeLists.txt`（rgl_test_support）。
+#   · DEPTH_ZERO_TO_ONE + RADIANS：深度/角度约定必须全项目一致。`frustumBoundingSphere`
+#     的近远反推、`projWithDepthRange` 全依赖它们；不一致 = 测试在测另一个函数。
+#   · EXPLICIT_CTOR（债-147）：禁 glm 隐式跨类型构造 ⟹ `dvec3 → vec3` 静默收窄、
+#     `vec4 → vec3` 静默降维、`make_mat4(double*)` 推出 `mat4x4<double>` 再静默收窄，
+#     全部变编译错误。**只拦隐式、不拦显式**（`glm::vec3(dv)` 这类显式 direct-init 不动）。
+#     引入理由不是审美：债-147 那类静默掉精度**对相对坐标批 3/4 的主判据「门关逐位不变」
+#     结构上失明**（门关态原点恒为 0，收窄不改变任何值 ⟹ 照样逐位绿），编译器是当时唯一
+#     还活着的防线。实测成本：生产 8 处 / 测试 0 处（2026-10-25 全量编译读数）。
+set(RGL_GLM_DEFINES
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_RADIANS
+    GLM_FORCE_EXPLICIT_CTOR)
+
 add_subdirectory(rlstd)
 add_subdirectory("./logger")
 # EXCLUDE_FROM_ALL（2026-09-02 编译提速）：反射产物（*_reflection.json +

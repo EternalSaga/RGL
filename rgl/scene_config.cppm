@@ -62,7 +62,11 @@ export struct EnvironmentConfig {
 export struct SceneEntityDesc {
 	std::string type = "model";
 	std::string file;
-	glm::vec3 position{0.0f};
+	// position 是**绝对层**（double，相对坐标计划批 2 第一刀）：Lua 里那个数字原样存
+	// （sol2 的 lua_Number 就是 double，读成 float 才是多舍了一遍），烘进
+	// makeRootTransform 的 float 矩阵前才收窄。
+	// rotation/scale **不在**绝对层——欧拉角与均匀缩放是方向/尺度量，平移无关，保持 float。
+	glm::dvec3 position{0.0, 0.0, 0.0};
 	glm::vec3 rotation{0.0f};
 	float scale = 1.0f;
 };

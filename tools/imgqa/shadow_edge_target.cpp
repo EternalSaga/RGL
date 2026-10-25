@@ -97,17 +97,16 @@ EdgePlate parseEdgePlate(const json& p, const std::array<double, 2>& vv, double 
  * stepM / vLines（沿 v 的平行子线）；u/v 单位向量在 measure 顶层；cascadeModel 块是
  * 生成器的闭式预测（对账输入，不是求值输入）。
  */
-EdgeTarget loadEdgeTarget()
+EdgeTarget loadEdgeTarget(const std::string& stem)
 {
     const fs::path dir = fs::path(projectRoot()) / "build/rgl/models";
-    const std::string stem = kEdgeGlbStem;
     const fs::path glb = dir / (stem + ".glb");
     const fs::path manifestPath = dir / (stem + ".manifest.json");
     const fs::path meshlets = dir / (stem + ".glb.meshlets.bin");
     if (!fs::exists(glb))
         throw std::runtime_error("靶不存在: " + glb.string()
-            + "\n  生成：python3 tools/qa_scenes.py --only shadow_edge_rig --out build/rgl/models"
-              "（缺靶必须 FAIL，不许 SKIP）");
+            + "\n  生成：python3 tools/qa_scenes.py --only " + stem
+              + " --out build/rgl/models（缺靶必须 FAIL，不许 SKIP）");
     if (!fs::exists(manifestPath))
         throw std::runtime_error("靶的 manifest 不存在: " + manifestPath.string()
             + "\n  只有 .glb 没有 manifest ⟹ 测量接口（measure 块）没有来源，拒绝猜几何");
@@ -135,6 +134,11 @@ EdgeTarget loadEdgeTarget()
     t.camera.fovDegrees = ms.at("fovDegrees").get<double>();
     t.boundsCenter = asVec3(ms.at("sceneBounds").at("center"), "measure.sceneBounds.center");
     t.boundsRadius = ms.at("sceneBounds").at("radius").get<double>();
+    // `worldOffset` **缺键 = 零**（出厂靶的 manifest 里没有这一枚键，它必须逐字节不变）。
+    // 缺键与显式写零在语义上同义（不平移），所以这里允许缺键；但**给了就必须是三元数组**
+    // （asVec3 的形状守卫），形状错了不许静默当零——那会把远工作点悄悄读成出厂工作点。
+    if (ms.contains("worldOffset"))
+        t.worldOffset = asVec3(ms.at("worldOffset"), "measure.worldOffset");
     const auto u = asVec2(ms.at("u"), "measure.u");
     const auto vv = asVec2(ms.at("v"), "measure.v");
     const double ulen = std::hypot(u[0], u[1]);

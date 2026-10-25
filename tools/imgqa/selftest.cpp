@@ -273,8 +273,13 @@ void testJudgmentFamilies(Checker& c)
     // append 循环后「两臂不同」那条照旧绿（BLEND 臂露出背景板 vs OPAQUE 臂的不透明 pane），
     // 详见 judgments_table_blend_lit.cpp 的 blend-lit-visible 正文。
     // 与 blend-sort 四条的分工 = 那边证「画对了」（有闭式），这边证「**有**贡献」（无闭式，刻意）。
+    // 86 → 89：`shadow-edge-rebase`（相对坐标批 5 第 2 刀，四格对拍 = 2 工作点 × 2 开关态）
+    // 三条：J-R1 出厂点「不坏」/ J-R2 远点「变好」🔴（rebase 的存在理由）/ J-R3 阴影在场性。
+    // J-R3 不是想到的，是**实测跑出来的**：远点门关态读出的不是「影边摆偏」而是「影边根本不
+    // 存在」（csm 臂与 none 臂逐位相同），而那种格子在误差表上是一个 NaN，与「阴影对但量不出」
+    // 同形 ⟹ 必须有一条独立判据在这里分家（详见 judgments_table_edge.cpp 的 rebase 段）。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 86（族拆分最容易掉条目）", all.size() == 86, std::to_string(all.size()));
+    c.chk("判据总数 == 89（族拆分最容易掉条目）", all.size() == 89, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {

@@ -23,10 +23,23 @@ namespace RGL {
 /**
  * 实体变换（local/world 矩阵，列主序）。
  * Phase 2 无层级嵌套：world = local（注册时写入）；父子关系见 Relationship。
+ *
+ * ## absolute 是**绝对层**（double）= 世界矩阵唯一真相源；world 由它派生
+ * `absolute` = 本实体世界矩阵在绝对坐标系下的值（相对坐标计划批 3 第一刀，
+ * docs/相对坐标地基_plan.md §2.1/§3）：origin rebasing 要吃的就是它，float32 存世界
+ * 矩阵既存不下也减不掉原点。生产点写 `world = glm::mat4(absolute)`（派生就是这一行，
+ * 消费点仍只读 world）——派生点不唯一，「绝对层」就只是又一份副本（AGENTS 哲学第 1 条）。
+ * 当前值 = 现有 float 合成的**无损提升**（float→double 精确）；生成端改在 double 域合成
+ * → main_scene.cppm 的 makeRootTransform 处注释（批 3 第二刀，允许图变）。
+ *
+ * ## local 保持 float（不是漏改）
+ * 节点局部 = 资产局部空间（glTF node TRS，量级 ~1e0），与世界原点无关，float32 够用；
+ * 顶点/蒙皮数据同在资产局部空间（docs/相对坐标地基_plan.md §4「划出去不做的」）。
  */
 export struct Transform {
-	glm::mat4 local{1.0f};
-	glm::mat4 world{1.0f};  // Phase 2 无层级嵌套：world = local（注册时写入）
+	glm::mat4 local{1.0f};       ///< 节点局部矩阵（资产局部空间，float 够用，理由见结构注释）
+	glm::mat4 world{1.0f};       ///< 世界矩阵（float 落库）= glm::mat4(absolute) 的派生值；Phase 2 无层级嵌套：world = local（注册时写入）
+	glm::dmat4 absolute{1.0f};   ///< 绝对层世界矩阵（double）= 真相源；批 3 起 world 由它派生，生产点必须填它
 };
 
 /**
@@ -211,7 +224,10 @@ export struct Light {
 	float intensity = 3.0f;
 	glm::vec3 ambient{0.03f, 0.03f, 0.035f};   // 场景共享 ambient（仅 index 0 生效，进 scene data @36）
 	// Phase 7 D3 点光扩展（定向光默认 type=0 时 position/range 不使用）
-	glm::vec3 position{0.0f};
+	// position 是**绝对层**（double，相对坐标计划批 2 第一刀）：与相机/实体位置同一层，
+	// 写进 GpuLight（float 契约，反射生成物钉布局）前在消费处收窄。
+	// direction/color/ambient **不在**绝对层——方向量与颜色平移无关，保持 float。
+	glm::dvec3 position{0.0, 0.0, 0.0};
 	float range = 0.0f;
 	uint32_t type = 0;                          // 0=定向，1=点光
 };
@@ -487,24 +503,53 @@ export struct ShadowVolume {
 /**
  * 建一级阴影的光空间正交盒。
  *
- * **texel 吸附是世界锚定的**（5a-8b 重写）：把切片球心在固定光基
- * （s = d×up 归一、u = s×d、d = 光向——三个轴只依赖太阳方向，与世界原点一样恒定）下的
- * 三坐标各 round 到 `2r/mapSize` 格点，再建盒。此前版本吸附的是"中心在自己盒里的 NDC"
- * ——恒等于 (0,0)——等于没吸：盒跟着视锥球心走，**相机原地转视角**时球心
+ * ## texel 吸附锚在哪个空间（相对坐标批 5 第 1 刀改的就是这句话的适用范围）
+ * 把切片球心在固定光基（s = normalize(d×up)、u = s×d、d = 归一化光向——三轴只依赖太阳方向，
+ * 与世界原点一样恒定）下的三坐标各 round 到 `2r/mapSize` 格点，再建盒。此前版本吸附的是
+ * "中心在自己盒里的 NDC"——恒等于 (0,0)——等于没吸：盒跟着视锥球心走，**相机原地转视角**时球心
  * （= eye + forward·zc）绕 eye 划半径 zc 的弧，一次扫过几十个 texel → 纹素格整体
  * 在世界里滑 → 影子随视角游动（5a-8 只修掉了平移分量，旋转分量被这条恒等吸附掩盖）。
  * 三轴全吸（含光轴 z）：z 不吸则 eyeOffset/tMin/tMax 连滑 → 深度量化格漂 → 自阴影
- * 边缘同一步伐呼吸。吸附后体参数只经 `c'` 依赖姿态，而 `c'` 在格内恒定 → 完全恒定。
+ * 边缘同一步伐呼吸。吸附后体参数只经盒心依赖姿态，而盒心在格内恒定 → 完全恒定。
+ *
+ * 🔴 但 5a-8b 那句「**世界**锚定」只在门关态（原点恒 0）成立：它吸的是**相对**球心，
+ * 盒心 = `Σ round(dot(c_rel,a)/g)·g·a`，渲染原点跨一格时 `dot(ΔO,a)` 不是 `g` 的整数倍
+ * （出厂四级 `G/g` = 7.72/3.78/2.29/1.13，全非整数）⟹ 整张图集随原点**刚性平移最多半纹素**
+ * （实测 0.4586 纹素 = 1.58 mm，跨格频率比债-139 已修的跨档高 490 倍）。门关态看不出这件事，
+ * 因为那里 `c_rel == c_abs`——「世界锚定」当时**恰好**成立（AGENTS 哲学第 1 条点名的形态：
+ * 一个看着像在消费单一来源的值，其实吃的是恰好重合的副本）。
+ * 门开分支因此把每根轴的吸附值再减掉 `dot(origin, a)`，把盒心搬回「跟着几何走」：
+ * ```
+ * 图集坐标 = dot(p_rel,a) − ( round(dot(c_rel,a)/g)·g − dot(origin,a) )
+ *          = dot(p_abs,a) − round(dot(c_rel,a)/g)·g        ← 原点被消掉
+ * ```
+ * ⚠ 消掉原点的是**减掉 `dot(origin,a)` 这一步**，但吸附的输入**也得换成绝对球心**
+ * `c_abs = double(c_rel) + origin`（它由本函数的两个既有入参现算，**不是一条新数据通路**）。
+ * 只做减法、吸附仍吃相对球心的写法跨格跳变**同样是 0**（跳变对它结构性失明：两种盒心只差
+ * 整数个纹素），但它把盒心放到 `c_rel − O` —— 平移量 = |O| 而不是半纹素，超出盒半径就整批
+ * 丢阴影。出厂工作点实测：少加 origin 那版 ⟹ 门关 vs 门开差 65285 像素 / 169 LSB。
+ * 「整纹素平移无害」的前提是平移量 ≪ 盒半径，这条前提在 |O| 上不去的时候不成立。
+ *
+ * ## 🔴 门关（origin 逐位为 0）走**原式早退**，不是「加个 0」
+ * 门开分支的吸附在 double 域做、盒心按 `Σ q_a·a` 重建，与上面那行 float 原式**数学恒等但
+ * 逐位不同**（实测漂 2.36e−4 纹素；换盒心重建式躲不掉，根源是数值域）。⟹ **交付图的逐位
+ * 不变靠的是这条早退分支，不是靠数学恒等**（先例 = coordinate_rebase::motionWithOriginShift；
+ * 判据 = tests/test_shadow_texel_absolute.cppm「门关逐位不变（函数级）」那条）。
  *
  * @param light 主光（取 direction 定光空间基；只取方向，位置由 eyeOffset 定）
- * @param slice 该级子视锥的包围球（定 XY 半宽与受光面深度范围 [−r, r]）
- * @param casterMin 全部投影体世界 AABB 的最小角（定 Z 下界）
- * @param casterMax 全部投影体世界 AABB 的最大角（定 Z 上界）
+ * @param slice 该级子视锥的包围球（定 XY 半宽与受光面深度范围 [−r, r]；**相对**渲染原点）
+ * @param casterMin 全部投影体世界 AABB 的最小角（定 Z 下界；与 slice 同空间 = 相对）
+ * @param casterMax 全部投影体世界 AABB 的最大角（定 Z 上界；与 slice 同空间 = 相对）
  * @param mapSize 该级图块边长（texel 吸附格距 = 2r/mapSize）
+ * @param origin **本消费者（渲染管线）自己携带的渲染原点**（绝对层，与 slice/caster 的相对
+ *        空间配对；它是**参数不是全局单例** → docs/相对坐标地基_plan.md §2.1）。
+ *        🔴 逐位为 0 = 门关 = 走上面那条原式早退；非零 = 门开 = 三轴各减 dot(origin,a)。
+ *        传 0 与「不传」在门关**逐位相同**，但门开态漏传不会有任何东西红 —— 故无默认值。
  * @return 光空间体（slice.radius ≤ 0 时退化为零半径体 = 谁都进不来 = 无阴影）
  */
 export inline ShadowVolume buildShadowVolume(const Light& light, const Bounds& slice,
-	const glm::vec3& casterMin, const glm::vec3& casterMax, uint32_t mapSize) {
+	const glm::vec3& casterMin, const glm::vec3& casterMax, uint32_t mapSize,
+	const glm::dvec3& origin) {
 	const float r = slice.radius;
 	if (r <= 0.0f)
 		return ShadowVolume{glm::mat4{1.0f}, glm::mat4{1.0f}, 0.0f, 0.0f, 0.0f, 0.0f};
@@ -515,10 +560,36 @@ export inline ShadowVolume buildShadowVolume(const Light& light, const Bounds& s
 	const glm::vec3 s = glm::normalize(glm::cross(d, up));
 	const glm::vec3 u = glm::cross(s, d);
 	const float texel = 2.0f * r / static_cast<float>(mapSize);
-	// 三轴 round 到格点，位移 ≤ 半 texel（±pad r·0.02 远大于它，覆盖性不破）。
-	const glm::vec3 snappedCenter = slice.center + s * (std::round(glm::dot(slice.center, s) / texel) * texel - glm::dot(slice.center, s))
-		+ u * (std::round(glm::dot(slice.center, u) / texel) * texel - glm::dot(slice.center, u))
-		+ d * (std::round(glm::dot(slice.center, d) / texel) * texel - glm::dot(slice.center, d));
+	glm::vec3 snappedCenter;
+	// 门关判据取「三个分量逐位为 0」而不是 `== dvec3(0)`：语义就是「没有原点要减」，
+	// 与 motionWithOriginShift 的早退同形（−0.0 走原式也逐位正确，原式本就不含原点）。
+	if (origin.x == 0.0 && origin.y == 0.0 && origin.z == 0.0) {
+		// 三轴 round 到格点，位移 ≤ 半 texel（±pad r·0.02 远大于它，覆盖性不破）。
+		// 🔴 下面三行是**改动前的原式，逐字未动**（含 `slice.center` 直接取用、不做局部量）：
+		// 「门关逐位不变」这条判据钉的就是它，任何"顺手整理"都会让那条判据失去意义。
+		snappedCenter = slice.center + s * (std::round(glm::dot(slice.center, s) / texel) * texel - glm::dot(slice.center, s))
+			+ u * (std::round(glm::dot(slice.center, u) / texel) * texel - glm::dot(slice.center, u))
+			+ d * (std::round(glm::dot(slice.center, d) / texel) * texel - glm::dot(slice.center, d));
+	} else {
+		// 门开：三根光基轴**各**吸到格点、各减掉 dot(origin, a)（🔴 一根都不能漏——漏掉的那
+		// 一轴图集坐标仍随原点滑；主 agent 独立验红用的「只漏 d 轴」这条弱化变异实测红 4 条）。
+		// 🔴 吸附的输入必须是**绝对**球心 `c_abs = double(c_rel) + origin`，不是相对球心。
+		// 少加这个 origin 的写法（`round(dot(c_rel,a)/g)·g − dot(O,a)`）**跨格跳变同样是 0**
+		// ——跳变这个量对它是瞎的（两种写法的盒心都落在同一族格线上，只差整数个纹素），但它
+		// 把盒心放到了 `c_rel − O`：出厂工作点 |O| ≈ 1.6 m 而级 0 的盒半宽只有 0.26 m ⟹
+		// 盒整个离开场景，阴影直接消失（实测：那样写 ⟹ 门关 vs 门开差 65285 像素 / 169 LSB）。
+		// 「整纹素平移无害」只在**平移量小于盒半径**时成立，而这里平移量 = |O|。
+		// 吸附在 **double 域**做：格距 g 出厂四级为 5e-4…3.5e-3 m，而 |origin| 到 1e6 量级时
+		// float32 的 ULP = 0.0625 m = 123 个纹素 ⟹ float 域连「吸到哪条格线」都表示不出
+		// （落点硬界实测 double 0.483 / float 141.3 纹素 → tests/test_shadow_texel_absolute.cppm）。
+		const glm::dvec3 axes[3] = {glm::dvec3{s}, glm::dvec3{u}, glm::dvec3{d}};
+		const glm::dvec3 cAbs{glm::dvec3{slice.center} + origin};
+		const double g = static_cast<double>(texel);
+		glm::dvec3 center{0.0, 0.0, 0.0};
+		for (const glm::dvec3& a : axes)
+			center += a * (std::round(glm::dot(cAbs, a) / g) * g - glm::dot(origin, a));
+		snappedCenter = glm::vec3{center};  // 落 float 才进得了 glm::lookAt（ShadowVolume 是 float）
+	}
 	// 沿光轴取并：受光面占 [−r, r]（切片球），投影体占其 AABB 在光轴上的投影。
 	// pad 一点余量，避免投影体正好压在近/远平面上被裁掉。
 	// **踩过的坑**（5a-8b）：把"世界 AABB 最小角"当光轴最远点——`dot(casterMin, d)` 取到
@@ -713,12 +784,26 @@ export struct ViewProjection {
  *
  * 帧序（同一帧内）：① 用 prev* 算本帧 scene data 载荷 + 历史可用性 → ② 把本帧值写回
  * prev* 供下一帧。跳切/首帧/resize ⇒ `historyValid = false`（shader 走逐位旁路）。
+ *
+ * ## 🔴 跨帧状态里只有 `prevOrigin` 是「坐标系」而不是「内容」（批 4 第一刀）
+ * 其余 prev* 记的都是上一帧**渲染了什么**（矩阵、位移、位姿）；`prevOrigin` 记的是上一帧
+ * **在哪个空间里渲染**。这件事之所以单独拎出来写：原点一旦移动，上一帧的世界坐标与这一帧
+ * 的世界坐标**不是同一个空间**，所有「世界坐标差 = 运动」的判据都会被骗（静止被判成运动）。
+ * 正解 = 把两帧原点之差精确复合进 `payloadMotion`（闭式推导与三个退化档
+ * → coordinate_rebase.cppm::motionWithOriginShift），`payloadPrevViewProj` **不**动。
+ *
+ * 帧序契约（批 4 第一刀立、批 5 第 1 刀改写，改 systems 列表前必读）：原点的生产者是
+ * `projectionSystem`（原来那个独立的 `originSystem` 已删——粒度要吃 near/far，而 near/far
+ * 只在 projection 里算），`taaSystem` 排在它之后 ⇒ taaSystem 同帧内**同时**看得到
+ * 本帧原点（RenderOrigin::position，projectionSystem 刚写）与 `prevOrigin`（它自己上帧尾写）。
+ * 两者缺一，ΔO 就算不出来 —— 所以 `projection` 必须始终排在 `taa` 之前。
  */
 export struct TaaState {
 	// ── 簿记（上一帧位姿，taaSystem 帧尾推进）──
 	glm::mat4 prevViewProj{1.0f};  ///< 上一帧**抖动后** proj·view（与历史图内容同口径）
 	glm::vec2 prevContentShift{};  ///< 上一帧**内容位移** c_{t−1}（像素；= 历史图自己那帧的位移）
 	glm::mat4 prevSpin{1.0f};      ///< 上一帧 SceneSpin::matrix
+	glm::dvec3 prevOrigin{};       ///< 上一帧的**渲染原点**（绝对层）；门关恒 (0,0,0) ⇒ ΔO 恒 0
 	glm::vec3 prevCamPos{};
 	glm::vec3 prevForward{0.0f, 0.0f, -1.0f};
 	glm::ivec2 prevExtent{0, 0};   ///< resize 检测（RT 重建 ⇒ 历史作废）
@@ -727,8 +812,36 @@ export struct TaaState {
 	//    既当载荷又当簿记，就会把「谁先读谁后推进」写成隐式时序耦合）──
 	glm::mat4 payloadPrevViewProj{1.0f};
 	glm::vec2 payloadPrevContentShift{};  ///< 本帧载荷 = 上一帧内容位移（历史基空间修正用）
-	glm::mat4 payloadMotion{1.0f};  ///< prevSpin·inverse(curSpin)（关补偿 = 单位阵）
+	glm::mat4 payloadMotion{1.0f};  ///< 自旋比 `prevSpin·inverse(curSpin)` **复合两帧原点差**
+	                                ///< （门关 = 逐位退化成那条纯旋转式子）
 	bool historyValid = false;      ///< 本帧历史可否复用（false = shader 输出本帧）
+};
+
+/**
+ * 渲染原点（registry context，相对坐标计划批 3；main 启动期 emplace 配置门，
+ * **projectionSystem**（ecs.cppm）每帧写 position，各消费者每帧经 coordinate_rebase 的
+ * toRelative 读它：renderListSystem（实例矩阵，批 3；eyePos/灯位置，批 4 第二刀；
+ * 阴影盒心回减，批 5 第 1 刀）、projectionSystem（view，批 4 第二刀）、
+ * taaSystem（跨帧原点差，批 4 第一刀）。
+ *
+ * ## 这是「每个坐标消费者各自携带的一个参数」，不是引擎级全局单例
+ * 裁决出处 = docs/相对坐标地基_plan.md §2.1：原点不是「一个值」，而是每个坐标消费者
+ * 各自携带的参数。本类型是**渲染管线这一个消费者**的原点声明加它的配置门；
+ * 物理 / 体积光 / 粒子模拟空间将来各自声明自己的原点（新系统 = 新增一份原点声明），
+ * **不改本类型、也不与本实例共享**。把它读成「引擎的世界原点」就是用错了它。
+ *
+ * ## 门关（enabled = false，默认）⟹ position 恒 (0,0,0)
+ * toRelative 在零原点是恒等（tests/test_coordinate_rebase.cppm 钉死）⟹ 减法恒等，
+ * 交付图逐位不变。门开（批 5 第 1 刀起能跑）= position = 相机位置 snap 到本帧级联纹素
+ * 粒度；粒度算不出来（NaN）时 projectionSystem 抛 std::runtime_error 拒跑，**不会**把
+ * 「配置开了」静默按门关处理（NaN 原点会让相机凭空消失）。
+ * ⚠ snap 粒度**不进本结构**：它每帧由 `rebaseOriginGranularity` 现算、只有一个消费者
+ * （projectionSystem 自己），存进 ctx = 给「谁写的」多开一个可错点。粒度 = 最粗消费者
+ * 纹素尺度这条约束（债-85 ②）的判据在 render_list_impl 的接缝与它的单测里。
+ */
+export struct RenderOrigin {
+	glm::dvec3 position{};  ///< 当前渲染原点（绝对层坐标）。门关（默认）⟹ 恒 (0,0,0)
+	bool enabled = false;   ///< 配置门 = configs/runtime.lua `coordinate.rebase`（默认 false = 门关）
 };
 
 }  // namespace RGL

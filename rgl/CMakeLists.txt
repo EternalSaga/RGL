@@ -246,11 +246,13 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/pass_vocabulary.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/taa_jitter.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/velocity_field.cppm"   # 批 14.4：逐像素速度场纯函数层（rlbase，FSR 硬前置）
+    "${CMAKE_CURRENT_SOURCE_DIR}/coordinate_rebase.cppm"  # 债-85 批 1 护栏：原点 rebase 距离余量 / snap 粒度纯函数（零运行期消费者是故意的，判据 → docs/相对坐标地基_plan.md §3）
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_context.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/camera_config_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/scene_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/lua_read.cppm"   # 批 0（相对坐标计划）：配置层公共 Lua 三元表读取，scene_config_impl 与 camera_config_impl 共用那一份
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics.cppm"
@@ -524,10 +526,11 @@ target_sources(rlbase PUBLIC
     FILES ${RGL_BASE_MODULE_SOURCES}
 )
 target_compile_features(rlbase PUBLIC cxx_std_23)
-# GLM 深度约定必须与上层一致（zero-to-one + 弧度）：frustumBoundingSphere 的近远
-# 反推、projWithDepthRange 全依赖这两个宏。不一致 = 测试在测另一个函数。
+# GLM 宏清单的唯一来源在**顶层 CMakeLists.txt** 的 `RGL_GLM_DEFINES`（含引入理由与实测成本，
+# 债-147）。此处**只引用不重列**——重列就是第二份会漂的副本，而宏不一致对 header-only 的
+# glm 不报错、只让某些 TU 静默不受管。
 # PUBLIC = 沿 rlbase→rlgfx→rlscene→rlframe 逐层传递。
-target_compile_definitions(rlbase PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
+target_compile_definitions(rlbase PUBLIC ${RGL_GLM_DEFINES})
 target_include_directories(rlbase SYSTEM PUBLIC ${TINYGLTF_INCLUDE_DIRS})
 target_link_libraries(rlbase
     PUBLIC
@@ -620,7 +623,7 @@ find_package(Vulkan REQUIRED)
 
 # rlstd/rllogger/glm/EnTT/sol2/lua 经 rlcore 的 PUBLIC 传递；此处只补 Vulkan 侧的直接依赖
 target_link_libraries(rgl PRIVATE Vulkan::Vulkan)
-target_compile_definitions(rgl PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
+target_compile_definitions(rgl PRIVATE ${RGL_GLM_DEFINES})  # 清单唯一来源见 rlbase 处（债-147）
 # Phase 10 批 10.3 配置热重载：监视**源树** configs/（D7——build 副本会被 just build
 # 内容比对静默覆盖复原，监听它无意义）；运行期路径不存在 = warn + 关（优雅降级）
 target_compile_definitions(rgl PRIVATE "RGL_SOURCE_CONFIG_DIR=\"${PROJECT_SOURCE_DIR}/configs\"")

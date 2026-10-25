@@ -32,6 +32,11 @@ using testing::expectNear;
 /** 属性/网格测试的种子（写死）。 */
 constexpr uint32_t kSeed = 20261001u;
 
+/** 门关原点（批 4 第二刀：cameraView 新增 origin 参数；本文件全部组都是**门关语义**，
+ *  传 dvec3(0) = 不 rebase = 与签名改动前逐位相同的调用。门开态的判据在
+ *  tests/test_view_light_rebase.cppm，不在这里混着放）。 */
+constexpr glm::dvec3 kNoOrigin{0.0, 0.0, 0.0};
+
 /** 度 → 弧度（GLM_FORCE_RADIANS 下 radians() 恒等，手动换算与 camera.cppm 同法）。 */
 constexpr float deg2rad(float d) { return d * glm::pi<float>() / 180.0f; }
 
@@ -117,7 +122,7 @@ TEST_CASE("cameraView：眼点映射到原点（两模式 × 8×7 网格），�
 				// 真退化输入，组 5 单独说明），这里给个远端点
 				if (mode == CameraMode::Trackball)
 					cam.target = eye + glm::vec3{0.3f, -1.0f, 0.7f};
-				const glm::mat4 view = cameraView(cam);
+				const glm::mat4 view = cameraView(cam, kNoOrigin);
 				INFO("yaw=" << yawDeg << " pitch=" << pitchDeg
 							<< " mode=" << (mode == CameraMode::Fps ? "fps" : "trackball"));
 				CHECK(matFinite(view));
@@ -135,7 +140,7 @@ TEST_CASE("cameraView：fps 沿 forward 前视 d 单位的点投到 (0,0,−d)�
 	for (float yawDeg : {0.0f, 37.0f, 123.0f, -95.0f})
 		for (float pitchDeg : {0.0f, 30.0f, -60.0f}) {
 			const Camera cam = makeCam(CameraMode::Fps, eye, yawDeg, pitchDeg);
-			const glm::mat4 view = cameraView(cam);
+			const glm::mat4 view = cameraView(cam, kNoOrigin);
 			const float d = 2.5f;
 			const glm::vec4 q = view * glm::vec4(eye + cameraForward(cam) * d, 1.0f);
 			INFO("fps yaw=" << yawDeg << " pitch=" << pitchDeg);
@@ -145,9 +150,11 @@ TEST_CASE("cameraView：fps 沿 forward 前视 d 单位的点投到 (0,0,−d)�
 		}
 	Camera tb = makeCam(CameraMode::Trackball, eye, 0.0f, 0.0f);
 	tb.target = glm::vec3{-1.0f, 4.0f, 2.0f};  // 与 yaw/pitch 无关，只与 target 有关
-	const glm::mat4 view = cameraView(tb);
+	const glm::mat4 view = cameraView(tb, kNoOrigin);
 	const glm::vec4 q = view * glm::vec4(tb.target, 1.0f);
-	const float dist = glm::length(tb.target - eye);
+	// tb.target 是绝对层（dvec3），eye 是 float：收窄后再减，与 cameraView 内部喂给
+	// glm::lookAt 的那一份是同一个 float 值（断言因此测的是「view 真的看向 target」）
+	const float dist = glm::length(glm::vec3(tb.target) - eye);
 	INFO("trackball dist=" << dist);
 	expectNear(q.x, 0.0, 0.0, 1e-3);
 	expectNear(q.y, 0.0, 0.0, 1e-3);
@@ -186,7 +193,7 @@ TEST_CASE("cameraAimAt 往返：aimAt(T) 后 forward ≈ normalize(T−eye) 且 
 		const glm::vec3 f = cameraForward(cam);
 		expectNear(glm::dot(f, glm::normalize(target - eye)), 1.0, 1e-5, 1e-5);
 		// ③ 矩阵域往返：target 落在视轴上（x/y ≈ 0，z = −distance）
-		const glm::vec4 q = cameraView(cam) * glm::vec4(target, 1.0f);
+		const glm::vec4 q = cameraView(cam, kNoOrigin) * glm::vec4(target, 1.0f);
 		expectNear(q.x, 0.0, 0.0, 1e-2);
 		expectNear(q.y, 0.0, 0.0, 1e-2);
 		expectNear(q.z, -distance, 1e-3, 1e-2);
@@ -229,7 +236,7 @@ TEST_CASE("fps 模式 target 是死写入：改 target → view 逐位不变；t
 		Camera fpsA = makeCam(CameraMode::Fps, eye, ya, pi);
 		Camera fpsB = fpsA;
 		fpsB.target = glm::vec3{100.0f, -50.0f, 7.0f};  // 天差地别的 target
-		const glm::mat4 va = cameraView(fpsA), vb = cameraView(fpsB);
+		const glm::mat4 va = cameraView(fpsA, kNoOrigin), vb = cameraView(fpsB, kNoOrigin);
 		INFO("fps yaw=" << ya << " pitch=" << pi);
 		for (int c = 0; c < 4; ++c)
 			for (int r = 0; r < 4; ++r)
@@ -238,7 +245,7 @@ TEST_CASE("fps 模式 target 是死写入：改 target → view 逐位不变；t
 		Camera tbA = makeCam(CameraMode::Trackball, eye, ya, pi);
 		Camera tbB = tbA;
 		tbB.target = glm::vec3{-3.0f, 2.0f, 5.0f};
-		const glm::mat4 ta = cameraView(tbA), tb = cameraView(tbB);
+		const glm::mat4 ta = cameraView(tbA, kNoOrigin), tb = cameraView(tbB, kNoOrigin);
 		bool anyDiff = false;
 		for (int c = 0; c < 4; ++c)
 			for (int r = 0; r < 4; ++r)
@@ -254,7 +261,7 @@ TEST_CASE("fps 的 up 字段不参与（由 yaw/pitch 推导）；trackball 携�
 	Camera fpsA = makeCam(CameraMode::Fps, eye, 20.0f, -10.0f);
 	Camera fpsB = fpsA;
 	fpsB.up = glm::normalize(glm::vec3{1.0f, 1.0f, 1.0f});  // 乱写 up
-	const glm::mat4 va = cameraView(fpsA), vb = cameraView(fpsB);
+	const glm::mat4 va = cameraView(fpsA, kNoOrigin), vb = cameraView(fpsB, kNoOrigin);
 	for (int c = 0; c < 4; ++c)
 		for (int r = 0; r < 4; ++r)
 			CHECK(va[c][r] == vb[c][r]);  // fps：up 字段是死数据
@@ -266,7 +273,7 @@ TEST_CASE("fps 的 up 字段不参与（由 yaw/pitch 推导）；trackball 携�
 	tbA.up = glm::vec3{0.0f, 1.0f, 0.0f};
 	Camera tbB = tbA;
 	tbB.up = glm::vec3{0.7071f, 0.7071f, 0.0f};  // 绕视线（−z）滚 45°，仍 ⊥ 视线
-	const glm::mat4 ta = cameraView(tbA), tb = cameraView(tbB);
+	const glm::mat4 ta = cameraView(tbA, kNoOrigin), tb = cameraView(tbB, kNoOrigin);
 	bool anyDiff = false;
 	for (int c = 0; c < 4; ++c)
 		for (int r = 0; r < 4; ++r)
@@ -292,11 +299,11 @@ TEST_CASE("±90° pitch（naive up∥forward 场景）两模式全网格不产�
 			const glm::vec3 eye{0.5f, 1.5f, -2.5f};
 			const Camera fps = makeCam(CameraMode::Fps, eye, yawDeg, pitchDeg);
 			INFO("fps yaw=" << yawDeg << " pitch=" << pitchDeg);
-			CHECK(matFinite(cameraView(fps)));
+			CHECK(matFinite(cameraView(fps, kNoOrigin)));
 			Camera tbCam = makeCam(CameraMode::Trackball, eye, yawDeg, pitchDeg);
 			tbCam.target = eye + glm::vec3{0.2f, 1.0f, -0.4f};
 			INFO("trackball yaw=" << yawDeg << " pitch=" << pitchDeg);
-			CHECK(matFinite(cameraView(tbCam)));
+			CHECK(matFinite(cameraView(tbCam, kNoOrigin)));
 		}
 	// 已知未护栏路径（记录、不断言 NaN——那是 glm 的行为不是本模块的契约）：
 	// trackball 且 position == target 时 glm::lookAt 归一化零向量 → NaN；调用方
@@ -327,7 +334,7 @@ TEST_CASE("cameraView + glm::perspective：aimAt 的目标落在视锥轴上，�
 
 		Camera cam = makeCam(CameraMode::Fps, eye, 0.0f, 0.0f);
 		cameraAimAt(cam, eye + dir * distance);
-		const glm::mat4 view = cameraView(cam);
+		const glm::mat4 view = cameraView(cam, kNoOrigin);
 		const glm::mat4 proj = glm::perspective(cam.fov, 16.0f / 9.0f, cam.nearPlane, cam.farPlane);
 		INFO("i=" << i << " distance=" << distance);
 

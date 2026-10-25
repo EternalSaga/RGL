@@ -35,6 +35,11 @@ using testing::Lcg;
 using testing::expectNear;
 using testing::frustumCorners;
 
+/** 门关原点 = 逐位 (0,0,0)（相对坐标批 5 第 1 刀给 `buildShadowVolume` 加的 origin 入参）。
+ *  本文件的用例全部测**门关态**的几何规则，显式传它而不是留默认值：漏传不会让任何判据红，
+ *  而「门关逐位不变」这条判据的语义就是「原点这一维真的没参与」。 */
+const glm::dvec3 kNoOrigin{0.0, 0.0, 0.0};
+
 /** 属性测试的种子（写死；换种子 = 换一组输入，不是"重试"）。 */
 constexpr uint32_t kSeed = 20260930u;
 
@@ -84,9 +89,13 @@ struct Scene {
 };
 
 /** 主光（direction 有 y 分量向下——项目太阳方向典型形态；d.y>0 的路径由 support
- *  用例单独覆盖，那是 5a-8b 出错的那一半）。 */
-constexpr Light kSunDown{0u, glm::vec3{0.35f, -1.0f, 0.25f}, glm::vec3{1.0f, 0.98f, 0.95f},
-	3.0f, glm::vec3{0.03f}, glm::vec3{0.0f}, 0.0f, 0u};
+ *  用例单独覆盖，那是 5a-8b 出错的那一半）。
+ *  🔴 **指定初始化**（债-118 同族约定）：`Light` 的 `position` 是绝对层 `dvec3`、其余分量是
+ *  `vec3`，位置聚合初始化在字段换序时会**静默错位**（`ambient` 与 `position` 同为三维向量，
+ *  换序后编译器一声不出）。 */
+constexpr Light kSunDown{.index = 0u, .direction = glm::vec3{0.35f, -1.0f, 0.25f},
+	.color = glm::vec3{1.0f, 0.98f, 0.95f}, .intensity = 3.0f, .ambient = glm::vec3{0.03f},
+	.position = glm::dvec3{0.0}, .range = 0.0f, .type = 0u};
 
 /** 某图元的世界 AABB（min/max 角）。 */
 struct Aabb {
@@ -175,17 +184,20 @@ TEST_CASE("frustumCorners 自检：近平面角点确实比远平面角点更靠
 	for (size_t i = 0; i < 4; ++i) {
 		INFO("near corner#" << i);
 		// 角点在视空间 z = −near → 到相机距离恰为 near
-		const glm::vec3 e = view * glm::vec4(corners[i], 1.0f);
+		// 🔴 `{...}` 是**显式**降维：`mat4 × vec4` 得 vec4，本用例只取 xyz（丢 w）。
+		// 原先写 `=` 靠 glm 隐式截断（`GLM_FORCE_EXPLICIT_CTOR` 拦的就是它，债-147），
+		// 语义逐字不变。
+		const glm::vec3 e{view * glm::vec4(corners[i], 1.0f)};
 		expectNear(-e.z, nearZ, 1e-3, 1e-3);
 	}
 	for (size_t i = 4; i < 8; ++i) {
 		INFO("far corner#" << i);
-		const glm::vec3 e = view * glm::vec4(corners[i], 1.0f);
+		const glm::vec3 e{view * glm::vec4(corners[i], 1.0f)};
 		expectNear(-e.z, farZ, 1e-3, 1e-3);
 	}
 	// 横向范围：近平面半高 = near·tan(fov/2)，半宽 = 近平面半高 × aspect
-	const glm::vec3 nearUp = view * glm::vec4(corners[1], 1.0f);
-	const glm::vec3 nearLeft = view * glm::vec4(corners[0], 1.0f);
+	const glm::vec3 nearUp{view * glm::vec4(corners[1], 1.0f)};
+	const glm::vec3 nearLeft{view * glm::vec4(corners[0], 1.0f)};
 	const float tanHalf = std::tan(glm::radians(60.0f) * 0.5f);
 	expectNear(nearUp.y, nearZ * tanHalf, 1e-3, 1e-4);
 	expectNear(-nearLeft.x, nearZ * tanHalf * (16.0f / 9.0f), 1e-3, 1e-4);
@@ -659,7 +671,7 @@ TEST_CASE("buildShadowVolume 覆盖性：投影体 AABB 沿光轴的支撑点必
 		// 投影体盒：跨两个数量级的高度（矮墩子 / 高塔），高塔正是 5a-8b 被裁掉的那批
 		const Aabb box{glm::vec3(-3.0f, -1.0f, -2.0f),
 			glm::vec3(4.0f, 3.0f + 20.0 * static_cast<float>(scene.rng.uniform01()), 5.0f)};
-		const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024);
+		const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024, kNoOrigin);
 		INFO(i << " " << slice.radius << " " << box.hi.y);
 		REQUIRE(v.xyRadius > 0.0f);
 		REQUIRE(v.tMax > v.tMin);
@@ -691,7 +703,7 @@ TEST_CASE("buildShadowVolume support function：d.y<0 时远角必须 y 取 max�
 	REQUIRE(slice.radius > 0.0f);
 	// 一个高瘦塔：lo.y=-1, hi.y=50（远高于切片球顶 r）
 	const Aabb tall{glm::vec3{-0.5f, -1.0f, -0.5f}, glm::vec3{0.5f, 50.0f, 0.5f}};
-	const ShadowVolume v = buildShadowVolume(kSunDown, slice, tall.lo, tall.hi, 1024);
+	const ShadowVolume v = buildShadowVolume(kSunDown, slice, tall.lo, tall.hi, 1024, kNoOrigin);
 	const glm::vec3 d = glm::normalize(kSunDown.direction);
 	INFO(slice.radius << " " << v.tMin << " " << v.tMax << " " << v.eyeOffset);
 	// y 取 max 的支撑点
@@ -710,14 +722,15 @@ TEST_CASE("buildShadowVolume support function：d.y<0 时远角必须 y 取 max�
 TEST_CASE("buildShadowVolume d.y>0（太阳朝上）同样正确 —— support function 双向") {
 	// 5a-8b 只错了一半（d 分量符号全正时才恰好对）。本组覆盖另一半，
 	// 防止"修 y 分量时把 x/z 分量改反"。
-	const Light sunUp{0u, glm::vec3{0.35f, 1.0f, 0.25f}, glm::vec3{1.0f, 0.98f, 0.95f},
-		3.0f, glm::vec3{0.03f}, glm::vec3{0.0f}, 0.0f, 0u};
+	const Light sunUp{.index = 0u, .direction = glm::vec3{0.35f, 1.0f, 0.25f},
+		.color = glm::vec3{1.0f, 0.98f, 0.95f}, .intensity = 3.0f, .ambient = glm::vec3{0.03f},
+		.position = glm::dvec3{0.0}, .range = 0.0f, .type = 0u};
 	const auto proj = makeProj({60.0f, 16.0f / 9.0f, 0.1f, 100.0f});
 	const auto view = makeView(kPoses[0], 5.0f);
 	const Bounds slice = frustumBoundingSphere(view, proj);
 	REQUIRE(slice.radius > 0.0f);
 	const Aabb box{glm::vec3{-4.0f, -3.0f, -5.0f}, glm::vec3{3.0f, 40.0f, 2.0f}};
-	const ShadowVolume v = buildShadowVolume(sunUp, slice, box.lo, box.hi, 1024);
+	const ShadowVolume v = buildShadowVolume(sunUp, slice, box.lo, box.hi, 1024, kNoOrigin);
 	const glm::vec3 d = glm::normalize(sunUp.direction);
 	const double top = glm::dot(supportPoint(box, d) - slice.center, d) - (v.tMin + v.eyeOffset);
 	INFO(v.tMin << " " << v.tMax << " " << top);
@@ -728,7 +741,7 @@ TEST_CASE("buildShadowVolume d.y>0（太阳朝上）同样正确 —— support 
 
 TEST_CASE("buildShadowVolume：退化输入返回零半径体（谁都不进得来 = 明确的失败而非随机行为）") {
 	const Bounds zero{glm::vec3{0.0f}, 0.0f};
-	const ShadowVolume v = buildShadowVolume(kSunDown, zero, glm::vec3{-1.0f}, glm::vec3{1.0f}, 1024);
+	const ShadowVolume v = buildShadowVolume(kSunDown, zero, glm::vec3{-1.0f}, glm::vec3{1.0f}, 1024, kNoOrigin);
 	expectNear(v.xyRadius, 0.0, 0.0, 0.0);
 	expectNear(v.tMin, 0.0, 0.0, 0.0);
 	expectNear(v.tMax, 0.0, 0.0, 0.0);
@@ -803,7 +816,7 @@ TEST_CASE("buildShadowVolume：texel 吸附世界锚定且真实发生（批 12.
 
 	// —— ② 输出 == 契约重算 + 格相位 + 位移界（两条姿态路径的球心各跑一遍）——
 	for (const Bounds& slice : {sA, sB}) {
-		const ShadowVolume v = buildShadowVolume(kSunDown, slice, tower.lo, tower.hi, mapSize);
+		const ShadowVolume v = buildShadowVolume(kSunDown, slice, tower.lo, tower.hi, mapSize, kNoOrigin);
 		const glm::dvec3 g = snapGrid(glm::dvec3(slice.center));
 		const auto [tMin, tMax, eyeOffset] = expectVolume(g);
 		INFO("center=(" << slice.center.x << "," << slice.center.y << "," << slice.center.z
@@ -849,8 +862,8 @@ TEST_CASE("buildShadowVolume：texel 吸附世界锚定且真实发生（批 12.
 	const Bounds c2{glm::vec3(gA - off), sA.radius};
 	// 非退化 sanity：两路输入必须真的不同（否则本判据退化为旧版的同参自比）
 	REQUIRE(glm::length(c1.center - c2.center) > 1.0f * static_cast<float>(texel));
-	const ShadowVolume v1 = buildShadowVolume(kSunDown, c1, tower.lo, tower.hi, mapSize);
-	const ShadowVolume v2 = buildShadowVolume(kSunDown, c2, tower.lo, tower.hi, mapSize);
+	const ShadowVolume v1 = buildShadowVolume(kSunDown, c1, tower.lo, tower.hi, mapSize, kNoOrigin);
+	const ShadowVolume v2 = buildShadowVolume(kSunDown, c2, tower.lo, tower.hi, mapSize, kNoOrigin);
 	expectNear(v2.tMin, v1.tMin, 1e-6, 1e-4);
 	expectNear(v2.tMax, v1.tMax, 1e-6, 1e-4);
 	expectNear(v2.eyeOffset, v1.eyeOffset, 1e-6, 1e-4);
@@ -872,7 +885,7 @@ TEST_CASE("casterInShadowVolume：盒内显著物体必进（阳性锚点）") {
 	const Bounds slice = frustumBoundingSphere(makeView(kPoses[0], 5.0f), proj);
 	REQUIRE(slice.radius > 0.0f);
 	const Aabb box{glm::vec3{-4.0f, -1.0f, -4.0f}, glm::vec3{4.0f, 20.0f, 4.0f}};
-	const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024);
+	const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024, kNoOrigin);
 	REQUIRE(v.xyRadius > 0.0f);
 	// 切片球心附近的物体（正对光轴中段）必进
 	INFO(v.xyRadius << " " << v.tMin << " " << v.tMax << " " << v.eyeOffset);
@@ -884,7 +897,7 @@ TEST_CASE("casterInShadowVolume：盒外远处物体必出（反向锚点，治�
 	const auto proj = makeProj({60.0f, 16.0f / 9.0f, 0.1f, 100.0f});
 	const Bounds slice = frustumBoundingSphere(makeView(kPoses[0], 5.0f), proj);
 	const Aabb box{glm::vec3{-4.0f, -1.0f, -4.0f}, glm::vec3{4.0f, 20.0f, 4.0f}};
-	const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024);
+	const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024, kNoOrigin);
 	Scene scene;
 	int removed = 0;
 	for (int i = 0; i < 256; ++i) {
@@ -906,7 +919,7 @@ TEST_CASE("casterInShadowVolume：近平面侧的大物体不被 tMin 误剔（5
 	const Bounds slice = frustumBoundingSphere(makeView(kPoses[0], 5.0f), proj);
 	REQUIRE(slice.radius > 0.0f);
 	const Aabb box{glm::vec3{-2.0f, -1.0f, -2.0f}, glm::vec3{2.0f, 60.0f, 2.0f}};
-	const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024);
+	const ShadowVolume v = buildShadowVolume(kSunDown, slice, box.lo, box.hi, 1024, kNoOrigin);
 	const glm::vec3 d = glm::normalize(kSunDown.direction);
 	// 塔顶角（沿光轴最远）
 	const glm::vec3 top = supportPoint(box, d);

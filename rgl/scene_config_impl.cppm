@@ -9,33 +9,14 @@ import rlstd;
 import vkerror;
 import rllogger;
 import scene_context;
+import lua_read;  // 批 0（相对坐标计划）：readVec3 的唯一一份实现（这里与 camera_config_impl 曾各有一份逐行同构副本）
 
 namespace RGL {
 
-// readVec3（内部 helper）+ defaultSceneConfig/loadSceneConfig 定义（2026-09-02
-// 编译提速 A 方案）：sol2 实现移出接口 TU；本单元是叶子边。
+// defaultSceneConfig/loadSceneConfig 定义（2026-09-02 编译提速 A 方案）：sol2 实现移出
+// 接口 TU；本单元是叶子边。
 // Phase 8 批次 ②b 拆债：loadSceneConfig（175 行）按段拆 parse* helper，主函数
 // 只剩沙箱建立 + dofile + 段调度；environment 段新增 hdr/hdr_size 可选字段。
-
-/**
- * Lua vec3 读取（可选字段回落默认值，同 camera.cppm loadCameraConfig 惯例）：
- * {x,y,z} → glm::vec3；字段缺失/非表/分量不齐 → fallback。
- * @param root 配置（子）表
- * @param key 字段名
- * @param fallback 缺省值
- * @return 解析值或 fallback
- */
-inline glm::vec3 readVec3(sol::table root, const char* key, glm::vec3 fallback) {
-	sol::table t = root[key];
-	if (!t.valid() || !t.is<sol::table>())
-		return fallback;
-	sol::optional<float> x = t[1];
-	sol::optional<float> y = t[2];
-	sol::optional<float> z = t[3];
-	if (x && y && z)
-		return glm::vec3(*x, *y, *z);
-	return fallback;
-}
 
 /** 顶层表取字符串字段（缺失/非表 = no-op 回落现值）。 */
 void readStr(sol::table table, const char* key, std::string& into) {
@@ -268,8 +249,10 @@ std::expected<SceneEntityDesc, Error> parseEntityItem(sol::table item, int i) {
 	if (ent.type == "model" && ent.file.empty())
 		return std::unexpected(Error{ErrorCode::ConfigLoadFailed,
 			fmt::format("scene config: entities[{}] type 'model' missing 'file'", i)});
+	// position = 绝对层（dvec3 ↔ dvec3，读侧不经 float）；rotation 是欧拉角（方向量，
+	// 落库是 float 契约）⟹ 统一读 double、**在落库处收窄**（lua_read::readVec3 的契约）
 	ent.position = readVec3(item, "position", ent.position);
-	ent.rotation = readVec3(item, "rotation", ent.rotation);
+	ent.rotation = glm::vec3(readVec3(item, "rotation", glm::dvec3(ent.rotation)));
 	float scale = ent.scale;
 	readFloat(item, "scale", scale);
 	ent.scale = scale;
@@ -373,10 +356,12 @@ void parseLights(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
 	trace.read.emplace_back("lights.type");
 	sol::table light = root["light"];
 	if (light.valid() && light.is<sol::table>()) {
-		cfg.light.direction = readVec3(light, "direction", cfg.light.direction);
-		cfg.light.color = readVec3(light, "color", cfg.light.color);
+		// direction/color/ambient 都是**方向量/颜色**（落库 float 契约）⟹ 统一读 double、
+		// 落库处显式收窄；本段唯一的位量是下面 per-light 的 position（绝对层，不收窄）
+		cfg.light.direction = glm::vec3(readVec3(light, "direction", glm::dvec3(cfg.light.direction)));
+		cfg.light.color = glm::vec3(readVec3(light, "color", glm::dvec3(cfg.light.color)));
 		readFloat(light, "intensity", cfg.light.intensity);
-		cfg.light.ambient = readVec3(light, "ambient", cfg.light.ambient);
+		cfg.light.ambient = glm::vec3(readVec3(light, "ambient", glm::dvec3(cfg.light.ambient)));
 	}
 	sol::table lights = root["lights"];
 	if (lights.valid() && lights.is<sol::table>()) {
@@ -385,9 +370,9 @@ void parseLights(sol::table root, SceneConfig& cfg, SceneKeyTrace& trace) {
 			if (!lt.valid() || !lt.is<sol::table>())
 				break;
 			Light L;
-			L.direction = readVec3(lt, "direction", L.direction);
-			L.position = readVec3(lt, "position", L.position);
-			L.color = readVec3(lt, "color", L.color);
+			L.direction = glm::vec3(readVec3(lt, "direction", glm::dvec3(L.direction)));
+			L.position = readVec3(lt, "position", L.position);  // 绝对层（dvec3）
+			L.color = glm::vec3(readVec3(lt, "color", glm::dvec3(L.color)));
 			readFloat(lt, "intensity", L.intensity);
 			readFloat(lt, "range", L.range);
 			float type = static_cast<float>(L.type);
@@ -545,7 +530,8 @@ void parseStyleMap(sol::table root, const char* key,
 		trace->read.emplace_back("spin_frame_angle");
 		readFloat(root, "spin_frame_angle", cfg.spinFrameAngle);
 		trace->read.emplace_back("spin_axis");
-		cfg.spinAxis = readVec3(root, "spin_axis", cfg.spinAxis);
+		// spin_axis 是**旋转轴**（方向量，落库 float 契约）⟹ 读 double、落库处收窄
+		cfg.spinAxis = glm::vec3(readVec3(root, "spin_axis", glm::dvec3(cfg.spinAxis)));
 		trace->read.emplace_back("cube");
 		readBool(root, "cube", cfg.showCube);
 		trace->read.emplace_back("exposure");

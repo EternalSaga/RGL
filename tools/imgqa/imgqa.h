@@ -237,6 +237,18 @@ struct ProfileOpts {
     /// 一律抛；覆写失败（`entities` 键不在 / 不唯一 / 形状不认识）抛，写后读回自检不同也抛。
     bool overrideDeliveryEntities = false;
     std::string deliveryEntitiesLua;  ///< entities 表**值内容**（不含外层花括号）
+    /// **第 9 个例外门**（`shadow-edge-rebase`，相对坐标批 5 第 2 刀）：true = 覆写交付配置
+    /// `runtime.lua` 的 `coordinate.rebase`（渲染原点 rebase 总闸）成 `coordinateRebaseValue`。
+    ///
+    /// 为什么这**不算**「工具再抄一份真相」（同第 6/7/8 枚的判据 = 覆写的是不是 A/B 实验本身）：
+    /// 本仪器的四格对拍**自变量就是这一枚键**（门关 vs 门开），不覆写它四格只剩两格。
+    /// 语义（false = 原点恒零、true = 每帧把相机位 snap 到级联纹素粒度）以
+    /// `configs/runtime.lua` 与 `rgl/runtime_config.cppm` 为唯一真相源，本字段不重述。
+    /// 🔴 只在交付配置路径有实现（同第 6/7/8 枚）；门开而键不在/不唯一 = 抛。
+    /// ⚠ 门开态**必须**能在引擎回显里查到证据（`coordinate.rebase = true` 的 INFO 行），
+    ///   否则「覆写落盘了但引擎没读到」与「引擎读到了但原点恒零」两种失效都长得像绿。
+    bool overrideCoordinateRebase = false;
+    bool coordinateRebaseValue = true;
     /// 可选机位（**写进 profile 的 camera.lua**，从第 1 帧生效）。false = 不动 camera.lua。
     ///
     /// 为什么不能只靠 `Engine::setCamera`（RPC）：RPC 落在引擎已经跑了几帧之后，而那些帧是用
@@ -1278,6 +1290,22 @@ int cmdShadowCasterSurvival();
  * 换 entities 装靶：级联/LOD 两枚自变量键只存在于交付配置。零引擎改动、零 shader 改动。
  */
 int cmdShadowEdgeRuler();
+
+/**
+ * shadow-edge-rebase —— 相对坐标原点 rebase 的**四格对拍**（相对坐标批 5 第 2 刀）。
+ *
+ * 2 工作点（出厂点 / 整靶沿世界 +X 平移 1e6 m）× 2 开关态（`coordinate.rebase` 关 / 开）
+ * = ①②③④，每格六臂（none 分母 + 自然 D=5 + 钉级 0..3）。真值 = 闭式算术（与
+ * `shadow-edge-ruler` 同一口径层、同一枚靶），🔴 不是「和另一次渲染比」——差分判据只能证
+ * 「不变」，证不了「对」。
+ *
+ * 三条判决线（挂号 + 容差理由 → `imgqa check`）：`shadow-edge-rebase-no-harm`（出厂点
+ * 门开不比门关变差）· `shadow-edge-rebase-benefit`（🔴 远点门开把影边精度买回出厂水平，
+ * rebase 的存在理由）· `shadow-edge-rebase-shadow-present`（四格阴影都在场）。
+ * 六道闸门 G1–G6（抛 = rc 3）：靶同源 / 簇路径 / 引擎回显四查 / 门开必须动图 / 每板必量 /
+ * 阴影在场性出声。零 flag（同 ruler）。
+ */
+int cmdShadowEdgeRebase();
 
 // ═══════════════════════════════════════════ 透明合成次序（blend-sort，债-132 结案）
 //

@@ -119,7 +119,7 @@ ViewProjection makeViewProj() {
 	cam.pitch = -0.25f;
 	cam.fov = 45.0f * glm::pi<float>() / 180.0f;
 	ViewProjection vp;
-	vp.view = cameraView(cam);
+	vp.view = cameraView(cam, glm::dvec3{0.0});
 	vp.proj = glm::perspective(cam.fov, 1.6f, 0.1f, 250.0f);
 	vp.projUnjittered = vp.proj;  // projectionSystem 刚写的就是未抖那份（ecs_impl 同款）
 	return vp;

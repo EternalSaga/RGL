@@ -59,6 +59,13 @@ set(RGL_TEST_SOURCES
     test_blackbox.cppm          # 债-140 A1/A2：FNV 摘要公开向量 + 首末行摘取 hasRows 反向 + ndjson 里 COUNT 与 rows 各自在场 + 自证 push 超限不截断 + 🔴 五条自证谓词的 CPU 镜像（每条含相邻合法界；shader 侧判据唯一可单测的那一份）
     test_render_scale.cppm      # 批 14.3 渲染倍率纯算术：1.0 档逐像素红线 / 取整 / 钳制 / 非退化
     test_velocity_field.cppm    # 批 14.4 逐像素速度场：显式相机基参考 / 旋转光流闭式 / 天空与无效判据
+    test_coordinate_rebase.cppm # 债-85 批 1 护栏：触发常数钉值 / 距离余量标定（625→≥3、1e6→<0）/ 粒度取最粗级（最大值居中反向）+ 相机 ULP 错法对照 / 非法输入不出 0 / snap 格点闭式 + 嵌套；批 3 toRelative：门关恒等 / 顺序承重阳性锚点（先减后收窄≠先收窄后减）/ 只动平移列四列断言 / 提升无损 / 组合恒等
+    test_render_origin.cppm     # 相对坐标批 3 立、批 5 第 1 刀改写（originSystem 已删，原点生产者 = projectionSystem）：RenderOrigin 默认 = 门关画像 / 门关铺垃圾→恰为逐位零 + view 逐位不变 / 🔴 门开原点闭式 + 每分量落在 G 格上 / 🔴 精度收益（ULP 比值，非「非零」）/ 🔴 两条粒度路径一致 + G·2、G/2 区分力守卫 / 🔴 粒度 NaN 必须抛且消息点名 coordinate.rebase（反向半边：粒度正常不许抛）/ 幂等（= 第 2 刀跨进程复现的进程内对应物）
+    test_taa_cross_frame.cppm   # 相对坐标批 4 第一刀 taaSystem **接线**判据：门关 motion 逐位 = 改前纯旋转比 / 🔴 ΔO 方向（两原点传反=变号）/ prevOrigin 帧尾推进 / 原点差不被 historyValid·motion_compensation 门掉（velocity 链不吃门）/ 自旋+移动原点对上按定义算的两帧世界坐标
+    test_view_light_rebase.cppm # 相对坐标批 4 第二刀 view/eyePos/灯位置三出口接线判据：门关逐位 = 改前 lookAt/收窄式 / 🔴 精度收益锚（1e6 处平移列塌缩 + sub-ULP 区分力守卫钉「先减后收窄」）/ 三出口同空间（闭式 + view·eyePos 跨出口）/ 不漏改（origin≠0 三处都变）/ projectionSystem 接线正反两半（view 吃原点、near/far 不吃）
+    test_shadow_texel_grid.cppm # 相对坐标批 5 第 0 刀（只测量）：出厂四级纹素与吸附格距 G 的整除性 / 光基是否退化 / 🔴 原点跨一格后图集相对世界的跳变量（三假设对照 H0 世界轴、H1 光基、H2 光基+每级纹素抬 2 的幂）/ 比较算子区分力三半边
+    test_shadow_texel_absolute.cppm # 相对坐标批 5 第 0.5 刀（只测量，零生产改动）：🔴 把 texel 吸附的输入换成**绝对**球心（H3）后原点跨格的图集跳变量（吸附项残余 vs 顶点路径残余分开报）/ 姿态变化时盒心仍格点量化（不量化臂反向半边）/ |O|≈1e6 处 double 域吸附的可行性边界 / 门关态逐位是否被改（决定要不要门关早退）/ H3 vs H2 取舍表 / 批 5 阈值推导
+    test_rebase_consumers.cppm  # 相对坐标批 4 第三刀「自动跟/不用改」表 → 判据：🔴 texelSizes 整链（computeCascadeSpheres→buildShadowVolume→fillShadowData→rebaseSnapGranularity）与相机姿态/位置逐位无关（批 5 粒度不循环定义的唯一凭据）+ 跨档必须变的反向半边 / CPU 剔除可见集逐球平移不变（闭式六面对账）/ meshlet 簇可见集逐元素平移不变 + 两侧不同空间的错位锚点 / 透明排序键顺序平移不变 + 混空间锚点
     test_camera.cppm            # 相机数学
     test_cube_geometry.cppm     # 内建 cube 顶点/索引契约
     test_state_kit.cppm         # 十段 RenderState 表 + stateFor 分派（纯逻辑）
@@ -228,6 +235,11 @@ target_compile_features(rgl_test_support PUBLIC cxx_std_23)
 # 内的 #define 撞出 macro redefined 警告（-Werror 直接挂）。
 target_include_directories(rgl_test_support SYSTEM PUBLIC ${DOCTEST_INCLUDE_DIRS})
 target_link_libraries(rgl_test_support PUBLIC doctest::doctest rlstd)
+# 🔴 必须带 GLM 宏（清单在顶层 `RGL_GLM_DEFINES`，债-147）：本库 link 的是 **rlstd**，
+# 而宏挂在 **rlbase** 上 ⟹ 不显式加就**不继承**。实测漏掉时本库是唯一一个「真 include glm
+# 却不受管」的引擎侧 TU，而 `eyePlanes` / `frustumCorners` 这些共用几何 helper 的产出正是
+# 各测试的**期望值来源**——helper 里若静默收窄，测试会跟着一起错而不报。
+target_compile_definitions(rgl_test_support PUBLIC ${RGL_GLM_DEFINES})
 
 add_executable(rgl_tests)
 target_sources(rgl_tests PUBLIC

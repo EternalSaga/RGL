@@ -3,8 +3,9 @@ module;
 #include <glm/glm.hpp>
 #include <filesystem>  // 监视源 configs/ 目录存在性探测（GMF 例外清单成员，同 main:scene）
 
-// 入口模块 main 的分区实现单元（module main:wiring;）——**诊断/热重载挂点装配**三件套
-// （wireHotReload / wireShaderHotReload / wirePicking）的定义。
+// 入口模块 main 的分区实现单元（module main:wiring;）——**诊断/热重载挂点装配**
+// （wireHotReload / wireShaderHotReload / wirePicking + 诊断账登记
+// registerDiagnosticReporters，后者随 main:impl 撞 500 行红线自那里挪来）。
 //
 // 【为什么从 main:scene 拆出来】批 14.5 第三批给 main:scene 加 AO 施加 pass 的装配时撞上
 // 「单文件代码行 ≤500」红线（该文件此前已顶在 500）。红线不是要绕的，是要找缝的：这三个
@@ -32,6 +33,9 @@ import shader_hot_reload;  // ShaderHotReloader（shader 热重载 L1，10.4）
 import picking;  // PickingService（wirePicking 桥接，10.5）
 import ecs;  // ConfigReloadHook / PickingHook ctx（帧边界挂点类型，10.3）
 import diagnostics;
+import shutdown_ledger;  // ShutdownLedger（registerDiagnosticReporters 形参，债-140 第四击 ③）
+import device_fault;     // reportDeviceFaultPollSummary（诊断账第一笔）
+import meshlet_shadow_args;  // reportHeapSlotAuditSummary（诊断账第二笔，债-140 第四击）
 import rllogger;
 
 namespace RGL {
@@ -166,6 +170,16 @@ std::unique_ptr<PickingService> wirePicking(entt::registry& registry, Resources&
 	hook.takeResult = [svc = service.get()] { return svc->take(); };
 	registry.ctx().emplace<PickingHook>(std::move(hook));
 	return service;
+}
+
+/**
+ * registerDiagnosticReporters 定义（契约与"为什么住在 main"→ main.cppm 接口注释；
+ * 本函数原在 main:impl，随其撞 500 行红线挪来——诊断账登记与 wireHotReload /
+ * wirePicking 同属诊断挂点装配，登记语义零变化）。
+ */
+void registerDiagnosticReporters(ShutdownLedger& ledger) {
+	ledger.add(reportDeviceFaultPollSummary);
+	ledger.add(reportHeapSlotAuditSummary);
 }
 
 }  // namespace RGL

@@ -462,6 +462,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         append(shadowCascadeSeamJudgments());
         append(shadowCasterSurvivalJudgments());
         append(shadowEdgeRulerJudgments());
+        append(shadowEdgeRebaseJudgments());
         return v;
     }();
     return kAll;

@@ -27,6 +27,7 @@ import shutdown_ledger;  // 诊断账注册表（device-lost 之路上也要结�
 import param_registry;   // DebugPanelState（批 10.7 点选跳页请求位）
 import scene_context;
 import taa_jitter;  // 批 12.6 TAA：halton 抖动 / jitter→投影 / 跳切判据（纯函数层）
+import coordinate_rebase;  // 批 4 第一刀：motionWithOriginShift（跨帧原点差复合）
 import camera;
 import rllogger;
 
@@ -333,36 +334,68 @@ void boundsSystem(entt::registry& rg) {
 }
 
 /**
- * Camera + 场景包围球 + 窗口尺寸 → ViewProjection context。
- * 自适应 near/far：SceneBounds 非空时按相机到球心实时距离 ± 球半径推导
- *（near 下限 0.05 防相机进球内），保证任意相机位置/场景尺度下整个场景在
- * frustum 内；无场景内容时回落 configs/camera.lua 的固定 near/far。
- * @param rg registry（读 Camera/SceneBounds/WindowExtent，写 ViewProjection）
+ * 投影 system 定义（接口声明、搬家理由与门红线 → ecs.cppm）。
+ *
+ * 🔴 函数体内的**语句顺序就是本批的裁决**（near/far → proj → 粒度 → 原点 → view），
+ * 它把「先有粒度、再有原点、再有 view」从注释契约变成词法顺序。调换任意两段的后果
+ * 不是「图变」而是「门关照绿、门开静默错位」，所以判据住在 tests/test_render_origin.cppm
+ * 的闭式用例（不是截图锚）。
+ * @param rg registry（读 Camera/SceneBounds/RenderExtent，写 RenderOrigin / ViewProjection）
  */
 void projectionSystem(entt::registry& rg) {
 	// 批 14.3：宽高比取**渲染**网格。按窗口比例算投影、按渲染网格铺像素 = 各向异性拉伸。
 	auto& extent = rg.ctx().get<RenderExtent>();
 	const auto& camera = rg.ctx().get<Camera>();
 	const auto& sceneBounds = rg.ctx().get<SceneBounds>();
+	// 渲染原点：本 system 是它的**生产者**（批 5 第 1 刀，原 originSystem 搬进来），
+	// 消费者（本 system 自己的 view、后面的 taaSystem / renderListSystem）读的都是本帧这份。
+	auto& origin = rg.ctx().get<RenderOrigin>();
 	auto& viewProj = rg.ctx().get<ViewProjection>();
 
-	viewProj.view = cameraView(camera);
-
+	// ── ① 自适应 near/far ──
+	// 距离判据在 float 域（near/far 是 float 深度界）：绝对层相机位先收窄。
+	// 🔴 两项都是**绝对量**、rebase 根本不碰它们 ⟹ 开/关两态 near/far 逐位相同
+	// （裁决与凭据 → docs/相对坐标地基_plan.md §3 批 4「裁决一」；不许顺手减原点，
+	//  反向半边由 tests/test_view_light_rebase.cppm 的 near/far 不变性断言守着）。
 	float nearPlane = camera.nearPlane;
 	float farPlane = camera.farPlane;
 	if (sceneBounds.radius > 0.0f) {
-		const float dist = glm::length(camera.position - sceneBounds.center);
+		const float dist = glm::length(glm::vec3(camera.position) - sceneBounds.center);
 		nearPlane = std::max(0.05f, dist - sceneBounds.radius);
 		farPlane = dist + sceneBounds.radius;
 	}
+	// ── ② 投影矩阵 + 实际生效深度界写回（级联切分用；自适应值不等于 camera.nearPlane/farPlane，
+	// 外部若直接拿 camera 的会切错分界）──
 	viewProj.proj =
 		glm::perspective(camera.fov,
 			static_cast<float>(extent.width) / static_cast<float>(extent.height),
 			nearPlane, farPlane);
-	// Phase 11 批 11.2：写回实际生效的 near/far（级联切分用；自适应值不等于
-	// camera.nearPlane/farPlane，外部若直接拿 camera 的会切错分界）
 	viewProj.nearPlane = nearPlane;
 	viewProj.farPlane = farPlane;
+
+	// ── ③ 渲染原点（门关早退；门开 = 期望原点 snap 到粒度）──
+	if (origin.enabled) {
+		// 粒度 = rebaseSnapGranularity(本帧四级纹素)，三个环节全吃现成函数（接缝注释里写了
+		// 为什么不许另推闭式、为什么喂单位 view）。期望原点 = 相机位置本身（债-85 ①：决定
+		// float32 抖动量级的是相机离原点多远 ⟹ 把原点搬到相机就是这笔工作的全部收益）。
+		const double granularity = rebaseOriginGranularity(viewProj.proj, nearPlane, farPlane);
+		// 🔴 NaN 必须响亮 throw：NaN 原点会一路灌进 cameraView 的平移列 ⟹ 整个场景被裁掉、
+		// 不报任何错（相机凭空消失），那是本项目最难查的形态。判据取「非正 / 非有限」而不是
+		// `== NaN`：rebaseSnapGranularity 的非法输入语义就是 NaN，而 0 粒度会让 snap 退化成
+		// 不 snap（正是那条护栏点名要拦的静默退化），两者都不许往下走。
+		if (!(granularity > 0.0) || !std::isfinite(granularity))
+			throw std::runtime_error(
+				"coordinate.rebase = true 但本帧算不出原点吸附粒度（rebaseSnapGranularity 给出 "
+				"NaN / 非正值 ⟹ 级联纹素坏到选不出格距，通常是 near/far 退化）——宁可进程退出，"
+				"也不拿 NaN 原点渲染（相机凭空消失、无报错）；关掉 configs/runtime.lua 的 "
+				"coordinate.rebase 即回到门关交付态");
+		origin.position = snapOriginToGranularity(camera.position, granularity);
+	} else {
+		origin.position = glm::dvec3{0.0};  // 门关：减法恒等，交付图逐位不变
+	}
+
+	// ── ④ view（🔴 必须在 ③ 之后：它吃的就是刚写好的那份原点）──
+	viewProj.view = cameraView(camera, origin.position);
 }
 
 /**
@@ -372,13 +405,20 @@ void projectionSystem(entt::registry& rg) {
  * ② 判本帧历史可用性（首帧 / resize / 相机跳切 ⇒ false ⇒ shader 逐位旁路）；
  * ③ 算本帧 scene data 载荷（上一帧**抖动后** viewProj + 全场景刚体运动补偿矩阵）并推进簿记。
  *
+ * 批 4 第一刀改的是 ③ 里那条运动补偿：它现在除了自旋比，还**精确复合两帧渲染原点之差**
+ * （`RenderOrigin::position` 与本 system 上帧尾记的 `TaaState::prevOrigin`）。原因与
+ * 「为什么修 motion 而不是修 prevViewProj」的裁决写在下面 ③ 的注释里，闭式推导在
+ * coordinate_rebase.cppm::motionWithOriginShift。
+ *
  * **门红线**：`env.taaEnabled == false` 时完全不碰 `proj`（不是「加 0」而是不调用）
  * ⇒ 下游 objectMvps / @64 / 剔除 逐位不变。
+ * **门关（`coordinate.rebase = false`）红线**：原点恒 (0,0,0) ⇒ 原点差恰为零 ⇒
+ * motionWithOriginShift 逐位返回自旋比 ⇒ 载荷与改前逐位相同。
  *
  * 抖动为什么加在 proj 而不是各消费方：见 ViewProjection::jitterPx 注释（一处抖，
  * 深度缓冲与所有重建该深度的消费者自动同口径）。
- * @param rg registry（读 SceneEnv/SceneSpin/Camera/WindowExtent/SceneBounds/ViewProjection，
- *        读写 TaaState）
+ * @param rg registry（读 SceneEnv/SceneSpin/Camera/WindowExtent/SceneBounds/ViewProjection/
+ *        RenderOrigin，读写 TaaState）
  */
 void taaSystem(entt::registry& rg) {
 	auto& viewProj = rg.ctx().get<ViewProjection>();
@@ -389,10 +429,21 @@ void taaSystem(entt::registry& rg) {
 	// 批 14.3：jitter 幅度按像素计、历史可用性的"尺寸变了没"，两者都必须落在**渲染**网格上。
 	const auto& extent = rg.ctx().get<RenderExtent>();
 	const auto& bounds = rg.ctx().get<SceneBounds>();
+	// 渲染原点（相对坐标批 4 第一刀）：**本帧**那份。批 5 第 1 刀起生产者是 projectionSystem
+	// 自己（帧序 camera→…→projection→taa，本 system 排在它之后 ⟹ 读到的必是本帧终值；
+	// 原点在 projectionSystem 内部还要晚于 view 吗？不 —— view 也在那函数里、写完原点才算，
+	// 所以本 system 看到的 view 与本帧原点是同一份）。
+	// 门关恒 (0,0,0) ⟹ 下面 motion 的原点差项恰为零 ⟹ 逐位退化回纯旋转式子。
+	const auto& origin = rg.ctx().get<RenderOrigin>();
 
 	viewProj.projUnjittered = viewProj.proj;  // projectionSystem 刚写的就是未抖那份
 	const glm::ivec2 now{static_cast<int>(extent.width), static_cast<int>(extent.height)};
-	const auto camPos = camera.position;
+	// TAA 的簿记与跳切判据住在 float 域（TaaState::prevCamPos 是 vec3、cameraJumps 的
+	// 位移阈值是 float 容差）：绝对层相机位在这里**显式收窄**后交给它，算式与收窄前逐位
+	// 相同。⚠ 这里收窄的是**相机位姿**（绝对层数值，与原点无关），不是世界坐标 ——
+	// 「上一帧的世界与本帧不是同一个空间」那件事由下面的 payloadMotion 承担
+	// （docs/相对坐标地基_plan.md §4 表首行）。
+	const glm::vec3 camPos{camera.position};
 	const auto forward = cameraForward(camera);
 
 	// ① 抖动注入（关 = 不调用 applyProjectionJitter ⇒ proj 逐位不变）
@@ -441,12 +492,29 @@ void taaSystem(entt::registry& rg) {
 	//   若将来改存未抖那份，**必须同时删掉 shader 侧的减法**，二选一，不可都做也不可都不做。
 	// motion = prevSpin·inverse(curSpin)：把「本帧世界坐标」刚体搬回「上一帧世界坐标」
 	// ——本项目全场景共用一个旋转矩阵，所以一条 mat4 就是**精确**补偿（不是近似）。
+	// 🔴 批 4 第一刀：那条纯旋转式子只在**渲染原点不动**时才够。原点每移动一次，上一帧的
+	// 「世界」与这一帧的「世界」就不是同一个空间（差 O_t − O_{t−1}），静止场景会被判成运动
+	// ⟹ 历史被丢、时域噪声回来。正解 = 把两帧原点差精确复合进 motion（闭式推导
+	// → coordinate_rebase.cppm::motionWithOriginShift），门关 ΔO = 0 ⟹ 逐位退化回上面那条。
+	// ⚠ **原点那一项不受 `taaMotionCompensation` / `historyValid` 门控**，这是刻意的：
+	// velocity.frag → FSR 那条链**不吃 historyValid**（每帧照算照输出），重定位当帧不能靠
+	// 「丢弃历史」蒙过去。门关两者重合（ΔO = 0）⟹ 门红线（关 = 逐位不变）自动成立。
+	// 🔴 **prevViewProj 这一侧刻意不修**（本批的口径裁决，二选一，两边都做 = 位移算两遍）：
+	//   选 motion 承担的理由 = ① motion 的语义本来就是「本帧世界 → 上一帧世界」，原点差正是
+	//   这个映射的一部分，加在这里名实相符；② prevViewProj 的语义是「渲染出历史图的那个矩阵」，
+	//   与历史图内容**同口径**（上面批 12.6 T4 实测钉死的那条），改它 = 让那个字段说谎，而
+	//   它同时被 taa.frag / velocity.frag / ssr 三条消费者读，一处改三处漂；③ shader 侧
+	//   「prevViewProj 抖动后 ⟺ 必须减 c_{t−1}」是成对红线，动 prevViewProj 就要重推那三条。
+	//   另一条（CPU 侧把 prevViewProj 修正成相对本帧原点）为什么没选：它把「坐标系」这件事
+	//   塞进「内容指纹」字段，且要求所有 prevViewProj 消费者都理解这层修正 —— 射程比 motion
+	//   大得多，而本批只被授权动 motion。
 	taa.payloadPrevViewProj = taa.prevViewProj;
 	taa.payloadPrevContentShift = taa.prevContentShift;
-	taa.payloadMotion =
+	const glm::mat4 spinRatio =
 		(env.taaMotionCompensation && taa.historyValid)
 			? taa.prevSpin * glm::inverse(spin.matrix)
 			: glm::mat4{1.0f};
+	taa.payloadMotion = motionWithOriginShift(spinRatio, taa.prevOrigin, origin.position);
 	// 重投影消融门（`taa.reprojection`，默认 true = 本分支不进 = 逐位今天）。
 	// 关 = 三份载荷联合改成本帧恒等形态：prevViewProj := **本帧抖动后** viewProj（此刻
 	// viewProj.proj 已含本帧 jitter，与 @64 的 invViewProj 配套）+ 位移清零 + motion 单位阵
@@ -457,6 +525,10 @@ void taaSystem(entt::registry& rg) {
 	// ⚠ 勿与 `motion_compensation` 混淆：那条只关 prevSpin 场景旋转补偿，相机动、spin 关
 	//   时它是恒等阵 = 消融无效（这正是 temporal-motion 从 spin 换相机激励后必须新增本门
 	//   的原因，见 tools/imgqa/temporal_motion.cpp 头注释）。
+	// ⚠ 本门**连原点差一起抹掉**（motion := 单位阵，不是 motionWithOriginShift(I, …)）：
+	//   本门的语义是「完全不重投影」= prevUv ≡ baseUv，留着 ΔO 就不是消融而是换算法。
+	//   门开态下这条会让 velocity 在重定位当帧给出假静止 —— 那是本门应有的行为（它与
+	//   `coordinate.rebase` 不同时开；批 5 立图像级判据时若要同开需重审这一行）。
 	if (!env.taaReprojection) {
 		taa.payloadPrevViewProj = viewProj.proj * viewProj.view;
 		taa.payloadPrevContentShift = glm::vec2{0.0f};
@@ -472,6 +544,9 @@ void taaSystem(entt::registry& rg) {
 	// 的矩阵表达与平移表达。TAA 关 / jitter_scale=0 ⇒ jitterPx = 0 ⇒ c = 0 ⇒ 减法逐位恒等。
 	taa.prevContentShift = contentShiftPx(viewProj.jitterPx);
 	taa.prevSpin = spin.matrix;
+	// 渲染原点（批 4 第一刀）：与 prevSpin 同位推进 —— 下一帧的 motion 要用「上一帧在哪个
+	// 空间里渲染」这一件事。门关 origin.position 恒 (0,0,0) ⇒ 本行写的是逐位零 ⇒ ΔO 恒 0。
+	taa.prevOrigin = origin.position;
 	taa.prevCamPos = camPos;
 	taa.prevForward = forward;
 	taa.prevExtent = now;
@@ -653,7 +728,7 @@ void applyPickedSlot(entt::registry& rg, uint32_t slot) {
 			hit ? "" : "（无匹配 MeshRef，选中保持空）");
 }
 
-/** 实现流水（语义/契约见接口声明）：构建显式 system 列表（camera→animation→bounds→
+/** 实现流水（语义/契约见接口声明）：构建显式 system 列表（camera→origin→animation→bounds→
  * projection→renderlist）→ 主循环：eventSystem → AppExit 判定 → dt clamp [0, 0.1s]
  * → resizeSystem（失败 = waitForIdle 后退出循环返回 Error）→ system 链 →
  * texel 金丝雀（帧 N 一次性，drawFrame 前）→ llm 捕获请求（drawFrame 前，
@@ -685,9 +760,20 @@ std::expected<void, Error> renderSystem(entt::registry& rg, RGL::Renderer& rende
 	LlmCaptureFlow capture{llm, llmCapture};
 
 	// system 顺序（数据流契约）：
-	//   camera（InputEvents→Camera，消费即清空）→ animation（SceneSpin）→ bounds（Bounds→SceneBounds）
-	//   → projection（Camera+SceneBounds+WindowExtent→ViewProjection）→ taa（抖动注入 +
-	//   帧间簿记，批 12.6）→ renderlist（→FrameDrawList）
+	//   camera（InputEvents→Camera，消费即清空）
+	//   → animation（SceneSpin）→ bounds（Bounds→SceneBounds）
+	//   → projection（Camera+SceneBounds+WindowExtent→ViewProjection，**并生产 RenderOrigin**：
+	//   相对坐标批 5 第 1 刀起原点是本 system 内部算的（粒度 ← 级联球半径 ← near/far，三者
+	//   唯一同在处），批 4 第二刀那份「view 减原点」现在吃的是它自己刚写的值）
+	//   → taa（抖动注入 + 帧间簿记，批 12.6）→ renderlist（→FrameDrawList，实例矩阵
+	//   批 3 起、灯数据 eyePos/position 批 4 第二刀起、阴影盒心回减批 5 第 1 刀起吃原点）
+	// 🔴 批 4 第一刀新增、批 5 第 1 刀改写的次序约束：**projection 必须排在 taa 与 renderlist
+	//   之前** —— 那两者读的都是 projection **本帧**写的原点（taa 还要拿它跟自己记的上一帧原点
+	//   算跨帧差）。原来这条由「origin 排在 taa 之前」保证，而 origin 又必须排在 camera 之后；
+	//   搬进 projection 之后两个约束合成一个，少一个可错点。
+	//   把这几条的相对位置改错的后果不是「图变」而是「图在门关态也不变、门开态静默错位」，
+	//   所以它由 tests/test_coordinate_rebase.cppm / test_taa_cross_frame.cppm /
+	//   test_view_light_rebase.cppm / test_render_origin.cppm 的闭式用例守（不是由截图锚守）。
 	std::vector<FrameSystem> systems{
 		{"camera",     [](entt::registry& rg, float dt) { cameraSystem(rg, dt); }},
 		{"animation",  [](entt::registry& rg, float dt) { animationSystem(rg, dt); }},

@@ -26,6 +26,7 @@ import taa_jitter;    // contentShiftPx（内容位移口径唯一出处；批 1
 import meshlet_ranges;  // ClusterRangeTable（★1-a1i 簇区间表的 registry ctx，装配层写、本层只搬 span）
 import meshlet_lod;     // MeshletShadowLodTable（★18-B2 阴影远级联 LOD 选级表，同为 registry ctx）
 import shadow_proxy_types;  // ShadowProxyTable / pinActive（N10 P3 钉段：ctx 读表 + texel 门判据）
+import coordinate_rebase;  // toRelative（全仓唯一「绝对 → 相对」换算入口，批 3 契约：减法只此一处）
 import meshlet_cull_types_generated;  // kSlotsPerCluster（★1-a2-i 规格常量，反射生成）
 
 namespace RGL {
@@ -116,6 +117,10 @@ RGL::DrawCall makeOpaqueCall(const RGL::MeshAsset& asset, const RGL::MaterialAss
  *        循环前已 resize 到位——同 shadowArgs 的 span 悬空红线）
  * @param mdi ★M-1b：真 MDI 采集上下文（nullptr = 门关 = emit 走逐条形态，零新命令）
  * @param out 出参：逐级 draw 清单
+ * @param origin **本帧渲染原点**（绝对层，调用点传 `RenderOrigin::position`）。唯一去处 =
+ *        `buildShadowVolume` 的盒心回减（相对坐标批 5 第 1 刀；逐位 0 = 那个函数走原式早退）。
+ *        🔴 **刻意没有默认值**：漏传一处的失效形态是「门关全绿、门开静默错位」，而本函数
+ *        只有一个生产调用点，编译器逼一把的成本 = 0（AGENTS 哲学第 4 条）。
  * @return 各级光空间体
  */
 std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& light,
@@ -125,7 +130,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
     std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
     std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
     std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out,
-	const MdiShadowEmitContext* mdi = nullptr) {
+	const glm::dvec3& origin, const MdiShadowEmitContext* mdi = nullptr) {
 	glm::vec3 casterMin{0.0f}, casterMax{0.0f};
 	for (const auto& cd : cands) {
 		casterMin = glm::min(casterMin, cd.center - cd.radius);
@@ -136,7 +141,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	// 半纹素位置，PCF 抽头随相机跨纹素边界 → 影缘抖动（5a-6 排查时埋的雷，游动修复一并拆）。
 	const uint32_t snapGrid = shadowTileSize(shadowAtlasColumns(kActiveShadowCascades));
 	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
-		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, snapGrid);
+		volumes[c] = buildShadowVolume(light, slices[c], casterMin, casterMax, snapGrid, origin);
 	emitShadowCasters(cands, volumes, objectSlotCount, shadowArgs, shadowMeshletArgs,
 		shadowMeshletPinnedArgs, out, mdi);
 	return volumes;
@@ -379,7 +384,8 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
  * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 起导出为接缝，测试栈上
  * registry 直打，不必经完整 renderListSystem）。
  */
-Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDrawList& out) {
+Light fillLightData(entt::registry& rg, const glm::dvec3& cameraPosition,
+	const glm::dvec3& origin, FrameDrawList& out) {
 	// 灯 entity 化（Phase 7，ECS 规范 3）：灯 = entity（Light 组件），画不画 = 实体有无。
 	// 收集**不依赖 view 迭代序**（无保证）——按 Light.index 显式落槽：primary = index 0
 	//（写 scene data 头 @0 单灯，deferred light/highlight/ssr/shadow 经 readSceneLight 取共享
@@ -397,14 +403,25 @@ Light fillLightData(entt::registry& rg, const glm::vec3& eyePos, FrameDrawList& 
 			lightSlot[L.index] = L;
 	});
 	const uint32_t nLights = std::min(lightEntityCount, kMaxLights);
-	out.sceneData.light = SceneLight{glm::normalize(primary.direction), eyePos,
+	// eyePos 是 scene data @12 的 **float 契约**（SceneLight::eyePos，反射生成物钉布局）：
+	// 相对坐标批 4 第二刀起落库的是**相机相对渲染原点**的位置——减法只由 toRelative 做
+	// （点版重载，double 域先减、一次性收窄，顺序承重的论证在 coordinate_rebase.cppm）。
+	// 门关（origin = 0）⟹ 恒等 ⟹ 与旧的 `glm::vec3(camera.position)` 逐位相同。
+	// shader 侧它被消费成 `eyePos - P`（light/transparent/highlight/ssr/shadow 五处），
+	// P 来自相对空间的 view 重建 ⟹ 两侧必须同空间，这就是本出口存在的理由。
+	out.sceneData.light = SceneLight{glm::normalize(primary.direction),
+		toRelative(cameraPosition, origin),
 		primary.color * primary.intensity, primary.ambient};
 	out.sceneData.lightCount = nLights;
 	for (uint32_t i = 0; i < nLights; ++i) {
 		const Light& L = lightSlot[i];
 		GpuLight& G = out.sceneData.lightArray[i];
-		G.direction = glm::vec4(glm::normalize(L.direction), 0.0f);
-		G.position = glm::vec4(L.position, 0.0f);
+		G.direction = glm::vec4(glm::normalize(L.direction), 0.0f);  // 方向量平移不变，不减
+		// GpuLight.position 是 **float 契约**（布局由反射生成物钉，static_assert 在
+		// generated/lights_types_generated.cppm）：Light::position 是绝对层（double），
+		// 批 4 第二刀起**先减原点再收窄**落库（与上面的 eyePos 吃**同一个** origin 入参
+		// ⟹ 灯这一侧的两个出口结构上同空间）；绝对层不出 GPU。
+		G.position = glm::vec4(toRelative(L.position, origin), 0.0f);
 		G.color = glm::vec4(L.color * L.intensity, 0.0f);
 		G.params = glm::vec4(L.range, static_cast<float>(L.type), 0.0f, 0.0f);
 	}
@@ -649,6 +666,10 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	const auto& camera = rg.ctx().get<Camera>();
 	const auto& env = rg.ctx().get<SceneEnv>();  // Phase 5.5（env 参数；天空盒 draw 已随刀②.2 删除）
 	const auto& taa = rg.ctx().get<TaaState>();  // 批 12.6（帧间载荷；taaSystem 本帧已算好）
+	// 渲染原点（相对坐标批 3；projectionSystem 本帧已写好——批 5 第 1 刀起它是 projection 的
+	// 生产者，帧序 projection 排在 renderlist 之前，门关 = 恒 (0,0,0)）。它是**本消费者
+	// 自己携带的参数**——传给 toRelative 做减法，不读别人的（→ RenderOrigin 注释）。
+	const auto& origin = rg.ctx().get<RenderOrigin>();
 
 	std::vector<Pending> opaque, transparent;
 	// Phase 11 批 11.2：阴影 draw 清单。**不经过主视罞剔除**（见下方注释）。
@@ -724,7 +745,15 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			const auto& mat = assets.getMaterial(matRef.material);  // 批次 2：材质资产表解析
 			const bool candidate = !mat.alphaModeBlend;  // GPU culling 候选 = 不透明（与 main C3 同守卫）
 			auto& args = state.args[meshRef.objectSlot];
-			const glm::mat4 modelMatrix = spin.matrix * tf.world;  // 世界矩阵（无 view/proj）
+			// 世界矩阵（无 view/proj）= 全场景旋转 × **本消费者的相对世界矩阵**。
+			// 生产式收在 coordinate_rebase.cppm::toRelativeModel（那里写了为什么必须和
+			// motionWithOriginShift 同模块、以及门关为什么逐位不变）。
+			// 相对世界矩阵经 toRelative 取（批 3 契约：全仓只有那一处做「绝对 − 原点」减法，
+			// 🔴 不许在这里自己减 origin.position）。门关 origin = (0,0,0) ⟹ toRelative 恒等
+			// （tests/test_coordinate_rebase.cppm 钉逐位）且 tf.world == glm::mat4(tf.absolute)
+			// （生产点派生契约）⟹ 本行与旧 `spin.matrix * tf.world` 逐位相同。
+			const glm::mat4 modelMatrix =
+				toRelativeModel(spin.matrix, tf.absolute, origin.position);
 			// 矩阵表先写全量再剔除（Phase 7b）：GPU culling 读同一表（scene data @128），
 			// 被剔对象若留陈值（初值恒等）→ GPU 用错矩阵测试（背向机位 MISMATCH 根因）
 			state.matrices[meshRef.objectSlot] = modelMatrix;
@@ -758,7 +787,9 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 			if (!sphereInFrustum(frustum, wc, worldRadius))
 				return;
 			auto& bucket = mat.alphaModeBlend ? transparent : opaque;  // MASK 走 opaque（shader 内 discard，Phase 8 C1）
-			const glm::vec3 d = glm::vec3(tf.world[3]) - camera.position;  // world 平移列（无 per-entity 包围盒时的排序代理）
+			// world 平移列（无 per-entity 包围盒时的排序代理）；距离在 float 域算（只用于
+			// 比距离² 排序，单调等价），绝对层相机位先收窄
+			const glm::vec3 d = glm::vec3(tf.world[3]) - glm::vec3(camera.position);
 			// 簇化轴 ★1-a1ii-β-1：opaque 段单条 draw 的构造（switch 生效时簇路径**原位**顶掉旧
 			// mesh draw，同 objectIndex / 同 pushData / 同段内位置；条件与"为什么原位" → helper）。
 			bucket.push_back(Pending{makeOpaqueCall(asset, mat, clusterTable, meshRef.objectSlot,
@@ -779,13 +810,16 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 		});
 
 	// 主灯（阴影矩阵要它的方向）—— 提到此处：光空间体必须在剔除之前成形
-	const Light primary = fillLightData(rg, camera.position, fresh);
+	// 相对坐标批 4 第二刀：这里传**绝对层原值 + 本帧原点**，eyePos 的「减原点再收窄」收进
+	// fillLightData（与灯位置吃同一个 origin 入参 ⟹ 灯侧两出口结构上同空间；
+	// 旧的 `glm::vec3(camera.position)` 是**先收窄**——门关值相同但形态违反本刀契约，已废）。
+	const Light primary = fillLightData(rg, camera.position, origin.position, fresh);
 	// ★M-1b：MDI 采集上下文（门关 = nullopt = emit 逐条形态；判据与预检见 helper/buildMdiShadowPlans）
 	const auto mdiCtx = makeMdiShadowContext(rg, state, frameSlot);
 	const std::array<ShadowVolume, kActiveShadowCascades> shadowVolumes = buildShadowVolumes(
 		primary, cascadeSpheres, shadowCandidates, objectSlotCount, state.shadowArgs,
 		state.shadowMeshletArgs, state.shadowMeshletPinnedArgs, shadowCasters,
-		mdiCtx ? &*mdiCtx : nullptr);
+		origin.position, mdiCtx ? &*mdiCtx : nullptr);
 	// 批 10.7 高亮通道：把 SelectedObject ctx 的选中材质 + 过滤表搬进 draw list（执行器
 	// 据此过滤）。entity==null（未选中/已取消）→ hasSelection=false，pass 零 draw。
 	if (const auto* sel = rg.ctx().find<SelectedObject>();
@@ -826,7 +860,8 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// 规则，录制期读取即完成使命；门关 / 回落 = 空向量 = 执行器零 upload 零新命令）。
 	fresh.mdiSegments = std::move(state.mdiSegments);
 
-	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机世界位置；
+	// scene data（Phase 5 批次 2）：光方向归一化、color×intensity 预乘、eyePos=相机相对渲染
+	// 原点的位置（批 4 第二刀，减法在 fillLightData 内）；
 	// 对象矩阵表 span 指向 state.matrices（帧局部存储，drawFrame 录制期拷进 staging）
 	// Phase 5.5 env 参数（scene data 头 @48）+ 天空盒 clip→world 矩阵（@64，
 	// inverse(proj·view) 每帧一次——glm 列主序，shader 端列组合读）
@@ -865,6 +900,56 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	std::copy(frustum.planes, frustum.planes + 6, fresh.cullInput.planes.data());
 
 	list = std::move(fresh);
+}
+
+/**
+ * 门开路径的本帧原点吸附粒度 = `rebaseSnapGranularity(本帧四级级联纹素)`（相对坐标批 5 第 1 刀）。
+ *
+ * ## 为什么住 render_list 而不是 coordinate_rebase（分层，不是随手放）
+ * 粒度链的三个环节里 `computeCascadeSpheres` / `shadowTexelSize` 住 rlscene，而
+ * `coordinate_rebase` 住 **rlbase** —— 让 rlbase import rlscene 是逆向依赖（`rules_layers.py`
+ * 立刻点名）。本函数是「把 rlscene 的级联几何搬到 rlbase 的粒度判据上」的那段**胶水**，
+ * 只能住在两侧都够得着的地方；导出成接缝（而不是让 projectionSystem 自己写一遍）的理由 =
+ * AGENTS 哲学第 1 条：粒度只有一个来源，测试与生产吃同一个入口。
+ *
+ * ## 🔴 三个环节一个都不许另推（债-85 ② 的单一来源）
+ * `computeCascadeSpheres` → `shadowTexelSize` → `rebaseSnapGranularity` 就是
+ * `fillShadowData` 写进 scene data 的那条链（`shadowTexelSizes` 的语义「2·r/块边长，每级各自
+ * 从自己的球推」）。另推一份闭式 = 造出第二份会漂的副本。两条路径必须同值由
+ * tests/test_render_origin.cppm「两条粒度路径一致」那条钉死。
+ *
+ * ## 🔴 喂**单位 view**：级联球半径与相机姿态无关（本函数唯一的非显然步）
+ * `frustumBoundingSphere` 的半径闭式 `r = √((f−zc)² + rf²)` 的自变量只有 n/f/fov/aspect，
+ * **算式里没有 view 这个入参**（view 只用来把球心从视空间搬回世界，半径不参与）。实测凭据两条：
+ *  - `tests/test_shadow_geometry.cppm`「frustumBoundingSphere 姿态无关性：只换 view 姿态，
+ *    半径必须逐位不变」；
+ *  - `tests/test_rebase_consumers.cppm`「texelSizes 整链平移不变：同档 near/far 换任意 view
+ *    姿态/位置，texels 与粒度逐位不变」（那条守的是**整条下游链**，含 buildShadowVolume 与
+ *    fillShadowData）。
+ * 为什么必须显式喂单位阵而不是直接吃入参的 view：调用点 `projectionSystem` 算粒度的时候
+ * **本帧 view 还没生成**（view 要吃原点，原点要吃粒度）。留个「读上帧那份」的口子，
+ * 就是把帧序循环换成静默错一帧。
+ *
+ * @param proj 本帧投影矩阵（**只取 fov/aspect 两行**，与 computeCascadeSpheres 同口径）
+ * @param nearPlane 本帧实际生效近平面（**未量化**，量化在本函数内做，与 renderListSystem 同源）
+ * @param farPlane 本帧实际生效远平面（同上）
+ * @return 吸附格距（2 的幂）；级联几何坏了 ⟂ **NaN**（`rebaseSnapGranularity` 的非法输入语义）。
+ *         🔴 本函数**不**替调用方处理 NaN —— 响亮失败发生在 projectionSystem（那里才拿得到
+ *         「该 throw 还是该早退」的门）。
+ */
+double rebaseOriginGranularity(const glm::mat4& proj, float nearPlane, float farPlane) {
+	// 量化与 renderListSystem / fillShadowData 同源（同一对 quantizeShadowDistance 的产物）
+	const float shadowNear = quantizeShadowDistance(nearPlane);
+	const float shadowFar = quantizeShadowDistance(farPlane);
+	ViewProjection probe;  // view 保持默认单位阵，理由见函数头
+	probe.proj = proj;
+	probe.nearPlane = nearPlane;
+	probe.farPlane = farPlane;
+	const auto spheres = computeCascadeSpheres(probe, shadowNear, shadowFar);
+	std::array<float, kActiveShadowCascades> texels{};
+	for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
+		texels[c] = shadowTexelSize(spheres[c].radius);
+	return rebaseSnapGranularity(std::span<const float>{texels.data(), texels.size()});
 }
 
 }  // namespace RGL
