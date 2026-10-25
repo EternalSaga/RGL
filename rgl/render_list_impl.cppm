@@ -131,10 +131,23 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
     std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
     std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out,
 	const glm::dvec3& origin, const MdiShadowEmitContext* mdi = nullptr) {
+	// 🔴 **初值 = 第一个候选，不是 0**（债-149）。写成 `{0.0f}` 等于让「本帧坐标系的零点」
+	// 恒被算进投影体 AABB：场景整个偏到零点一侧时，AABB 多出一条从 0 拉到场景的长尾巴，
+	// 而这条尾巴按 `|d·轴|` 折进 `buildShadowVolume` 的 `tMax − tMin`（光空间正交盒深度跨度），
+	// 采样端那个 **NDC 域**常数深度偏置（`kShadowDepthBias`）的世界当量 = `bias × 跨度` 随之线性
+	// 膨胀——实测出厂 24 mm → 场景偏 300 m 处 246 mm，超过合成靶上任何一块板能给出的最大遮挡
+	// 深度差（228 mm）⟹ **每个片元都判成受光，阴影贡献恰为 0 像素**（整块消失，不是变淡）。
+	// 死亡界闭式 = `(h/|d.y| − 1.5·texel·|d.y|)/bias`，实测三条独立自变量（偏移 / bias / 换场景）
+	// 全部命中，误差 < 3 %。⚠ 门关态零点 = 世界原点、门开态 = 渲染原点，**两者都不是场景所在的
+	// 地方**；出厂场景恰好跨过原点 ⟹ 改动对它是空操作（交付锚逐位不变），所以这条一直没被看见。
 	glm::vec3 casterMin{0.0f}, casterMax{0.0f};
-	for (const auto& cd : cands) {
-		casterMin = glm::min(casterMin, cd.center - cd.radius);
-		casterMax = glm::max(casterMax, cd.center + cd.radius);
+	if (!cands.empty()) {
+		casterMin = cands[0].center - cands[0].radius;
+		casterMax = cands[0].center + cands[0].radius;
+		for (const auto& cd : cands.subspan(1)) {
+			casterMin = glm::min(casterMin, cd.center - cd.radius);
+			casterMax = glm::max(casterMax, cd.center + cd.radius);
+		}
 	}
 	std::array<ShadowVolume, kActiveShadowCascades> volumes{};
 	// snap 格 = **实际块边长**（不是图集整幅）：4 级时块 1024，按 2048 网格吸附 = 吸附到
