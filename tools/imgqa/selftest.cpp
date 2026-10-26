@@ -279,7 +279,7 @@ void testJudgmentFamilies(Checker& c)
     // 存在」（csm 臂与 none 臂逐位相同），而那种格子在误差表上是一个 NaN，与「阴影对但量不出」
     // 同形 ⟹ 必须有一条独立判据在这里分家（详见 judgments_table_edge.cpp 的 rebase 段）。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 93（族拆分最容易掉条目）", all.size() == 93, std::to_string(all.size()));
+    c.chk("判据总数 == 98（族拆分最容易掉条目）", all.size() == 98, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -595,6 +595,15 @@ int cmdSelftest()
     testGroundFieldPairing(c);
     testGroundFieldSearchGuards(c);
     testGroundFieldCellGrid(c);
+    // `shadow-swim-flat` 的像素域搬运口径层（债-139 结案批）。🔴 顺序 = 依赖序：往返恒等 →
+    // 横移不变性 → 恒等与反向 → 侵蚀带 → 搜索 → 守卫与挂号（前一条是后一条的取数前提，红了
+    // 后面几条的数不可解释）。
+    testShadowTransportRoundTrip(c);
+    testShadowTransportTranslation(c);
+    testShadowTransportIdentity(c);
+    testShadowTransportErosion(c);
+    testShadowTransportSearch(c);
+    testShadowTransportGuards(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }

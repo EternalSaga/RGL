@@ -34,6 +34,9 @@ add_executable(imgqa
     cli_table_edge.cpp
     # `material-swim` 的 spec 段（债-152，同 edge 段的拆法：主表撞 500 行，缝按仪器切）。
     cli_table_material.cpp
+    # `shadow-swim-flat` 的 spec 段（债-139 结案批，同 material 段的拆法：主表撞 500 行，
+    # 缝按仪器切）。
+    cli_table_swim_flat.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -95,6 +98,9 @@ add_executable(imgqa
     judgments_table_edge.cpp
     # `material-swim` 判据段（债-152，4 条），缝按仪器切（同 edge / ssr / block 段）。
     judgments_table_material.cpp
+    # `shadow-swim-flat` 判据段（债-139 结案批，5 条：无地板残差 / 阴性对照 / 不坏 / 变好 🔴 /
+    # 区分力守卫），缝按仪器切（同 material / edge / ssr / block 段）。
+    judgments_table_swim_flat.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -151,6 +157,11 @@ add_executable(imgqa
     # `material-swim` 口径层自检（债-152）：横移不变性 / 转向不是平移 / 三条不可量支路 /
     # 注入平移闭式回收 / 覆盖率下限 / tie-break / 挂号，全部闭式不启引擎。
     selftest_material.cpp
+    # `shadow-swim-flat` 口径层（`shadow_transport_metric.cpp`，债-139 结案批）自检：🔴 往返恒等
+    # （像素中心约定，差 0.5 就红）/ 横移不变性 / 恒等场恰 0 与无关场显著失配 / 侵蚀带三条（刀锋场
+    # 零侵蚀必翻、侵蚀 2 像素后**恰 0**、两臂并集）/ 注入平移同号回收 / 覆盖率下限 / 五条守卫各抛 /
+    # 五条判决线挂号，全部闭式不启引擎（合成 cov 场直打）。
+    selftest_swim_flat.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -315,6 +326,19 @@ add_executable(imgqa
     # `material_swim.cpp` = 仪器层（六臂表 + 采集 + 回显对账 + G1–G5 + J1–J4）。
     ground_field_metric.cpp
     material_swim.cpp
+    # `shadow-swim-flat`（债-139 结案批：零起伏平地上影场的世界不变性）。拆 TU 的缝同上一条
+    # （口径 vs 仪器），但**口径层必须是另一份**：`ground_field_metric` 刻意保持 float32（它的
+    # 判据是计数阈值，换精度 = 改判据），而四格对拍要跨 |x| = 1e6 工作点——float32 在那里 ULP =
+    # 0.0625 m，比本仪器要分辨的 5.7–24 mm 纹素还粗。故：
+    #   · `shadow_transport_metric.{h,cpp}` = **口径层**（double 域地面搬运 / 影缘侵蚀带 / 光度
+    #     可信集 / 翻转与 |Δcov| 读数 / 平移搜索），被 `selftest_swim_flat.cpp` 闭式直测；
+    #     🔴 cov 场与二值阈值**复用** `seamCovField` / `kSeamBin`，不另立第二份覆盖度定义
+    #   · `shadow_swim_flat.cpp`        = 仪器层（四格 × 两机位 × 两臂采集 + 回显对账 + 出表）
+    #   · `shadow_swim_flat_judge.cpp`  = 闸门 G1–G5 + 五条判决线（缝 = 出表 vs 判决，同 rebase）
+    # 靶读取 / 级联闭式 / 靶同源判据全部复用 `shadow_edge_*`，一份都不另写。
+    shadow_transport_metric.cpp
+    shadow_swim_flat_judge.cpp
+    shadow_swim_flat.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器

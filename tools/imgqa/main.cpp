@@ -197,6 +197,9 @@ int dispatch(const std::string& cmd, const Args& P)
         // 同上：零 flag。债-152 的守卫——材质场（G-buffer roughness）世界不变性，六臂四判据，
         // J1/J4 修前红（量具先行：没有红读数的修复等于没修）。
         { "material-swim", cmdMaterialSwim },
+        // 同上：零 flag。债-139 结案批——**零起伏平地**上影场的世界不变性（无地板残差 Q1 +
+        // 四格时间稳定性 Q2 + 与 swim 的口径对照 Q3）。五条判决线 + 六道闸门（抛 rc=3）。
+        { "shadow-swim-flat", cmdShadowSwimFlat },
         // 同上：零 flag。债-134 的先决——透明段 lit 变体的常驻像素贡献（双臂同源 + 引擎回显条数）。
         { "blend-lit", cmdBlendLit },
     };

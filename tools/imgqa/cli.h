@@ -92,6 +92,11 @@ const SubcommandSpec* findSubcommand(const std::string& name);
 /// `cli_table.cpp` 的 allSpecs() 注）。
 [[nodiscard]] std::vector<SubcommandSpec> materialSwimSpecs();
 
+/// `shadow-swim-flat` 段的正文在 `cli_table_swim_flat.cpp`（债-139 结案批：零起伏平地上影场的
+/// 世界不变性；同 material 段的拆法：主表撞 500 行，缝按仪器切）。-h 位置 = material-swim 段
+/// 之后（理由见 `cli_table.cpp` 的 allSpecs() 注）。
+[[nodiscard]] std::vector<SubcommandSpec> swimFlatSpecs();
+
 /// 绑定到某个 spec 的解析结果。**默认值只能来自 spec**——旧的三参数
 /// `get(args, key, def)` 已删除：留着它，字面量默认值就还有地方活。
 /// 读未声明的 flag 直接抛（不抛 = 校验是摆设）。

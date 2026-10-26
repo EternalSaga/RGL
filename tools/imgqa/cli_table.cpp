@@ -542,6 +542,12 @@ std::vector<SubcommandSpec> allSpecs()
     // 的理由：-h 顺序只是打印序，不挪既有条目。它排在影场族之后是顺带的——两台仪器共用
     // `ground_field_metric` 那一份对拍口径，相邻能让读 -h 的人看见「同一个形状推广到材质场」。
     append(materialSwimSpecs());
+    // `shadow-swim-flat` 排在 material-swim 之后（正文住 `cli_table_swim_flat.cpp`）。同上一条
+    // 的理由：-h 顺序只是打印序，不挪既有条目。它**紧挨** material-swim 是刻意的：两台仪器是同一
+    // 个形状（两机位 + 世界对拍 + 平移搜索）在材质场与影场上的两副面孔，而本条补的正是 material-
+    // swim 那份 5 cm 世界格口径对毫米级刀锋影场的结构性失明——相邻能让读 -h 的人看见「同一台仪器
+    // 换了口径」。
+    append(swimFlatSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

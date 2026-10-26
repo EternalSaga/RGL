@@ -96,6 +96,13 @@ namespace RGL::imgqa {
 /// `judgments_table_material.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& materialSwimJudgments();
 
+/// 地基族 · **零起伏平地上影场的世界不变性**（`shadow-swim-flat`，债-139 结案批，5 条）：
+/// 无地板残差（Q1）/ 阴性对照 / 不坏 / 变好 🔴（Q2）/ 区分力守卫。与 material-swim 的差别不是
+/// 「换了个场」而是**换了口径**：像素域 double 搬运 + 影缘侵蚀带——5 cm 世界格 + 格内多数票对
+/// 毫米级刀锋影场结构性不可见（实测同一份数据 0.036 % vs 0.256 %，差 7 倍）。
+/// 📄 正文在 `judgments_table_swim_flat.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& swimFlatJudgments();
+
 /// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
 /// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
 /// 📄 正文在 `judgments_table_ssr.cpp`。

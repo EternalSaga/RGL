@@ -867,6 +867,24 @@ int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool i
  * 的全部论证 → `material_swim.cpp` 头注释；容差理由与 guard 出处 → `imgqa check`。
  */
 int cmdMaterialSwim();
+
+/**
+ * **零起伏平地上影场的世界不变性**（债-139 结案批，`shadow-swim-flat`）：把 `material-swim`
+ * 那套「两机位 + 世界对拍 + 平移搜索」的形状搬回**影场**，但换掉两处口径——① 地面换成零起伏
+ * 平面（`shadow_edge_rig` 的接收面 y=0），按构造删掉债-139 那个 bistro 鹅卵石的测量地板；
+ * ② 对拍从 5 cm 世界格换成**像素域 double 搬运 + 影缘侵蚀带**，因为 5 cm 格 + 多数票对毫米级
+ * 刀锋微影场结构性不可见（实测同一份数据 0.036 % vs 0.256 %，差 7 倍）。
+ *
+ * 三个交付问题：Q1 = 债-139 的 2.73 % 在无地板口径下剩多少（J-F1）；Q2 = 四格（2 工作点 × 2
+ * 开关态）对拍证明 `coordinate.rebase` 到底买没买到时间稳定性（J-F4）；Q3 = 既有 `swim` 为什么
+ * 看不见（口径对照，全文住 `cli_table_swim_flat.cpp` 的 help 与 `shadow_swim_flat.cpp` 头注）。
+ *
+ * 🔴 **无 flag 是设计**（同 shadow-edge-ruler / material-swim）：靶 / 机位 / 激励量 / 尺寸 /
+ * 帧号 / 侵蚀半径 / 搜索网格 / 阈值都是量具的组成部分，能调 = 能调绿。四格两机位 + 五条判决线
+ * + 六道闸门（抛 rc=3）的全部论证 → `shadow_swim_flat.cpp` 头注释；容差理由与 guard 出处 →
+ * `imgqa check`。
+ */
+int cmdShadowSwimFlat();
 /// 闭式解探针（12.3b 接替 analytic_ref.py --probe；2026-10-18 重立到 deferred 双锚）：
 /// 消费 qa/configs/analytic 冻结配置（六门逐项关掉写在注释里），**RPC 模式单启动三拍**
 /// （后缓冲 + gbuf 通道 0/3；副本只改回读管线键 rpc/llm_debug，渲染门一个不碰），
