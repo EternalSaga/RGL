@@ -100,7 +100,10 @@ RGL::DrawCall makeOpaqueCall(const RGL::MeshAsset& asset, const RGL::MaterialAss
     return RGL::DrawCall{asset.pipelineIndex, pushData, asset.groupCount};
 }
 
+}  // namespace
+
 /**
+ * 定义（接口声明与「为什么抬成接缝」→ render_list.cppm）。
  * 建逐级光空间体并逐级剔除出阴影 draw（返回体供 fillShadowData 写 scene data）。
  * 抽出来的原因：renderListSystem 的代码行与认知复杂度已顶到阈值，而这块自成一体。
  *
@@ -115,7 +118,10 @@ RGL::DrawCall makeOpaqueCall(const RGL::MeshAsset& asset, const RGL::MaterialAss
  * @param shadowArgs 出参：填 ShadowDrawArgs
  * @param shadowMeshletArgs 出参：填 ShadowMeshletDrawArgs（★18-B2，同分块公式，调用方
  *        循环前已 resize 到位——同 shadowArgs 的 span 悬空红线）
- * @param mdi ★M-1b：真 MDI 采集上下文（nullptr = 门关 = emit 走逐条形态，零新命令）
+ * @param shadowMeshletPinnedArgs 出参：N10 P3 钉段 draw 的 12B push（必须是另一块存储，
+ *        分块公式同上，同样循环前 resize）
+ * @param mdi ★M-1b：真 MDI 采集上下文（nullptr = 门关 = emit 走逐条形态，零新命令）。
+ *        🔴 默认值只写在接口声明那一份（同一默认实参声明两次是编译错误）
  * @param out 出参：逐级 draw 清单
  * @param origin **本帧渲染原点**（绝对层，调用点传 `RenderOrigin::position`）。唯一去处 =
  *        `buildShadowVolume` 的盒心回减（相对坐标批 5 第 1 刀；逐位 0 = 那个函数走原式早退）。
@@ -130,7 +136,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
     std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletArgs,
     std::vector<RGL::ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
     std::array<std::vector<RGL::DrawCall>, kActiveShadowCascades>& out,
-	const glm::dvec3& origin, const MdiShadowEmitContext* mdi = nullptr) {
+	const glm::dvec3& origin, const MdiShadowEmitContext* mdi) {
 	// 🔴 **初值 = 第一个候选，不是 0**（债-149）。写成 `{0.0f}` 等于让「本帧坐标系的零点」
 	// 恒被算进投影体 AABB：场景整个偏到零点一侧时，AABB 多出一条从 0 拉到场景的长尾巴，
 	// 而这条尾巴按 `|d·轴|` 折进 `buildShadowVolume` 的 `tMax − tMin`（光空间正交盒深度跨度），
@@ -140,6 +146,7 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	// 死亡界闭式 = `(h/|d.y| − 1.5·texel·|d.y|)/bias`，实测三条独立自变量（偏移 / bias / 换场景）
 	// 全部命中，误差 < 3 %。⚠ 门关态零点 = 世界原点、门开态 = 渲染原点，**两者都不是场景所在的
 	// 地方**；出厂场景恰好跨过原点 ⟹ 改动对它是空操作（交付锚逐位不变），所以这条一直没被看见。
+	// 🔴 守卫 = `tests/test_shadow_caster_aabb.cppm`（把初值改回 `{0.0f}` 它必红，变异红线 ①）。
 	glm::vec3 casterMin{0.0f}, casterMax{0.0f};
 	if (!cands.empty()) {
 		casterMin = cands[0].center - cands[0].radius;
@@ -159,8 +166,6 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 		shadowMeshletPinnedArgs, out, mdi);
 	return volumes;
 }
-
-}  // namespace
 
 /**
  * 定义（接口声明与「为什么抬成接缝」→ render_list.cppm）。级联包围球（自 renderListSystem

@@ -65,6 +65,11 @@ set(RGL_TEST_SOURCES
     test_view_light_rebase.cppm # 相对坐标批 4 第二刀 view/eyePos/灯位置三出口接线判据：门关逐位 = 改前 lookAt/收窄式 / 🔴 精度收益锚（1e6 处平移列塌缩 + sub-ULP 区分力守卫钉「先减后收窄」）/ 三出口同空间（闭式 + view·eyePos 跨出口）/ 不漏改（origin≠0 三处都变）/ projectionSystem 接线正反两半（view 吃原点、near/far 不吃）
     test_shadow_texel_grid.cppm # 相对坐标批 5 第 0 刀（只测量）：出厂四级纹素与吸附格距 G 的整除性 / 光基是否退化 / 🔴 原点跨一格后图集相对世界的跳变量（三假设对照 H0 世界轴、H1 光基、H2 光基+每级纹素抬 2 的幂）/ 比较算子区分力三半边
     test_shadow_texel_absolute.cppm # 相对坐标批 5 第 0.5 刀（只测量，零生产改动）：🔴 把 texel 吸附的输入换成**绝对**球心（H3）后原点跨格的图集跳变量（吸附项残余 vs 顶点路径残余分开报）/ 姿态变化时盒心仍格点量化（不量化臂反向半边）/ |O|≈1e6 处 double 域吸附的可行性边界 / 门关态逐位是否被改（决定要不要门关早退）/ H3 vs H2 取舍表 / 批 5 阈值推导
+    test_shadow_caster_aabb.cppm # 债-149 的守卫（台账行点名的缺口）：🔴 投影体 AABB 不许把坐标系零点算进去
+                                 # + 闭式上下界（跨度 = 候选 AABB 光轴投影长度 + 2pad，与离零点距离无关）
+                                 # + 整组候选沿光轴平移 Δ 跨度不变 + 只换渲染原点跨度不变（两条反向半边）
+                                 # + 随机偏侧候选集双侧界 + 出厂形态（跨零点）空操作反向用例
+                                 # + ② NDC 偏置世界当量 = 24 mm 量级（与债-150 台账交叉核对）/ 当量对摆位不变 / shadowFar 换性能静默改当量
     test_rebase_consumers.cppm  # 相对坐标批 4 第三刀「自动跟/不用改」表 → 判据：🔴 texelSizes 整链（computeCascadeSpheres→buildShadowVolume→fillShadowData→rebaseSnapGranularity）与相机姿态/位置逐位无关（批 5 粒度不循环定义的唯一凭据）+ 跨档必须变的反向半边 / CPU 剔除可见集逐球平移不变（闭式六面对账）/ meshlet 簇可见集逐元素平移不变 + 两侧不同空间的错位锚点 / 透明排序键顺序平移不变 + 混空间锚点
     test_camera.cppm            # 相机数学
     test_cube_geometry.cppm     # 内建 cube 顶点/索引契约

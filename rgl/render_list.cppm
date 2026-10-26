@@ -289,6 +289,39 @@ export struct MeshletMdiShadowActivation {
 };
 
 /**
+ * 候选表 → 逐级光空间体 → 逐级阴影 draw（整段收口）。定义在 render_list_impl
+ * （partition impl unit，实现侧不写 export）。
+ *
+ * 导出为**可测接缝**（债-149 结案批，`computeCascadeSpheres` / `emitShadowCasters` 同款理由）：
+ * 本函数是「投影体 AABB 的初值」那条修复的**唯一落点**，而它的失效形态（坐标系零点恒被算进
+ * 包围盒 → 光空间盒深度跨度被一条从零点拉到场景的长尾巴撑爆 → NDC 域常数深度偏置的世界当量
+ * 随之线性膨胀 → 阴影整块消失）在截图上只有「有影 / 没影」两种读法，**量不出「跨度对不对」**；
+ * 没有接缝，这条修复就只能靠闭式预测 + 实机差分担保（本项目反复实测的对手正是「看起来已完工」）。
+ * 判据 = `tests/test_shadow_caster_aabb.cppm`（闭式上下界 + 整组候选沿光轴平移的不变量，
+ * 变异红线：把初值改回 `{0.0f}` 它必红）。🔴 生产调用点仍只有一个（`renderListSystem`），
+ * 抬接缝本身零行为变化。
+ * @param light 主灯（光空间基）
+ * @param slices 各级子视锥包围球（定 XY 半宽；**相对**渲染原点）
+ * @param cands 投影体候选（AABB 由它们合成——🔴 累加初值不许是零点，失效链见定义处注释）
+ * @param objectSlotCount shadowArgs 分块 stride
+ * @param shadowArgs 出参：填 ShadowDrawArgs
+ * @param shadowMeshletArgs 出参：填 ShadowMeshletDrawArgs（调用方循环前已 resize 到位）
+ * @param shadowMeshletPinnedArgs 出参：N10 P3 钉段 draw 的 12B push（必须是另一块存储）
+ * @param out 出参：逐级 draw 清单
+ * @param origin **本帧渲染原点**（绝对层，调用点传 `RenderOrigin::position`）；逐位 0 = 门关
+ * @param mdi ★M-1b：真 MDI 采集上下文（nullptr = 门关 = emit 走逐条形态，零新命令）
+ * @return 各级光空间体（供 fillShadowData 写 scene data）
+ */
+export std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(
+	const Light& light, const std::array<Bounds, kActiveShadowCascades>& slices,
+	std::span<const ShadowCandidate> cands, uint32_t objectSlotCount,
+	std::vector<ShadowDrawArgs>& shadowArgs,
+	std::vector<ShadowMeshletDrawArgs>& shadowMeshletArgs,
+	std::vector<ShadowMeshletDrawArgs>& shadowMeshletPinnedArgs,
+	std::array<std::vector<DrawCall>, kActiveShadowCascades>& out,
+	const glm::dvec3& origin, const MdiShadowEmitContext* mdi = nullptr);
+
+/**
  * 候选 × 逐级光空间体 → 阴影 draw 清单（★18-B2 抬为可测接缝，同上先例）。级主序、级内
  * 实体迭代序；**draw 条数与切不切无关**（原位换管线形状：只换 draw 内容，不增减）。
  * c0 恒旧路径（8B push）；c1..c3 且候选可切 → 簇管线 + meshletTaskCount(簇数) + 12B push。
