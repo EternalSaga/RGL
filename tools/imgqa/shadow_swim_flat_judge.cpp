@@ -83,14 +83,23 @@ void requireFlatCellsValid(const std::vector<FlatCell>& cells)
     requireFarIsTranslatedCopy(cells[0].target, cells[2].target, cells[0].modelA,
         cells[2].modelA);
     // 同桶（本仪器独有，rebase 没有：它的两枚机位是同一枚）。
+    // 🔴 债-159：这里**不核对米数**（原来那份 `= kEdgeFarOffsetM` 是本仓的第二份抄本，已删）。
+    // 出厂格要求 worldOffset 恰为零（它要是非零就不是出厂工作点），远点格要求非零 + 网格外
+    // ——后一条由上面复用的 `requireFarIsTranslatedCopy` 求值，本仪器不另写一份判据。
     for (const auto& c : cells) {
         const auto& off = c.target.worldOffset;
-        const double want = c.stem == kFlatFarStem ? kEdgeFarOffsetM : 0.0;
-        if (std::abs(off[0] - want) > kEdgeShiftTolM || std::abs(off[1]) > kEdgeShiftTolM
-            || std::abs(off[2]) > kEdgeShiftTolM)
-            throw std::runtime_error("G1: " + c.title + " 的 manifest worldOffset 不是 "
-                + std::to_string(static_cast<long long>(want)) + "（读到的 x = "
-                + std::to_string(off[0]) + "）⟹ 工作点不是量具以为的那个");
+        const bool far = c.stem == kFlatFarStem;
+        const double want = far ? 1.0 : 0.0;  // 只问「零 / 非零」，不问「等于几」
+        const bool ok = far ? (std::abs(off[0]) > kEdgeShiftTolM && std::abs(off[1]) <= kEdgeShiftTolM
+                                  && std::abs(off[2]) <= kEdgeShiftTolM)
+                            : (std::abs(off[0]) <= kEdgeShiftTolM
+                                  && std::abs(off[1]) <= kEdgeShiftTolM
+                                  && std::abs(off[2]) <= kEdgeShiftTolM);
+        if (!ok)
+            throw std::runtime_error("G1: " + c.title + " 的 manifest worldOffset 不该是"
+                + std::string(want > 0.0 ? "零（远点格必须真的挪出去）"
+                                         : "非零（出厂格是基准，挪了就不是基准）")
+                + "（读到的 x = " + std::to_string(off[0]) + "）⟹ 工作点不是量具以为的那个");
         if (!sameCascadeBucket(c.modelA, c.modelB))
             throw std::runtime_error("G1: " + c.title
                 + " 的两枚机位（沿世界 +X 差 0.5 m）**不在同一个量化桶**里（nearQ "
@@ -192,8 +201,9 @@ Verdict judgeFlatFloor(const FlatCell& c)
         "不是阴影真的变了。留 0.01 %（≈ 28 点）而不是「恰 0」的唯一理由：侵蚀半径是**整数像素**，"
         "而 1 像素的半影加亚像素搬运误差可以漏到第 3 像素——真漏出去就是影缘挪了 > 1.1 cm，"
         "那是要出声的世界滑移，不该被半径盖掉。\n"
-        "· 2.0 ‰ 的来历（先测后定，2026-10-26 本机）：①②④ 实测 0.866 / 0.915 / 0.710 ‰，"
-        "取最差者的 2.2 倍。它是「没跨 0.5 阈值的连续差」——翻转率看不见的部分，也是本批唯一"
+        "· 2.0 ‰ 的来历（先测后定，2026-10-26 本机）：定界那代 ①②④ 实测 0.866 / 0.915 / 0.710 ‰，"
+        "取最差者的 2.2 倍（债-159 换远工作点后当代实测 ① 0.806 / ② 0.855 / ④ 0.861 ‹界内›，"
+        "界不随工作点改——它的定义就是「门开在远点达到门开在出厂点的水平」）。它是「没跨 0.5 阈值的连续差」——翻转率看不见的部分，也是本批唯一"
         "能区分 ③ 与 ④ 的统计量（二值翻转率反而给 ③ 报**更低**的数：0.029 % vs 0.267 %，"
         "因为门关在远点的影场更粗、刀锋更少）。\n"
         "· 两个统计量都要报的实测理由就在这条判据自己身上：erode0 与 erode2 差 60 倍（侵蚀带的"
@@ -272,7 +282,8 @@ Verdict judgeFlatBenefit(const FlatCell& base, const FlatCell& farOff, const Fla
             + permille(1000.0 * farOff.floor.p99AbsCov) + "），③/④ = " + ratioBuf
             + "×；对比 ① 出厂·门关 = " + permille(base.floor.meanAbsCovPermille()),
         "通过条件只有可长期成立的那半句：**远点 + 门开**的无地板残差 ≤ 与 ①② 同一个界（0.01 % / "
-        "2.0 ‰）。实测 ④ 0.710 ‰，比 ① 的 0.866 ‰ 还好一点。\n"
+        "2.0 ‰）。实测 ④ 0.861 ‰（远点 4e6 网格外，债-159 当代）/ 0.649 ‰（上一代 1e6 网格上），"
+        "都与 ① 同量级。\n"
         "· 🔴 通过条件里**故意不含**「③ 必须显著差于 ④」。那条写法在断言「缺陷存在」：今天 ③ 差 "
         "5.7 倍（4.213 vs 0.739 ‰，p99 差 11.6 倍），一旦大坐标下「阴影整块消失」那条新缺陷被修掉，"
         "③ 变好，本条就会**因为修好了 bug 而红**——那是把技术债写成判据。③/④ 的对比（rebase 到底"
@@ -284,8 +295,10 @@ Verdict judgeFlatBenefit(const FlatCell& base, const FlatCell& farOff, const Fla
         "起作用了」。",
         { "shadow-edge-rebase 的 J-R2「变好」同形态先例（🔴 那条的头注原话：只验「不坏」会放行"
           "一个「线接完了但一分精度都没买到」的实现）",
-          "本批四格实测（erode 4 同口径）：① 0.787 / ② 0.838 / ③ 4.213 / ④ 0.739 ‰；p99 ‰ "
-          "12.80 / 12.77 / 157.33 / 13.50",
+          "四格实测**按远工作点分代**（跨代不可比）：erode4 口径 ① 0.787 / ② 0.838 / ③ 4.213 / "
+          "④ 0.739 ‰；远点 = 1e6（网格上）erode2 口径 ① 0.806 / ② 0.855 / ③ 64.039 / ④ 0.649 ‰"
+          "（③/④ = 98.7）；远点 = 4e6 且网格外（债-159 当代）① 0.806 / ② 0.855 / ③ 181.743 / "
+          "④ 0.861 ‰（③/④ = 211.2，p99 ‰ 15.486 / 15.486 / 462.165 / 16.206）",
           "shadow-edge-rebase.cpp 头注：远点门关态实测是「阴影整块消失」而非厘米级抖动，那是"
           "另一类缺陷（J-R3 单独裁决），别记进 rebase 的收益——本条同理" } };
 }

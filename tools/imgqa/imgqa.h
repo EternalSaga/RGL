@@ -1340,7 +1340,8 @@ int cmdShadowEdgeRuler();
 /**
  * shadow-edge-rebase —— 相对坐标原点 rebase 的**四格对拍**（相对坐标批 5 第 2 刀）。
  *
- * 2 工作点（出厂点 / 整靶沿世界 +X 平移 1e6 m）× 2 开关态（`coordinate.rebase` 关 / 开）
+ * 2 工作点（出厂点 / 整靶沿世界 +X 平移一枚 **float32 网格外**的大坐标）× 2 开关态
+ *（`coordinate.rebase` 关 / 开）。🔴 工作点由靶的 manifest 给（债-159：量具不抄米数）
  * = ①②③④，每格六臂（none 分母 + 自然 D=5 + 钉级 0..3）。真值 = 闭式算术（与
  * `shadow-edge-ruler` 同一口径层、同一枚靶），🔴 不是「和另一次渲染比」——差分判据只能证
  * 「不变」，证不了「对」。

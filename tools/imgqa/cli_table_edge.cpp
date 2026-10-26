@@ -98,7 +98,8 @@ std::vector<SubcommandSpec> shadowEdgeRebaseSpecs()
         /* shadow-edge-rebase */
         SubcommandSpec{
             "shadow-edge-rebase",
-            "相对坐标原点 rebase 的四格对拍：2 工作点（出厂 / 沿 +X 1e6 m）× 2 开关态"
+            "相对坐标原点 rebase 的四格对拍：2 工作点（出厂 / 沿 +X 一枚 float32 网格外的"
+            "大坐标，量级由靶的 manifest 给）× 2 开关态"
             "（coordinate.rebase 关/开），真值 = 闭式算术（六臂 × 四格 + 六道闸门 G1–G6，"
             "靶 = shadow_edge_rig(_far)，跑在交付配置上）",
             {
@@ -128,16 +129,24 @@ std::vector<SubcommandSpec> shadowEdgeRebaseSpecs()
                 "顶点缓冲是 float32，float32(1e6 + 局部) 的 ULP = 0.0625 m ⟹ 资产自己就带 "
                 "±31 mm 误差，而 toRelative 减的是变换平移列、碰不到顶点 ⟹ 那 31 mm 任何原点"
                 "方案都消不掉。实测两种形态在 1e6 下都阴影整块消失，所以这不是绕开失效。"
-                "两枚靶的 GLB **逐字节相同**，差别只在 manifest（measure 块多一枚 worldOffset，"
-                "真值/机位/sceneBounds 全部跟着平移）。",
+                "两枚靶的 GLB **顶点缓冲**逐字节相同，差的是每个 node 多一枚 translation（债-159："
+                "node 矩阵是单位阵时 absolute = root·I = root，「逐图元复合改在 double 域乘」那条"
+                "链图像上不可见），所以仪器写进 entities 的是 worldOffset − nodeTranslation。"
+                "🔴 工作点必须落在 float32 网格**外**：网格上的工作点（原值 1e6 = 2⁶·5⁶ 恰可精确"
+                "表示）没有亚格小数可丢，「绝对层在输入处多过一遍 float」这类回归诱导的位移恰为 0。"
+                "真值/机位/sceneBounds 全部跟着平移并写进 manifest。",
                 "六臂 × 四格 = 24 次引擎进程 + 复现性 2 次：none（覆盖度分母）+ 自然渲染 "
                 "D=5 + 钉级 force_cascade ∈ {0,1,2,3} × D=5。钉级列只取出厂 D（本靶上 D 逐位"
                 "空操作是已证事实，ruler 头注 E2）。读数 = cov 沿世界扫描线的自身过渡中点"
                 "（与 shadow-edge-ruler 同一口径层 shadow_edge_metric.*，E1 相对阈值）。",
                 "🔴 **六道闸门**（全部抛 rc=3、一条 Verdict 都不产；表先出、闸门后抛）："
-                "G1 **靶同源** = 远点 manifest 的 worldOffset 必须 = 1e6 且逐板真值/机位/"
-                "sceneBounds 恰等于出厂靶 + worldOffset（1e−6 m），级联闭式两靶逐数相同——"
-                "这是「闭式真值跟着平移」的唯一机器判据（变异红线 ①）；G2 簇路径生效 + 两枚"
+                "G1 **靶同源** = 远点 manifest 的 worldOffset 必须非零、纯 +X、且 "
+                "worldOffset − nodeTranslation **不在 float32 网格上**（🔴 债-159：这里不核对米数，"
+                "米数抄本正是本债要抓的第二份真相），逐板真值/机位/sceneBounds 恰等于出厂靶 + "
+                "worldOffset（1e−6 m），级联闭式两靶逐数相同——这是「闭式真值跟着平移」的唯一机器"
+                "判据（变异红线 ①）；G1b **工作点有牙齿** = 网格外圆走的那一截投到测量轴 u 上必须 "
+                "≥ 2 × 最紧逐板界（「网格外」是必要条件不是充分条件：1e6 量级最多诱导 23.2 mm，"
+                "而最紧的界 18.57 mm、基准自身偏差已占掉界的 69 % ⟹ 不可判，实测）；G2 簇路径生效 + 两枚"
                 "靶三件套在场；G3 引擎回显四查（mode / force_cascade / min(D=5, / "
                 "coordinate.rebase = true——门开臂必须在场、门关臂必须缺席）；G4 出厂点门开"
                 "vs 门关不得逐位相同（接了但没接上 = 四格只剩两格）；G5 每块板必须真的量到"

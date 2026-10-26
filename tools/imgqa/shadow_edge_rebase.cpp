@@ -13,7 +13,7 @@
 //                 | 门关 rebase=false      | 门开 rebase=true
 //   --------------|------------------------|--------------------------
 //   出厂点（靶原位）| ① 基准                 | ② 「不坏」的比较对象
-//   远点（+1e6 m） | ③ **预期最差**          | ④ **预期 ≈ ①②**
+//   远点（网格外） | ③ **预期最差**          | ④ **预期 ≈ ①②**
 //   · **不坏** = 出厂点门开的逐板影边误差不得比门关变大（J-R1）。
 //   · **变好** 🔴 = 远点门开必须把影边精度买回出厂水平（J-R2）。**这条才是 rebase 的存在
 //     理由**——只验「不坏」会放行一个「线接完了但一分精度都没买到」的实现。
@@ -158,15 +158,17 @@ void requireRebaseEcho(const Cell& c, const RebaseArm& a, const std::string& log
             + "` ⟹ 门关臂其实开着门（覆写打偏或被后面的门盖掉），①③ 两格不是门关态");
 }
 
-/// 本格那一格要装进 scene.lua 的 entity 文本（远工作点把 manifest 的 worldOffset 当
-/// entity position 给引擎；出厂点不平移 ⟹ 不写 position 键 = 与改前逐字同）。
+/// 本格那一格要装进 scene.lua 的 entity 文本（远工作点写的是 **`worldOffset − nodeTranslation`**，
+/// 唯一一份减法在 `entityPositionOf`，与 shadow-swim-flat 共用；出厂点不平移 ⟹ 不写 position
+/// 键 = 与改前逐字同）。
 std::string entitiesLua(const Cell& c)
 {
-    const auto& off = c.target.worldOffset;
+    const std::array<double, 3> e = entityPositionOf(c.target);
+    const std::array<double, 3> off = c.target.worldOffset;
     const bool moved = std::abs(off[0]) + std::abs(off[1]) + std::abs(off[2]) > 0.0;
     return "{ type = \"model\", file = \"models/" + c.stem + ".glb\""
-        + (moved ? ", position = { " + luaNum(off[0]) + ", " + luaNum(off[1]) + ", "
-                       + luaNum(off[2]) + " }"
+        + (moved ? ", position = { " + luaNum(e[0]) + ", " + luaNum(e[1]) + ", "
+                       + luaNum(e[2]) + " }"
                  : "")
         + " }";
 }
@@ -375,19 +377,28 @@ int cmdShadowEdgeRebase()
 {
     const std::string profile = projectRoot() + "/build/rgl/imgqa_shadow_edge_rebase_profile";
     std::printf("shadow-edge-rebase —— 相对坐标原点 rebase 的**四格对拍**：2 工作点"
-                "（出厂 / 沿 +X 1e6 m）× 2 开关态（coordinate.rebase 关 / 开）\n");
+                "（出厂 / 沿 +X 大坐标·**float32 网格外**）× 2 开关态（coordinate.rebase 关 / 开）\n");
     std::printf("  真值 = 闭式算术（同 shadow-edge-ruler，E1 相对阈值口径）；靶 = models/%s.glb"
                 " 与 models/%s.glb；采集 %dx%d，帧号 %d，出厂 D=%d\n",
         kEdgeGlbStem, kFarStem, kEdgeWidth, kEdgeHeight, kEdgeDelayFrames, kEdgeFactoryD);
     std::printf("  🔴 远点平移量住在 entity 的 position（不烘进 GLB 顶点）；两枚靶的 GLB "
-                "逐字节相同，差别只在 manifest\n");
+                "**顶点缓冲**逐字节相同，差的只是每个 node 多一枚 translation（债-159）\n");
 
     std::vector<Cell> cells = makeCells();
     requireFarIsTranslatedCopy(cells[0].target, cells[2].target, cells[0].model,
         cells[2].model);  // 🔴 G1
-    std::printf("  G1 过：远点靶的机位 / 逐板真值 / sceneBounds 恰等于出厂靶 + worldOffset"
-                "（%.0f m）\n",
-        kEdgeFarOffsetM);
+    requireFarGridHasTeeth(cells[0], cells[2].target);  // 🔴 G1b（债-159：工作点必须有牙齿）
+    const FarGridFacts g = farGridFacts(cells[2].target);
+    const double tightestMm = tightestPlateBoundMm(cells[0]);  // plateBoundMm 的单位就是 mm
+    const double projectedMm = std::abs(g.inducedM) * 1000.0 * cells[2].target.uDir[0];
+    std::printf("  G1/G1b 过：远点靶的机位 / 逐板真值 / sceneBounds 恰等于出厂靶 + worldOffset"
+                "（%.10g m）\n",
+        cells[2].target.worldOffset[0]);
+    std::printf("  🔴 债-159 工作点网格事实：entity %.10g → float32 圆后 %.10g，圆走 %.1f mm"
+                "（ULP = %.4f m）；投到测量轴 u = %.1f mm = 最紧逐板界 %.1f mm 的 %.1f 倍"
+                "（界 = 1 枚本级纹素 + 2 枚像素刻度，G1b 要求 ≥ 2 倍）\n",
+        g.entity[0], g.rounded, g.inducedM * 1000.0, g.ulpM, projectedMm, tightestMm,
+        projectedMm / tightestMm);
     std::printf("  级联闭式 splits = [%.3f, %.3f, %.3f, %.3f] m；texel = [%.2f, %.2f, %.2f,"
                 " %.2f] mm（两靶逐数相同 = 级联只吃相机到 SceneBounds 的相对距离）\n",
         cells[0].model.splits[0], cells[0].model.splits[1], cells[0].model.splits[2],
@@ -435,7 +446,10 @@ int cmdShadowEdgeRebase()
 
     logCall("shadow-edge-rebase",
         { { "targets", std::string(kEdgeGlbStem) + "," + kFarStem },
-            { "far_offset_m", luaNum(kEdgeFarOffsetM) },
+            { "far_offset_m", luaNum(cells[2].target.worldOffset[0]) },
+            { "far_entity_x", luaNum(entityPositionOf(cells[2].target)[0]) },
+            { "far_float32_x", luaNum(farGridFacts(cells[2].target).rounded) },
+            { "far_induced_mm", luaNum(farGridFacts(cells[2].target).inducedM * 1000.0) },
             { "size", std::to_string(kEdgeWidth) + "x" + std::to_string(kEdgeHeight) },
             { "delay_frames", std::to_string(kEdgeDelayFrames) },
             { "arms", std::to_string(rebaseArms().size()) },

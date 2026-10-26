@@ -112,6 +112,10 @@ namespace RGL::imgqa {
 /// 📄 正文在 `judgments_table_swim_flat.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& swimFlatJudgments();
 
+/// 地基族 · `shadow-swim-flat` **远工作点段**（2 条：J-F4 变好 / J-F5 区分力守卫）。
+/// 缝 = 工作点（出厂 vs 大坐标），不是行数——债-159 换远工作点只动这一段。
+[[nodiscard]] const std::vector<JudgmentInfo>& swimFlatFarJudgments();
+
 /// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
 /// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
 /// 📄 正文在 `judgments_table_ssr.cpp`。

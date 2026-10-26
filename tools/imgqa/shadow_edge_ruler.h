@@ -86,10 +86,20 @@ struct EdgeTarget {
     std::array<double, 3> boundsCenter{};
     double boundsRadius = 0.0;
     /// 🔴 整靶的世界平移（manifest 的 `measure.worldOffset`；**缺键 = 零** = 出厂靶）。
-    /// 它是仪器写进 `scene.lua` 的 entity `position`，也是「远工作点」与「出厂工作点」的
-    /// 唯一区别。为什么由 manifest 给而不是在 C++ 里另算一份：manifest = 场景生成器留给
-    /// 测量方的唯一读数接口；真值与平移量分两处真相 = 项目哲学第 2 条点名的形态。
+    /// 它是**闭式真值 / 机位 / sceneBounds 共用的那枚世界平移**，也是「远工作点」与
+    /// 「出厂工作点」的唯一区别。为什么由 manifest 给而不是在 C++ 里另算一份：manifest =
+    /// 场景生成器留给测量方的唯一读数接口；真值与平移量分两处真相 = 项目哲学第 2 条点名的形态。
     std::array<double, 3> worldOffset{};
+    /// 🔴 每个 piece 烘在 GLB node 里的平移（manifest 的 `measure.nodeTranslation`；缺键 = 零）。
+    /// 债-159：仪器写进 `scene.lua` 的 entity `position` 是 **`worldOffset − nodeTranslation`**
+    /// （node 已经替 piece 自己挪掉了这一截，两根平移相加才是 worldOffset）。为什么靶要带它：
+    /// node 矩阵是单位阵时 `absolute = root · I = root` 在任何数值域都成立 ⟹「逐图元复合改在
+    /// double 域乘」那条链图像上不可见。它同时是**亚格**的（小于工作点处 float32 ULP 的一半），
+    /// 所以一旦有人把复合改回 float 域乘，这一截就整个消失。
+    std::array<double, 3> nodeTranslation{};
+    /// 沿**光的水平行进方向**的单位向量（manifest 的 `measure.u`，只有二维）。债-159：把「世界
+    /// X 上诱导的位移」换算到「绝对尺真正在量的那条轴」就靠它——写死系数 = 光向一改就静默失效。
+    std::array<double, 2> uDir{};
     std::array<double, 4> splitsPredicted{};
     std::array<double, 4> texelMmPredicted{};
     std::vector<EdgePlate> plates;

@@ -87,6 +87,114 @@ void printPixelDiff(const Cell& a, const Cell& b, const char* what)
     std::printf("  %-30s 逐位不同 %8lld 像素 = %6.3f %%   最大 %3.0f LSB\n", what, n, pct, mx);
 }
 
+double roundToFloat32(double v)
+{
+    return static_cast<double>(static_cast<float>(v));
+}
+
+FarGridFacts farGridFacts(const EdgeTarget& far)
+{
+    FarGridFacts g;
+    g.entity = entityPositionOf(far);  // 🔴 减法只有 `entityPositionOf` 这一份，别在这里再写一遍
+    g.rounded = roundToFloat32(g.entity[0]);
+    g.inducedM = g.rounded - g.entity[0];
+    const double a = std::abs(g.entity[0]);
+    int e = 0;
+    std::frexp(a, &e);  // a = mantissa · 2^e，mantissa ∈ [0.5, 1) ⟹ e = floor(log2 a) + 1
+    // 🔴 指数换算：frexp 的 e 比 floor(log2 a) **大一**（首版按 floor 写 e−23，把 ULP 报成 0.5
+    // 而真值是 0.25 —— 打印错、且 node translation 的「亚格」上界松了一倍）。
+    g.ulpM = std::ldexp(1.0, e - 24);
+    return g;
+}
+
+/// 世界 X 上的误差投到**测量轴 u**（光的水平行进方向）上的投影系数。绝对尺量的是沿 u 的影边
+/// 落点，不是世界 X，所以「诱导了多少误差」与「量得出多少」之间差这一个系数。
+/// 值 = (2/3) / |(2/3, −3/5)|；与生成器的 `EDGE_U_PROJ_X` 同源（都从 scene.lua 的光向派生），
+/// 而本命令的 u 向量本身从 manifest 的 `measure.u` 读——🔴 所以这里**不写死 0.7433**，
+/// 由调用侧把 manifest 的 u[0] 传进来（抄一份 = 光向一改就静默失效的第二份真相）。
+double tightestPlateBoundMm(const Cell& base)
+{
+    double tightest = -1.0;
+    for (std::size_t p = 0; p < base.target.plates.size(); ++p) {
+        const double b = plateBoundMm(base, p);
+        if (tightest < 0.0 || b < tightest)
+            tightest = b;
+    }
+    return tightest < 0.0 ? kNaN : tightest;
+}
+
+void requireFarGridHasTeeth(const Cell& base, const EdgeTarget& far)
+{
+    const FarGridFacts g = farGridFacts(far);
+    if (g.onFloatGrid())
+        throw std::runtime_error(
+            "G1b: 远工作点的 entity position " + std::to_string(g.entity[0])
+            + " 恰可 float32 精确表示 ⟹ 「绝对层在输入处多过一遍 float」这类回归诱导的位移"
+              "恰为 0，本命令按构造量不出来（债-159 的成因）。工作点必须落在两个可表示值之间");
+    double tightest = -1.0;
+    std::string tightestPlate;
+    for (std::size_t p = 0; p < base.target.plates.size(); ++p) {
+        const double b = plateBoundMm(base, p);
+        if (tightest < 0.0 || b < tightest) {
+            tightest = b;
+            tightestPlate = base.target.plates[p].name;
+        }
+    }
+    if (tightest < 0.0)
+        throw std::runtime_error("G1b: 出厂基准格里一块板都没有 ⟹ 界无从谈起（对空集合的"
+            "「误差在界内」恒真 = 假绿）");
+    // u[0] = 沿光水平行进方向的单位向量的 X 分量（manifest 的唯一读数接口）。
+    // 🔴 单位口径：`plateBoundMm` 回**毫米**，而 `FarGridFacts::inducedM` 是**米**——两边统一到
+    // 毫米再比。（首版没统一，G1b 拿 0.087「米」去比 2×18.57「毫米」当场自己抛了出来——
+    // 闸门误抛也是闸门坏，不是通过。）
+    const double uProj = far.uDir[0];
+    const double projected = std::abs(g.inducedM) * 1000.0 * uProj;
+    if (!(2.0 * tightest <= projected))
+        throw std::runtime_error("G1b: 远工作点网格外诱导的误差 = "
+            + std::to_string(g.inducedM * 1000.0) + " mm，投到测量轴 u 只有 "
+            + std::to_string(projected) + " mm，不到最紧逐板界 " + std::to_string(tightest)
+            + " mm（板 " + tightestPlate
+            + "，= 1 枚本级纹素 + 2 枚像素刻度）的 2 倍 ⟹ 这台绝对尺量不出「大坐标精度」这一类"
+              "缺陷，J-R2 的绿不作数（本机实测最紧界 18.57 mm，而 1e6 量级最多诱导 31.25 mm × "
+              "u 投影 0.7433 = 23.2 mm，连 2 倍都不到 ⟹ 就是这种白改）。抬量级或换更细的判据，"
+              "不许放宽本闸门");
+}
+
+void requireFarWorkingPointProperties(const EdgeTarget& far)
+{
+    // 🔴 债-159 的运行期判据本体。三条**性质**，全部从 manifest 派生（不抄米数）：
+    //   ① 纯 +X（y/z 为 0）——动了 y 就破地面接收关系，闭式前提③当场作废；
+    //   ② 进 rootTransformOf 的那枚数（= `worldOffset − nodeTranslation`，**不是** worldOffset）
+    //      不在 float32 网格上——网格上的工作点没有亚格小数可丢，「绝对层在输入处多过一遍 float」
+    //      这类回归在图像上根本不存在；
+    //   ③ node translation 非零且**亚格**（单位阵 ⟹ 逐图元复合链 = 乘 1，那条链没被量过）。
+    // 为什么从 `requireFarIsTranslatedCopy` 里拆出来（不是为了让护栏不叫，认知复杂度实测 18 > 15）：
+    // 两条判据的**改动缝**不同——本条随「靶的取值怎么选」变（EDGE_FAR_OFFSET / EDGE_FAR_NODE_T），
+    // 那条随「闭式真值的形状」变（哪些量该跟着平移）。混在一个函数里，改靶的取值就要去读一段
+    // 几何对账代码才知道会不会碰坏它。
+    for (int i = 1; i < 3; ++i)
+        if (std::abs(far.worldOffset[i]) > 1e-9)
+            throw std::runtime_error("G1: 远点靶的 measure.worldOffset[" + std::to_string(i)
+                + "] = " + std::to_string(far.worldOffset[i]) + " ≠ 0 ⟹ 平移不是纯 +X。动了 y 会破"
+                  "「接收面水平 y=0」这条闭式前提（真值影边带 Δz·cot 项漂移），仪器读的是假数");
+    const FarGridFacts g = farGridFacts(far);
+    if (g.onFloatGrid())
+        throw std::runtime_error("G1: 远工作点的 entity position " + std::to_string(g.entity[0])
+            + " 恰可 float32 精确表示 ⟹ 「绝对层在输入处多过一遍 float」这类回归在图像上根本不存在"
+              "（实测：1e6 上注入该变异后 shadow-edge-rebase 与 shadow-swim-flat 的报告与不注入"
+              "时**逐字节相同**）。这就是债-159。改 tools/qa_scenes.py 的 EDGE_FAR_OFFSET");
+    if (std::abs(far.nodeTranslation[0]) <= 0.0 || std::abs(far.nodeTranslation[0]) >= g.ulpM / 2.0)
+        throw std::runtime_error("G1: 远点靶的 measure.nodeTranslation = "
+            + std::to_string(far.nodeTranslation[0]) + " m，不在 (0, ULP/2 = "
+            + std::to_string(g.ulpM / 2.0) + ") 内 ⟹ 它在 float 域逐图元复合下不会消失，"
+              "「复合改在 double 域乘」那条链又没有可丢的精度了（债-159 的第二半）");
+    for (int i = 1; i < 3; ++i)
+        if (std::abs(far.nodeTranslation[i]) > 0.0)
+            throw std::runtime_error("G1: nodeTranslation[" + std::to_string(i)
+                + "] ≠ 0 ⟹ node 平移动了 y/z：动 y 破地面接收关系，动 z 让「远点 = 出厂靶 + "
+                  "worldOffset」这条自证多出一项待对账的偏移");
+}
+
 void requireFarIsTranslatedCopy(const EdgeTarget& base, const EdgeTarget& far,
     const EdgeCascadeModel& baseModel, const EdgeCascadeModel& farModel)
 {
@@ -96,12 +204,7 @@ void requireFarIsTranslatedCopy(const EdgeTarget& base, const EdgeTarget& far,
             + " 的 manifest 没有 measure.worldOffset（或它是零）⟹ 它不是远工作点，四格只剩"
               "两格。重新生成：python3 tools/qa_scenes.py --only "
             + std::string(kFarStem) + " --out build/rgl/models");
-    for (int i = 0; i < 3; ++i)
-        if (std::abs(far.worldOffset[i] - (i == 0 ? kEdgeFarOffsetM : 0.0)) > 1e-9)
-            throw std::runtime_error("G1: 远点靶的 measure.worldOffset[" + std::to_string(i)
-                + "] = " + std::to_string(far.worldOffset[i]) + "，不是量具设计的 +X "
-                + std::to_string(kEdgeFarOffsetM) + " m ⟹ 靶给的工作点与量具设计的工作点不是"
-                  "同一枚，四格的标签在骗人");
+    requireFarWorkingPointProperties(far);  // 🔴 债-159：工作点的数值性质（拆出去的理由见该函数）
     const auto shifted = [&](const char* what, const std::array<double, 3>& got,
                               const std::array<double, 3>& exp) {
         for (int i = 0; i < 3; ++i)
@@ -276,7 +379,8 @@ Verdict judgeBenefit(const Cell& base, const Cell& farOff, const Cell& farOn)
         << edgeMm(worstDelta) << " mm（板 " << worstName << "，= " << std::fixed
         << std::setprecision(1) << worstRatio * 100.0 << "% 界），超界 " << over << " 板";
     std::string why
-        = "判据 = 远工作点（|camera| ≈ 1e6）门开态的影边必须**不比出厂基准 ① 坏**：可量板数\n"
+        = "判据 = 远工作点（|camera| ≈ 大坐标·float32 网格外，量级从 manifest 读）门开态的\n"
+          "    影边必须**不比出厂基准 ① 坏**：可量板数\n"
           "    ≥ 门关态，且逐板 |err④ − err①| ≤ 1 枚该板本级纹素 + 2 枚像素刻度（同 J-R1 的界）。\n"
           "🔴 这条才是 rebase 的存在理由。只验 J-R1 会放行「门关 = 门开」的实现。\n"
           "· 为什么对 ① 做差而不是钉绝对值：绝对误差里有一枚与原点无关的**共模偏置**（出厂点\n"

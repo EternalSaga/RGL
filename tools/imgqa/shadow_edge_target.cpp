@@ -139,12 +139,18 @@ EdgeTarget loadEdgeTarget(const std::string& stem)
     // （asVec3 的形状守卫），形状错了不许静默当零——那会把远工作点悄悄读成出厂工作点。
     if (ms.contains("worldOffset"))
         t.worldOffset = asVec3(ms.at("worldOffset"), "measure.worldOffset");
+    // `nodeTranslation` 同口径（缺键 = 零 = 各 node 是单位阵）。它**不参与**闭式真值——真值
+    // 吃的是 worldOffset（整靶的世界平移）——只参与「仪器往 scene.lua 写多少」这一件事：
+    // entity position = worldOffset − nodeTranslation。见 EdgeTarget 的字段注释（债-159）。
+    if (ms.contains("nodeTranslation"))
+        t.nodeTranslation = asVec3(ms.at("nodeTranslation"), "measure.nodeTranslation");
     const auto u = asVec2(ms.at("u"), "measure.u");
     const auto vv = asVec2(ms.at("v"), "measure.v");
     const double ulen = std::hypot(u[0], u[1]);
     if (std::abs(ulen - 1.0) > 1e-9)
         throw std::runtime_error("measure.u 不是单位向量（|u|=" + std::to_string(ulen)
             + "）——扫描线方向的世界米刻度就靠它，拒绝");
+    t.uDir = u;
     const json& cm = ms.at("cascadeModel");
     for (int i = 0; i < 4; ++i) {
         t.splitsPredicted[i] = cm.at("splitsPredicted")[i].get<double>();

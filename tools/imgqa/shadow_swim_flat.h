@@ -28,8 +28,11 @@
 namespace RGL::imgqa {
 
 // ── 量具常数（改动 = 改判据；每条阈值的出处 = judgments_table_swim_flat.cpp 的容差理由）──
-/// 远工作点靶（与 shadow-edge-rebase **同一枚**靶，`worldOffset = [1e6,0,0]`，manifest 自带
-/// 自证 assert ⑪）。复用而不是另造：两枚靶的 GLB 逐字节相同，差别只在 manifest。
+/// 远工作点靶（与 shadow-edge-rebase **同一枚**靶，manifest 自带自证 assert ⑪ + ⑫）。
+/// 复用而不是另造：两枚靶的 GLB **顶点缓冲**逐字节相同，差别只在 node 的 translation 与
+/// manifest。🔴 平移量（`measure.worldOffset`）与 node 平移（`measure.nodeTranslation`）都从
+/// manifest 读，本文件**不抄米数**——债-159 的成因正是「量具把远点写死成 1e6」，而 1e6 恰可
+/// float32 精确表示 ⟹ 大坐标精度这一类缺陷在图像上不存在。
 inline constexpr const char* kFlatFarStem = "shadow_edge_rig_far";
 
 /**
@@ -75,11 +78,19 @@ inline constexpr double kFlatCoverageFloor = 0.8;
 // ── 判据阈值（先测后定，2026-10-26 本机；逐条推导住 judgments_table_swim_flat.cpp）────────
 /// 无地板翻转率上界（%）。实测 ①②④ 全为 **恰 0.0000 %**，③（预期最差）0.0009 %。
 inline constexpr double kFlatFlipLimitPct = 0.01;
-/// 无地板 mean |Δcov| 上界（千分点）。实测 ① 0.787 / ② 0.838 / ④ 0.739 / ③ 4.213 ‰。
+/// 无地板 mean |Δcov| 上界（千分点）。
+/// ⚠ **读数按工作点分代**（跨代不可比，债-159 换过远工作点）：
+///   · 远工作点 = 1e6（网格上，债-159 之前）：① 0.806 / ② 0.855 / ③ 64.039 / ④ 0.649 ‰
+///     （更早一代 erode4 口径记的是 0.787 / 0.838 / 4.213 / 0.739 ‰）
+///   · 远工作点 = 4e6 且**网格外**（本批）：① 0.806 / ② 0.855 / ③ **181.743** / ④ **0.861** ‰
+///   ⟹ 出厂两格逐数不变（本批没动出厂工作点，也不该动），变的是远点两格。
+/// 界取 2.0 ‰ 不随工作点改：它的定义是「门开在远点要达到门开在出厂点的水平」，而 ④ 两代
+/// 分别是 0.649 / 0.861 ‰，都在界内且与 ① 同量级。
 inline constexpr double kFlatMeanCovLimitPermille = 2.0;
-/// J4 的「显著」倍率：③ 的 mean |Δcov| 必须 ≥ 此倍数的 ④ 才算 rebase 买到了东西。
-/// 实测 5.7 倍（4.213 / 0.739），取 2.0 = 实测余量的一半以上。
-inline constexpr double kFlatBenefitRatio = 2.0;
+// 🔴 这里**原来**还有一枚 `kFlatBenefitRatio = 2.0`，注释写着「J4 的显著倍率：③ 必须 ≥ 此倍数
+// 的 ④」——而 `judgeFlatBenefit` 的头注明写它**故意不含**那条（含了就是把技术债写成判据：
+// 大坐标「阴影整块消失」那条缺陷一旦被修好，③ 变好，J4 会因为修好了 bug 而红）。
+// 也就是说：一枚自称是判据、实际没有任何代码读它的常数。删掉它，理由就地留这条注释。
 
 /// 一「格」= (工作点靶, coordinate.rebase 开关态) 的一整套采集与读数。四格编号 ①②③④，
 /// 顺序在 `makeFlatCells` 里钉死（主表列序与判决线取数都按它，同 shadow-edge-rebase）。
@@ -140,8 +151,10 @@ void fillFlatControls(FlatCell& base, FlatControl& ctl, const std::string& profi
 
 // ── shadow_swim_flat_judge.cpp ──────────────────────────────────────────────────────
 /**
- * **G1｜同桶闸门 + 靶同源**：① 远点 manifest 的 worldOffset 必须 = 1e6 且逐板真值 = 出厂靶 +
- * 平移（复用 `requireFarIsTranslatedCopy` 的口径，本仪器不抄第二份）；② 🔴 同一格的两枚机位
+ * **G1｜同桶闸门 + 靶同源**：① 远点 manifest 的 worldOffset 必须非零、纯 +X、且**进
+ * `rootTransformOf` 的那枚 entity position 不在 float32 网格上**（债-159），逐板真值 = 出厂靶
+ * + 平移（复用 `requireFarIsTranslatedCopy` 的口径，本仪器不抄第二份、也不抄米数）；
+ * ② 🔴 同一格的两枚机位
  * 必须落在**同一个量化桶**里（`edgeCascadeModel` 逐数相同）。翻桶时「阴影随相机变」有一半是
  * 级联本身变了，与 rebase 无关——那不是本判据的射程，宁可抛。
  */

@@ -23,14 +23,15 @@
 //                 | 门关 rebase=false  | 门开 rebase=true
 //   --------------|--------------------|---------------------
 //   出厂点（原位） | ① **无地板残差**     | ② 「不坏」
-//   远点（+1e6 m） | ③ **预期最差**       | ④ **预期 ≈ ①②**
+//   远点(网格外)   | ③ **预期最差**       | ④ **预期 ≈ ①②**
 //   · 每格两枚机位：A = manifest 机位，B = A 沿**世界 +X 平移 0.5 m**（纯平移，姿态逐字相同）。
 //   · 阴性对照 = ① 的 A 机位重跑（同机位两次 ⟹ 翻转必须**恰 0**，否则引擎不确定，全部读数作废）。
 //   · 区分力守卫 = 把**靶**沿 +X 挪 0.5 m、相机跟着挪 0.5 m（取景逐字相同，而影场在世界里滑了
 //     恰 0.5 m）⟹ 平移搜索必须报出 +0.5 m。报 0 = 量具看不见滑移，主判据的绿不作数。
 //
 // ── 六道闸门（全部抛 rc=3、一条 Verdict 都不产；🔴 表先出、闸门后抛）──────────────────
-// G1 同桶 + 靶同源：远点 manifest 的 worldOffset 必须 = 1e6 且逐板真值 = 出厂靶 + 平移（复用
+// G1 同桶 + 靶同源：远点 manifest 的 worldOffset 必须非零、纯 +X、且 entity position 在
+//    float32 网格**外**（债-159），逐板真值 = 出厂靶 + 平移（复用
 //    `requireFarIsTranslatedCopy`）；🔴 且每格两枚机位的 `edgeCascadeModel` 必须**逐数相同**
 //    ——相机挪 0.5 m 会让 dist(相机, bounds 中心) 变 ~0.25 m，本靶的量化桶（near 2 / far 16）
 //    要到 dx = 0.960 m 才翻，所以 0.5 m 安全；但这条**不靠手算兜**，翻桶就抛（那时「阴影随
@@ -113,17 +114,24 @@ Engine::Camera shiftedCamera(const Engine::Camera& base, double dx)
     return c;
 }
 
-/// 本格装进 scene.lua 的 entity 文本。远工作点把 manifest 的 worldOffset 当 entity position
-/// 给引擎（🔴 不烘进 GLB 顶点，理由住 `shadow_edge_rebase.cpp` 头注）；区分力守卫臂再沿 +X
-/// 叠加激励量 d（挪靶 = 影场在世界里真的滑 d，而取景不变）。
+/// 本格装进 scene.lua 的 entity 文本。远工作点写的是 **`worldOffset − nodeTranslation`**
+/// （🔴 唯一一份减法在 `entityPositionOf`，与 shadow-edge-rebase 共用；GLB 的每个 node 已经
+/// 自带 nodeTranslation，忘了减 = 整靶在世界里多挪一截而闭式真值不认）。🔴 不烘进 GLB 顶点，
+/// 理由住 `shadow_edge_rebase.cpp` 头注；债-159 为什么要给 node 挪一截 → `EdgeTarget` 字段注。
+/// 区分力守卫臂再沿 +X 叠加激励量 d（挪靶 = 影场在世界里真的滑 d，而取景不变）。
 std::string entitiesLua(const FlatCell& c, double entityShift)
 {
-    const auto& off = c.target.worldOffset;
-    const double x = off[0] + entityShift;
-    const bool moved = std::abs(x) + std::abs(off[1]) + std::abs(off[2]) > 0.0;
+    const std::array<double, 3> e = entityPositionOf(c.target);
+    const double x = e[0] + entityShift;
+    // 🔴 `moved` 必须看 **x**（含激励量），不能看 worldOffset。本批改写这里时错过一次：拿
+    // worldOffset 判「有没有平移」⟹ 出厂格（worldOffset = 0）的**区分力守卫臂**（entityShift =
+    // 0.5 m）整个不写 position 键 ⟹ 靶根本没挪 ⟹ J-F5 报「最优平移 (+0.000, +0.000) 失配 0」
+    // 而红。红得对——守卫就是为「读到 0 有两种解释」而生的；但那次红的是我这行代码，
+    // 不是被注入的变异（同批实测，见交付说明）。
+    const bool moved = std::abs(x) + std::abs(e[1]) + std::abs(e[2]) > 0.0;
     return "{ type = \"model\", file = \"models/" + c.stem + ".glb\""
-        + (moved ? ", position = { " + luaNum(x) + ", " + luaNum(off[1]) + ", "
-                       + luaNum(off[2]) + " }"
+        + (moved ? ", position = { " + luaNum(x) + ", " + luaNum(e[1]) + ", "
+                       + luaNum(e[2]) + " }"
                 : "")
         + " }";
 }
@@ -377,8 +385,10 @@ int cmdShadowSwimFlat()
 
     std::vector<FlatCell> cells = makeFlatCells();
     requireFlatCellsValid(cells);  // G1（靶同源 + 同桶）—— 采集前就能判，先抛省 16 次进程
-    std::printf("  G1 过：四格的两枚机位级联闭式**逐数相同**（同桶）；远点靶 = 出厂靶 + %.0f m\n",
-        kEdgeFarOffsetM);
+    std::printf("  G1 过：四格的两枚机位级联闭式**逐数相同**（同桶）；远点靶 = 出厂靶 + %.10g m"
+                "（entity %.10g，float32 圆后 %.10g ⟹ 工作点在网格**外**，债-159）\n",
+        cells[2].target.worldOffset[0], farGridFacts(cells[2].target).entity[0],
+        farGridFacts(cells[2].target).rounded);
 
     for (auto& c : cells)
         captureCell(c, profile);

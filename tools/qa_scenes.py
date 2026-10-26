@@ -2543,15 +2543,79 @@ EDGE_N_PLATES = 8               # 板数 = 自变量档数（调色板 10 色 �
 # 「线接完了但一分精度都没买到」的实现。判据表的两条（不坏 / 变好）分别钉这两个工作点。
 #
 # 🔴 平移量住在 **entity 的 position（模型根变换）**，**不烘进 GLB 顶点**。理由不是省事：
-# 顶点缓冲是 float32，`float32(1e6 + 局部)` 的 ULP = 0.0625 m ⟹ **资产自己**就带
-# ±31 mm 的位置误差，而原点对它一无所知（`toRelative` 减的是变换的平移列，不是顶点）
-# ⟹ 烘进顶点的那 31 mm **任何原点方案都消不掉**，「变好」的读数会被它污染到与信号同量级。
-# 真实引擎也不会把 1e6 烘进顶点 —— 瓦片顶点住在瓦片局部空间，大坐标只住在 tile 原点。
-# ⟹ 本靶的 GLB 与出厂靶**逐字节相同**，差别只在 manifest（真值 + 机位 + worldOffset）。
-# 实测两条路都走了一遍：两种形态在 1e6 下都「阴影整块消失」（见下方 honesty ⑥），
+# 顶点缓冲是 float32，`float32(1e6 + 局部)` 的 ULP 比纹素还粗 ⟹ **资产自己**就带位置误差，
+# 而原点对它一无所知（`toRelative` 减的是变换的平移列，不是顶点）⟹ 烘进顶点的那部分误差
+# **任何原点方案都消不掉**，「变好」的读数会被它污染到与信号同量级。
+# 真实引擎也不会把大坐标烘进顶点 —— 瓦片顶点住在瓦片局部空间，大坐标只住在 tile 原点。
+# 实测两条路都走了一遍：两种形态在远点下都「阴影整块消失」（见下方 honesty ⑥），
 # 所以这条选择不是绕开失效，只是不让资产量化污染掉本该由 rebase 买单的那部分。
-EDGE_FAR_OFFSET = (1e6, 0.0, 0.0)
+#
+# 🔴🔴 债-159（2026-10-26）：原值 `1e6` 是**错的工作点**，本靶因此对「大坐标精度」整类缺陷
+# 结构性失明。原因不是「小数没挑好」，是**两件事叠加**，逐条都在下面：
+#
+# ⓪ 为什么原来失明：`1e6 = 2⁶·5⁶` 是 float32 **恰可精确表示**的数，而各 piece 的 node 矩阵
+#    是单位阵 ⟹ 「把绝对层从 float 影子改成真 double」这类回归在图像上**根本不存在**
+#    （圆与不圆是同一个数）。第二刀实测：绝对位置保真度 0.0331 m → 2.3e-8 m（1.4e6 倍），
+#    `shadow-swim-flat` 四格与 `material-swim` 八条读数**逐数不变**。
+#
+# ① 光「网格外」还不够，必须**大到绝对尺量得出来**（四条本机实测的数，2026-10-26，
+#    `just imgqa shadow-edge-rebase` 打印）：
+#    · 误差住在世界 X 上，而绝对尺量的是**沿 u（光的水平行进方向）的影边**，投影系数
+#      u_x = (2/3) / |(2/3, −3/5)| = **0.7433** ⟹ 可诱导误差先打 0.7433 折；
+#    · 最紧的逐板界（`plateBoundMm` = 1 枚本级纹素 + 2 枚像素刻度）**实测 = 18.57 mm**
+#      （plate_t300）；
+#    · 🔴 而未注入任何变异时，出厂基准与远点门开的 |err④ − err①| **实测已达 12.86 mm**
+#      （= 界的 69 %，共模偏置与 texel 吸附相位差）⟹ 留给「信号」的余量只有 **5.7 mm**；
+#    · 1e6 量级 float32 的 ULP = 0.0625 m ⟹ 最大可诱导误差 = ULP/2 = 31.25 mm，投到 u 最多
+#      **23.2 mm = 界的 1.25 倍**。
+#    ⟹ **在 1e6 量级上无论怎么挑小数都不可判**：最好的情形信号只比界大 25 %，而它与既有的
+#      12.86 mm 偏差可能同号相加也可能相消（相消就落到界以下读绿）。任务书建议的 `1e6 + 0.3`
+#      更差：诱导 12.5 mm、投到 u 9.3 mm = 界的 0.50 倍，**必然读绿**。
+#      ⟹ 本批把 assert ⑫ 的第四查与仪器的 G1b 都定成「诱导量 ≥ 2 × 最紧界」，把「改了但白改」
+#        当场拦下来（两条都实跑验过会抛，见交付说明）。
+#
+# ② 量级抬到 **4e6**（ULP = 0.25 m）：本靶取 entity position = 4000000.1175 ⟹ float32 圆到
+#    **4000000.0**，诱导误差 **−117.5 mm**，投到 u **−87.3 mm = 最紧界 18.57 mm 的 4.7 倍**
+#    （仪器打印的实测倍数）。构建期 assert ⑫ 与仪器 G1b 把「圆走了、且圆掉的量量得出来」钉成
+#    判据，改回网格上的值 / 改回 1e6 量级都直接建不出来或抛出来。
+#    ⚠ 一枚副作用（如实报）：4e6 处 ULP = 0.25 m **大于本靶扫描窗的上游半宽 68.6 mm** ⟹ 注入
+#      该变异后远点门开态的影边被挪**出窗**，J-R2 的红表现为「门开可量 0 板」而不是「误差超界
+#      N 板」。红是确定的、可归因的（出厂两格逐数不变），但绝对尺在 4e6 上**饱和**了；要拿到
+#      「超界 N 板」那种更锐的读数，得把量级降到 2e6（ULP 0.125 m ⟹ 最大诱导 46.4 mm，恰在窗内
+#      且 = 界的 2.5 倍）或把窗口放宽（会撞 assert ⑧ 的单过零保证）。留给下一批裁。
+#
+# ③ 量级**不能任意抬**（这是上界，不是偏好）：`Bounds::center` 仍是 float（批 3 第二刀明令
+#    本刀不动它），而级联的 near/far 由它派生（`projectionSystem`：dist = |camera.position −
+#    dvec3(center)|）⟹ |off| 处的 float32 ULP/2 直接进 nearRaw。出厂 nearRaw = 1.4686，量化到
+#    2，离下界 1.0 只有 **0.4686 m** ⟹ 要求 ULP/2 < 0.4686 ⟺ **|off| < 2²³ = 8.39e6**。
+#    取 4e6 时该项 ≤ 0.125 m ⟹ nearRaw ∈ [1.34, 1.59] 仍量化到 2、farRaw ∈ [10.87, 11.12]
+#    仍量化到 16。assert ⑫ 的第三查按「包围球心被 float32 圆走后 near/far 还在不在同一桶」
+#    求值，越界即建不出来（不是注释，是断言）。
+def _f32_ulp(x: float) -> float:
+    """|x| 所在二进制指数区间的 float32 ULP（= 2^(e−23)，e = floor(log2|x|)）。
+
+    复用本文件既有的 float32 量化算子 `_f32`（「先量化后统计」纪律那条），**不另写一份**
+    struct 往返——两份 float32 语义的实现在同一文件里 = 项目哲学第 2 条点名的第二份真相。
+    """
+    return math.ldexp(1.0, math.floor(math.log2(abs(x))) - 23)
+
+
+EDGE_FAR_OFFSET = (4000000.18, 0.0, 0.0)   # 整靶的**世界**平移：真值 / 机位 / sceneBounds 吃它
+# 🔴 每个 piece 的 **node translation**（债-159 的第二半：让「逐图元复合链」也有亚格小数可丢）。
+# 出厂靶各 piece 的 node 矩阵是单位阵 ⟹ `absolute = root · I = root` 在**任何**数值域都成立
+# ⟹ 第二刀那条「复合改在 double 域乘」的链在图像上不可见。取 **0.0625 m = ULP(4e6)/4**：
+# 它单独在 float32 里精确可表示（所以 `worldOffset − nodeTranslation + nodeTranslation` 在
+# double 域**逐位回到** worldOffset，不给真值掺进任何误差），但**加到工作点上就落到网格外**
+# （4000000.0625 不可表示，float32 圆回 4000000.0）⟹ 一旦有人把复合改回 float 域乘，这 62.5 mm
+# 整个消失。为什么写进 GLB 而不是并进 worldOffset：并进 root 就等于只改工作点，逐图元那一步
+# 仍然是乘单位阵（还是没被量过）。
+EDGE_FAR_NODE_T = (_f32_ulp(EDGE_FAR_OFFSET[0]) / 4.0, 0.0, 0.0)
 ZERO3 = (0.0, 0.0, 0.0)
+
+
+# 沿 u 的投影系数（世界 X 上的误差投到「光的水平行进方向」上打这个折）：绝对尺量的是沿 u 的
+# 影边落点，不是世界 X。推导见 EDGE_FAR_OFFSET 头注 ①。
+EDGE_U_PROJ_X = (SHADOW_OFF[0] / math.hypot(*SHADOW_OFF))
 
 
 def edge_u2w(u: float, v: float, y: float = 0.0, off: tuple = ZERO3) -> tuple:
@@ -2738,7 +2802,7 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False,
         out_name=stem,
         purpose="影边世界位置绝对尺：竖直板远侧影边 = 板远侧面 + |SHADOW_OFF|·H（闭式），"
                 "误差随板序 = 误差随距离/随级联，台阶 = 级联交界（imgqa shadow-edge-ruler）"
-                + (f"；**远工作点** = 整靶沿世界 +X 平移 {off[0]:g} m（rebase 的「变好」"
+                + (f"；**远工作点** = 整靶沿世界 +X 平移 {off[0]!r} m（rebase 的「变好」"
                    "工作点，imgqa shadow-edge-rebase）" if moved else ""),
         honesty=("闭式解成立的前提（破任何一条读到的是假数，方向注明）：① 接收面水平 "
                  "y=0（本靶唯一平地，无起伏）——接收面一斜，影边在世界 u 上的落点带 "
@@ -2761,10 +2825,19 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False,
                   "（花箱/牛腿/窗棂：四级全 LOD 时近场 186 个小阴影丢 24 个），那是下一台"
                   "「细附属结构」靶的自变量，不在本靶上找。"
                   + ("🔴 ⑥ **本靶是远工作点（`shadow_edge_rig_far`）**：整靶沿世界 +X 平移 "
-                     f"{off[0]:g} m，平移量住在 entity 的 position（**不烘进 GLB 顶点**，"
-                     "理由见 qa_scenes.py 的 EDGE_FAR_OFFSET 头注）。GLB 与出厂靶逐字节相同，"
+                     f"{off[0]!r} m，平移量住在 entity 的 position（**不烘进 GLB 顶点**，"
+                     "理由见 qa_scenes.py 的 EDGE_FAR_OFFSET 头注）。GLB 与出厂靶的**顶点缓冲"
+                     "逐字节相同**，差的是每个 node 多一枚 `translation` = "
+                     f"{EDGE_FAR_NODE_T[0]!r} m（债-159：让「逐图元复合链」也有亚格小数可丢，"
+                     "理由见 EDGE_FAR_NODE_T 头注）——所以仪器写进 entities 的平移量是 "
+                     f"{off[0] - EDGE_FAR_NODE_T[0]!r} = worldOffset − nodeTranslation。"
                      "本 manifest 的 measure 块（真值 / 机位 / sceneBounds）已跟着平移，"
-                     "并额外给 `worldOffset` 一枚键 = 仪器写进 entities 的平移量。"
+                     "并额外给 `worldOffset` 与 `nodeTranslation` 两枚键。"
+                     "🔴 工作点取在**float32 网格之外**（该 entity position 的 float32 圆后值 = "
+                     f"{_f32(off[0] - EDGE_FAR_NODE_T[0])!r}，圆走 "
+                     f"{(_f32(off[0] - EDGE_FAR_NODE_T[0]) - (off[0] - EDGE_FAR_NODE_T[0])) * 1000:.1f} mm"
+                     "）——网格上的工作点（原值 1e6）没有亚格小数可丢，「大坐标精度」整类缺陷"
+                     "对图像判据结构性不可见（债-159 的成因，构建期 assert ⑫ 拦）。"
                      "闭式解的全部前提（①–④）与平移无关：级联 near/far/splits/texel 只吃"
                      "相机到 SceneBounds 的**相对**距离，实测两帧的 cascadeModel 逐数相同。"
                      if moved else "")),
@@ -2784,7 +2857,12 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False,
             "measure": {
                 # 🔴 只在远工作点写这一枚键：默认零偏移必须让现有靶的 manifest **逐字节不变**
                 # （它是回归对象），而多写一个键就多了 40 来个字节。仪器侧的读法 = 缺键即零。
+                # 🔴 `worldOffset` = 整靶的**世界**平移（真值 / 机位 / sceneBounds 都吃它），
+                # **不是**仪器写进 scene.lua 的那个数。后者 = `worldOffset − nodeTranslation`
+                # （node 已经替 piece 自己挪掉了 nodeTranslation，见 EDGE_FAR_NODE_T 头注）。
+                # 两份数都写出来，仪器只做一次减法；只写一份 = 逼另一侧抄常数。
                 **({} if not moved else {"worldOffset": list(off)}),
+                **({} if not moved else {"nodeTranslation": list(EDGE_FAR_NODE_T)}),
                 "u": [SHADOW_OFF[0] / offlen, SHADOW_OFF[1] / offlen],
                 "v": [-SHADOW_OFF[1] / offlen, SHADOW_OFF[0] / offlen],
                 "H": EDGE_H,
@@ -2844,18 +2922,21 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False,
     )
     P = s.pieces.append
     g = fr0["ground"]  # 🔴 零帧：GLB 顶点缓冲里**不许**出现 1e6（见 EDGE_FAR_OFFSET 头注）
+    # 🔴 远工作点的每个 piece 都带同一枚 node translation（债-159 第二半）。出厂靶 nodeT=None
+    # ⟹ 不写这个键 ⟹ 既有靶的 GLB 与 manifest 一个字节都不变。
+    nt = EDGE_FAR_NODE_T if moved else None
     P(Piece("ground", quad(edge_u2w(g[0], g[2]),
                            (edge_u2w(g[1], g[2])[0] - edge_u2w(g[0], g[2])[0], 0.0,
                             edge_u2w(g[1], g[2])[2] - edge_u2w(g[0], g[2])[2]),
                            (edge_u2w(g[1], g[3])[0] - edge_u2w(g[1], g[2])[0], 0.0,
                             edge_u2w(g[1], g[3])[2] - edge_u2w(g[1], g[2])[2])),
-            PAL["yellow"], roughness=0.9, radial=False, closed=False,
+            PAL["yellow"], roughness=0.9, radial=False, closed=False, translation=nt,
             intent="唯一接收面（零起伏平地 y=0，闭式前提①；顺带结掉债-139 卡在鹅卵石"
                    "起伏上的 2.73pp 残差）；法线 +Y"))
     for i, p in enumerate(plates):
         P(Piece(f"plate_t{int(round(p['t'] * 1000)):03d}",
                 _edge_slab(p["uc"], p["t"], EDGE_H, fr["lv"]),
-                PAL[colors[i % len(colors)]], roughness=0.7,
+                PAL[colors[i % len(colors)]], roughness=0.7, translation=nt,
                 intent=f"竖直挡板：厚度 t={p['t']*1000:g} mm（本靶自变量）、高 {EDGE_H} m、"
                        f"长边 ⊥ 光的水平行进方向；每板独立 primitive = 独立簇 DAG"
                        f"（选级逐图元 min(D, 自身最深级)）"))
@@ -2974,6 +3055,73 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False,
             assert abs(fr["splits"][c] - fr0["splits"][c]) <= 1e-9 * abs(fr0["splits"][c]) \
                 and abs(fr["texels"][c] - fr0["texels"][c]) <= 1e-9 * abs(fr0["texels"][c]), \
                 f"{tag}: ⑪ 级联 splits/texel 随世界平移漂了（相对距离量，本应与 off 无关）"
+    # ⑫ 🔴 远工作点必须**离开 float32 网格**，且圆走的量必须大到绝对尺量得出来（债-159）。
+    # 这一组断言就是本债的机器判据：把 EDGE_FAR_OFFSET 改回网格上的值（1e6 那类）、或把
+    # node translation 改成 0 / 改成大于半个 ULP，**直接建不出靶**——不再靠「下次记得」。
+    # 为什么判据必须长在这里而不是只写在注释里：本债的整个成因就是「工作点看起来对、读数
+    # 很漂亮、全绿，而它结构上量不到」（同形先例 = 债-153 的 swim 从不应用 worldOffset）。
+    if moved:
+        # 唯一进 `rootTransformOf` 的那枚数是 **entity position**（= worldOffset − nodeTranslation），
+        # 所以「在不在网格上」问的是它，不是 worldOffset 本身。
+        ent = off[0] - EDGE_FAR_NODE_T[0]
+        assert all(v == 0.0 for v in EDGE_FAR_NODE_T[1:]), \
+            f"{tag}: ⑫ node translation 只准动 X（动 y 破地面接收关系 = assert ⑪ 的前提③，" \
+            "动 z 会让「远点 = 出厂靶 + worldOffset」这条自证多出一项待对账的偏移）"
+        ulp = _f32_ulp(ent)
+        # (a) node translation 必须**亚格**：小于工作点处 ULP 的一半 ⟹ 在 float32 域把它加到
+        #     大坐标上会被**整个吃掉**，这正是「逐图元复合链有亚格小数可丢」的定义。
+        assert 0.0 < abs(EDGE_FAR_NODE_T[0]) < ulp / 2.0, \
+            f"{tag}: ⑫ node translation = {EDGE_FAR_NODE_T[0]!r} m，不在 (0, ULP/2 = " \
+            f"{ulp / 2.0!r}) 内 ⟹ 它在 float 域复合下不会消失，逐图元那条链又没有可丢的精度了"
+        # (b) double 域往返必须**逐位**回到 worldOffset：node 平移不许给闭式真值掺进误差
+        #     （取 2 的幂就是为了这一条；换成 0.06 这类小数会留 ~1e-9 m 的真值偏差）。
+        assert ent + EDGE_FAR_NODE_T[0] == off[0], \
+            f"{tag}: ⑫ entity + nodeTranslation 不逐位等于 worldOffset ⟹ 闭式真值与落位分家"
+        # (c) entity position 在网格外（债-159 的一句话本体：圆与不圆必须是**两个数**）。
+        rounded = _f32(ent)
+        assert rounded != ent, \
+            f"{tag}: ⑫ entity position {ent!r} 恰可 float32 精确表示 ⟹ 「绝对层多过一遍 float」" \
+            "这类回归在图像上根本不存在（圆走 0 mm），本靶又变回债-159 描述的那台全绿仪器"
+        # (d) 圆走的量投到**测量轴 u** 上必须 ≥ 8 枚最细级联纹素。为什么是 8：绝对尺最紧的逐板
+        #     界（plateBoundMm = 1 枚本级纹素 + 2 枚像素刻度）**实测 18.57 mm = 3.27 枚最细纹素**，
+        #     取 8 枚 = 该界的 2.4 倍，与仪器侧 G1b 的「≥ 2 倍」同向且略严。
+        #     ⚠ 这条就是「为什么量级要从 1e6 抬到 4e6」：1e6 处最大可诱导 ULP/2 = 31.25 mm，
+        #     投到 u 只有 23.2 mm = 界的 1.25 倍，而基准自身的偏差已占掉界的 69 % ⟹ 不可判。
+        #     实跑：把 EDGE_FAR_OFFSET 改成 1000000.3（任务书建议的形态）本条当场抛。
+        induced = abs(rounded - ent)
+        projected = induced * EDGE_U_PROJ_X
+        assert projected >= 8.0 * min(fr["texels"]), \
+            f"{tag}: ⑫ 网格外工作点诱导的位置误差 = {induced * 1000:.1f} mm，投到测量轴 u 只有 " \
+            f"{projected * 1000:.1f} mm < 8 × 最细纹素 {8 * min(fr['texels']) * 1000:.1f} mm ⟹ " \
+            "绝对尺按构造量不出来，这台仪器仍然是全绿的假仪器"
+        # (e) `Bounds::center` 仍是 float，而级联 near/far 由它派生（projectionSystem:
+        #     dist = |camera.position − dvec3(center)|）⟹ 球心被 float32 圆走后 near/far
+        #     **必须还落在同一个量化桶**里，否则 assert ⑪ 的「级联与平移无关」在引擎侧就是
+        #     假的，闭式预测的 texel 刻度全部作废。|Δdist| ≤ |Δcenter|（Lipschitz 1）⟹ 拿
+        #     球心分量的最大圆走量当上界来比，是**保守**判据（不需要复刻引擎的 dist 公式）。
+        bc = ms["sceneBounds"]["center"]
+        dq = max(abs(_f32(c) - c) for c in bc)
+        for raw, q, what in ((fr["near"], fr["sn"], "near"), (fr["far"], fr["sf"], "far")):
+            margin = min(abs(raw - q), abs(raw - q / 2.0))
+            assert dq < margin, \
+                f"{tag}: ⑫ 包围球心的 float32 圆走量 {dq:.3f} m ≥ {what}Raw={raw:.4f} 到量化桶" \
+                f"边界的距离 {margin:.4f} m ⟹ 远工作点会把级联 near/far 挤出同一桶（工作点量级" \
+                "太靠上，2²³ = 8.39e6 是本靶的上界）"
+        # 事实落盘（仪器/报告读它，不在别处重抄一遍这些数）。
+        s.extra["selfProof"]["farGrid"] = {
+            "note": "债-159：远工作点的 float32 网格事实（构建期 assert ⑫ 求值，不是手填）",
+            "entityPositionX": ent,
+            "entityPositionXFloat32": rounded,
+            "inducedErrorMm": (rounded - ent) * 1000.0,
+            "projectedOnLightAxisMm": (rounded - ent) * 1000.0 * EDGE_U_PROJ_X,
+            "float32UlpM": ulp,
+            "nodeTranslationXM": EDGE_FAR_NODE_T[0],
+            "uProjX": EDGE_U_PROJ_X,
+            "boundsCenterQuantizeM": dq,
+            "nearRaw": fr["near"], "nearQuantized": fr["sn"],
+            "farRaw": fr["far"], "farQuantized": fr["sf"],
+            "finestTexelMm": min(fr["texels"]) * 1000.0,
+        }
     return s
 
 
