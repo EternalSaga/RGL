@@ -353,16 +353,23 @@ void projectionSystem(entt::registry& rg) {
 	auto& viewProj = rg.ctx().get<ViewProjection>();
 
 	// ── ① 自适应 near/far ──
-	// 距离判据在 float 域（near/far 是 float 深度界）：绝对层相机位先收窄。
+	// 距离判据的**输出**是 float 深度界（near/far 住 float），但**减法必须在 double 域**
+	//（债-151 同族，2026-10-26）：`camera.position` 是绝对层 double，旧写法先把它收窄成
+	// float32 再减 `sceneBounds.center` ⟹ 一个几米长的距离被掺进 0.0625 m 的量化误差
+	//（|p| = 1e6 处 float32 的 ULP），而 near/far 正是要**贴着**场景包围球收的。
+	// ⚠ 本条只能修到「不再额外收窄」，修不到「绝对层真 double」：`Bounds::center` 本身就是
+	//   float 存的绝对层量（1e6 处同样 ULP 0.0625 m），把它的生产链 double 化 = 相对坐标计划
+	//   批 3 第二刀那笔没做的账，本批不做。
 	// 🔴 两项都是**绝对量**、rebase 根本不碰它们 ⟹ 开/关两态 near/far 逐位相同
 	// （裁决与凭据 → docs/相对坐标地基_plan.md §3 批 4「裁决一」；不许顺手减原点，
 	//  反向半边由 tests/test_view_light_rebase.cppm 的 near/far 不变性断言守着）。
 	float nearPlane = camera.nearPlane;
 	float farPlane = camera.farPlane;
 	if (sceneBounds.radius > 0.0f) {
-		const float dist = glm::length(glm::vec3(camera.position) - sceneBounds.center);
-		nearPlane = std::max(0.05f, dist - sceneBounds.radius);
-		farPlane = dist + sceneBounds.radius;
+		const double dist = glm::length(
+			camera.position - glm::dvec3(sceneBounds.center));
+		nearPlane = std::max(0.05f, static_cast<float>(dist - sceneBounds.radius));
+		farPlane = static_cast<float>(dist + sceneBounds.radius);
 	}
 	// ── ② 投影矩阵 + 实际生效深度界写回（级联切分用；自适应值不等于 camera.nearPlane/farPlane，
 	// 外部若直接拿 camera 的会切错分界）──

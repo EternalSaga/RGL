@@ -275,8 +275,9 @@ RpcOutcome rpcHandleCamera(RpcWiring& w, const nlohmann::json& body) {
 		const bool explicitAngles = body.contains(rpc_field::camera::yawDegrees)
 		    || body.contains(rpc_field::camera::pitchDegrees);
 		if (cam.mode == CameraMode::Fps && !explicitAngles)
-			// cameraAimAt 是 float 域入口（朝向反推的算术保持 float）：绝对层 target 先收窄
-			cameraAimAt(cam, glm::vec3(rpcVec3(body, rpc_field::camera::target)));
+			// 绝对层 target 原样交给 cameraAimAt（债-151：这里此前先收窄成 float32，
+			// 而 cameraAimAt 的减法就在 float 域做——收窄点与消费点各一半，两边都得改）
+			cameraAimAt(cam, rpcVec3(body, rpc_field::camera::target));
 		else
 			cam.target = rpcVec3(body, rpc_field::camera::target);  // 绝对层，原样吃 double
 	}

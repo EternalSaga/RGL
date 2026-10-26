@@ -183,7 +183,7 @@ TEST_CASE("cameraAimAt 往返：aimAt(T) 后 forward ≈ normalize(T−eye) 且 
 		const glm::vec3 target = eye + dir * distance;
 
 		Camera cam = makeCam(CameraMode::Fps, eye, 12.3f, -4.5f);  // 先给一组无关旧朝向
-		cameraAimAt(cam, target);
+		cameraAimAt(cam, glm::dvec3(target));
 		INFO("i=" << i << " eye=(" << eye.x << "," << eye.y << "," << eye.z
 					<< ") target=(" << target.x << "," << target.y << "," << target.z << ")");
 		// ① target 字段被写入（RPC /camera 的 echo 语义依赖它）
@@ -210,14 +210,14 @@ TEST_CASE("cameraAimAt 退化守卫：target≈position 保持朝向**但 target
 	Camera cam = makeCam(CameraMode::Fps, glm::vec3{1.0f, 2.0f, 3.0f}, 0.7f, -0.3f);
 	const float yaw0 = cam.yaw, pitch0 = cam.pitch;
 	const glm::vec3 sameSpot{1.0f + 1e-9f, 2.0f, 3.0f - 1e-9f};
-	cameraAimAt(cam, sameSpot);
+	cameraAimAt(cam, glm::dvec3(sameSpot));
 	// 守卫触发：朝向逐位不动（0 容差——早退分支不该产生任何浮点写入）
 	CHECK(cam.yaw == yaw0);
 	CHECK(cam.pitch == pitch0);
 	// target 字段仍写入（批 11.0e echo 语义：回显的 target 与实际字段一致）
 	expectNear(cam.target.x, sameSpot.x, 0.0, 0.0);
 	// 反向对照：同样起点，正常 target → 朝向必须变（守卫不是恒真早退）
-	cameraAimAt(cam, glm::vec3{-4.0f, 0.5f, 2.0f});
+	cameraAimAt(cam, glm::dvec3{-4.0, 0.5, 2.0});
 	CHECK(cam.yaw != yaw0);
 	CHECK(cam.pitch != pitch0);
 }
@@ -333,7 +333,7 @@ TEST_CASE("cameraView + glm::perspective：aimAt 的目标落在视锥轴上，�
 		const float distance = static_cast<float>(rng.uniform(1.5, 8.0));
 
 		Camera cam = makeCam(CameraMode::Fps, eye, 0.0f, 0.0f);
-		cameraAimAt(cam, eye + dir * distance);
+		cameraAimAt(cam, glm::dvec3(eye + dir * distance));
 		const glm::mat4 view = cameraView(cam, kNoOrigin);
 		const glm::mat4 proj = glm::perspective(cam.fov, 16.0f / 9.0f, cam.nearPlane, cam.farPlane);
 		INFO("i=" << i << " distance=" << distance);

@@ -68,7 +68,7 @@ void probeFail(RLLogger* logger, std::string_view reason) {
 /** Idle 阶段：键未绑定移动键 = warn 终止；首帧 = 记基准 + 注入 KeyDown 转 Holding。 */
 CameraProbePhase cameraProbeIdle(RLLogger* logger, const ProbeEventSink& sink, bool* flag,
 	uint32_t key, uint32_t frameCount, uint32_t probe, uint32_t hold,
-	const glm::vec3& position, glm::vec3& baseline) {
+	const glm::dvec3& position, glm::dvec3& baseline) {
 	if (flag == nullptr) {
 		if (logger)
 			logger->warn("camera probe: 键 0x{:x} 未绑定 Camera.keys 移动键（W/A/S/D），探针跳过",
@@ -120,14 +120,17 @@ CameraProbePhase cameraProbeHolding(RLLogger* logger, const ProbeEventSink& sink
 /** Released 阶段：probe+hold+2 终查（KeyUp 于 hold+1 帧被消费）——清除 + fps 位移
  *  均对 = PASS，否则 FAIL；转 Done。 */
 CameraProbePhase cameraProbeReleased(RLLogger* logger, bool* flag, uint32_t frameCount,
-	uint32_t probe, uint32_t hold, const Camera& camera, const glm::vec3& baseline) {
+	uint32_t probe, uint32_t hold, const Camera& camera, const glm::dvec3& baseline) {
 	if (frameCount != probe + hold + 2)
 		return CameraProbePhase::Released;
 	const bool released = !*flag;
-	// 探针的位移读数留在 float 域（`distance > 1e-4f` 这枚容差就是按 float32 定的）：
-	// 绝对层相机位先收窄再比，判据语义与改动前逐字相同。
-	const float distance = glm::length(glm::vec3(camera.position) - baseline);
-	const bool moved = camera.mode != CameraMode::Fps || distance > 1e-4f;
+	// 🔴 位移距离在 double 域算（债-151 同族，2026-10-26）：旧写法把**两个绝对层量各自先收窄**
+	// 再相减。探针要抓的正是这条：|camera| = 1e6 处 float32 的 ULP = 0.0625 m，而一帧的 fps
+	// 位移只有 fpsSpeed·dt ≈ 0.05 m **小于那个格子** ⟹ 基准点与终点舍到同一个 float、距离恒读
+	// 0 ⟹ 探针在一条**完好**的输入链上打 FAIL（假警报）。容差 `1e-4` 量的仍是"位移"这个差，
+	// 语义不变；基准点是本进程 static、从不跨运行比较 ⟹ 不存在"基线口径漂"的账。
+	const double distance = glm::length(camera.position - baseline);
+	const bool moved = camera.mode != CameraMode::Fps || distance > 1e-4;
 	if (released && moved) {
 		if (logger)
 			logger->info("camera probe: PASS（保持 {} 帧，CameraState 置/清正确，fps 位移 {}）",
@@ -184,7 +187,7 @@ export void cameraProbeTick(entt::registry& rg, const ProbeEventSink& sink) {
 		return;
 	static CameraProbePhase phase = CameraProbePhase::Idle;
 	static uint32_t frameCount = 0;
-	static glm::vec3 baseline{0.0f};
+	static glm::dvec3 baseline{0.0};  // 绝对层基准点（double，理由见 cameraProbeReleased）
 	auto* logger = RLLogger::getInstance();
 
 	auto& camera = rg.ctx().get<Camera>();
@@ -194,10 +197,9 @@ export void cameraProbeTick(entt::registry& rg, const ProbeEventSink& sink) {
 
 	switch (phase) {
 		case CameraProbePhase::Idle:
-			// 基准点存在 static glm::vec3 里（float 域探针，见 cameraProbeReleased 的注释）：
-			// 绝对层相机位先收窄再记基准
+			// 基准点存在 static glm::dvec3 里（绝对层原样，不再先收窄成 float 影子）
 			phase = cameraProbeIdle(logger, sink, flag, key, frameCount, probe, hold,
-				glm::vec3(camera.position), baseline);
+				camera.position, baseline);
 			break;
 		case CameraProbePhase::Holding:
 			phase = cameraProbeHolding(logger, sink, flag, key, frameCount, probe, hold);

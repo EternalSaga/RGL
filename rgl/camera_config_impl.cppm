@@ -247,14 +247,20 @@ void readCameraPlacement(sol::table root, Camera& camera, CameraKeyTrace& trace)
 	camera.position = readVec3(root, "position", camera.position);
 	camera.target = readVec3(root, "target", camera.target);
 
-	// 朝向反推仍在 float32（yaw/pitch 是 float 角度量，cameraAimAt 同约定）：绝对层分量
-	// 先收窄再相减 —— 收窄后减 = 改动前的 float 减法，逐位相同（先 double 减再收窄则是
-	// 两次舍入，会把 float32 的减法舍入丢掉，读数会漂）。
-	glm::vec3 fwd = glm::vec3(camera.target) - glm::vec3(camera.position);
-	if (glm::length(fwd) > 1e-6f) {
-		fwd = glm::normalize(fwd);
-		camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));
-		camera.yaw = std::atan2(-fwd.x, -fwd.z);
+	// 🔴 朝向反推**委托 cameraAimAt**（债-151，2026-10-26）：本函数与 cameraAimAt 自述是"同一
+	// 反推约定"，却各写了一遍减法——两份实现可以静默分家（AGENTS 哲学 §1：像单一来源的副本不是
+	// 单一来源），而实测错的正是这里那份。收敛成一条调用后，"两条路径反推结果相同"从注释变成
+	// 结构事实。
+	// 为什么必须在 double 域相减（cameraAimAt 内部保证）：position/target 都是绝对层的点，各自
+	// 先收窄成 float32 再相减 = 用 ULP 0.0625 m（|p| = 1e6 处）的格子量一个几米长的差向量
+	// ⟹ 视向偏 0.20°、画面整体平移 ~5 px。🔴 **本债的实测病灶就在这条收窄上，且门关门开同吃**
+	// ——收窄发生在配置读取期，那时渲染原点还不存在，rebase 门碰不到它。
+	// ⚠ 旧注释写的理由（"先 double 减再收窄会把 float32 的减法舍入丢掉，读数会漂"）是**对的**
+	// ——读数确实漂了，三枚截图锚随本刀重立。用"漂一个已知 5 px 的错画面"换"逐位不变"是本债
+	// 结案时用户拍掉的账。
+	const glm::dvec3 aim = camera.target;  // 先取副本：cameraAimAt 会写 camera.target
+	if (glm::length(aim - camera.position) > 1e-6) {
+		cameraAimAt(camera, aim);
 		// trackball 携带 up 初始化：world-up 对齐（无 roll），与旧闭式 cameraUp 一致
 		camera.up = cameraUp(camera);
 	}

@@ -46,7 +46,14 @@ export struct Camera {
 	// float32 做，在边界处显式 `glm::vec3(...)` 收窄（值本来就来自 float32，收窄是精确的）。
 	// 落库形态（cameraView 产 float mat4）不变 ⟹ 交付截图逐位不变。
 	// ⚠ 批 4 第二刀起 cameraView 的边界收窄变成「先减渲染原点再收窄」（门关 = 原点 0，
-	// 仍是一次精确收窄，上面的逐位结论不变）；其余 float 域算术（拖拽 / 日志）不变。
+	// 仍是一次精确收窄，上面的逐位结论不变）。
+	// 🔴 **上面那句「所有算术仍在 float32 做」已被债-151 的实测推翻，2026-10-26 改准**：
+	// 「两个绝对层量各自先收窄、再相减」不是"精确收窄"，而是**用一个 0.0625 m 的格子去量一个
+	// 几米长的差向量**（|p| = 1e6 处 float32 的 ULP = 0.0625 m）——视向角因此偏 0.20°，画面整体
+	// 平移 ~5 px（门关门开同吃，因为收窄发生在配置读取期，那时渲染原点还不存在）。
+	// ⟹ 现在的域约定是：**相减 / 归一化 / 落回 double 字段在 double 域**，收窄只发生在
+	// 「差向量进 float 做旋转」和「角度落 float 字段」这两处**结果侧**（见各函数注释）。
+	// 角度量（yaw / pitch）与方向量（up）本来就是 float，不变——它们不是绝对层位置。
 	glm::dvec3 position{0.0, 0.0, 3.0};  ///< 世界位置（绝对层，double）
 	glm::dvec3 target{0.0, 0.0, 0.0};    ///< 注视点（trackball 公转中心，绝对层，double）
 	float yaw = 0.0f;
@@ -216,23 +223,28 @@ export glm::vec3 cameraUp(const Camera& camera) {
  * 任何画面变化——"改了 target 却没转视角"。凡是"给 target 就该看向它"的写入路径
  * （llm_debug 机位、RPC `POST /camera`）都必须过这层换算。
  * 约定与 `camera_config` 的初始机位读取一致（camera_config_impl.cppm
- * readCameraPlacement），故两条路径反推结果相同。
+ * readCameraPlacement 直接调用本函数），故两条路径反推结果**逐位**相同。
  *
  * 不改 `up`：trackball 的 up 由 lookAt 携带、fps 的 up 由 yaw/pitch 推导，
  * 两条路径都不需要反推 up。
+ *
+ * 🔴 **减法与归一化必须在 double 域**（债-151，2026-10-26 修）：`target` 与 `position` 都是
+ * **绝对层**的点，先各自收窄成 float32 再相减 = 用 ULP 0.0625 m（|p| = 1e6 处）的格子去量一个
+ * 几米长的差向量。实测代价：eye/target 间距 8 m 时视向偏 0.20°，1600×900 画面整体平移 ~5 px。
+ * 收窄只发生在**结果侧**——角度落回 float 字段（yaw/pitch 是 float 角度量，与 cameraForward /
+ * cameraUp 同约定），差向量本身不经 float。
  * @param camera 写入目标（position 须已定，target/yaw/pitch 被写）
- * @param target 期望看向的点
+ * @param target 期望看向的点（**绝对层**，与 position 同域；float 入参请在调用点显式放大）
  */
-export void cameraAimAt(Camera& camera, const glm::vec3& target) {
-	camera.target = glm::dvec3(target);  // 落库到绝对层（float → double 是精确放大）
-	// 朝向反推仍在 float32 做（本函数是 float 域，见文件头 Camera 的绝对层注释）：
-	// position 是绝对层，交给减法前先收窄。
-	glm::vec3 fwd = target - glm::vec3(camera.position);
-	if (glm::length(fwd) <= 1e-6f)
+export void cameraAimAt(Camera& camera, const glm::dvec3& target) {
+	camera.target = target;  // 绝对层 ↔ 绝对层，不经 float
+	const glm::dvec3 fwd = target - camera.position;
+	if (glm::length(fwd) <= 1e-6)
 		return;  // target 与 position 重合 = 退化，朝向保持不变
-	fwd = glm::normalize(fwd);
-	camera.pitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f));
-	camera.yaw = std::atan2(-fwd.x, -fwd.z);
+	const glm::dvec3 unit = glm::normalize(fwd);
+	// 唯一一次收窄在这里：double 角度量落进 float 字段（yaw/pitch 是 float 角度量）。
+	camera.pitch = static_cast<float>(std::asin(std::clamp(unit.y, -1.0, 1.0)));
+	camera.yaw = static_cast<float>(std::atan2(-unit.x, -unit.z));
 }
 
 /**
@@ -248,6 +260,8 @@ export void cameraAimAt(Camera& camera, const glm::vec3& target) {
  * float32 舍过一道（该量级 ULP = 0.0625）；减完原点平移列量级只剩「离原点多远」。
  * 旋转部分只吃 target−eye 这类**差**（平移不变），不受原点影响——所以本刀不碰
  * cameraAimAt / applyTrackballDrag / applyMovement 里的相机内部几何（任务书「不许改」表）。
+ * ⚠ 那句「不许改」只约束批 4 第二刀自己（它要守门关逐位不变），**不是这些函数的长期域约定**：
+ * 它们内部的「先收窄再相减」随后由债-151 单独修掉（见 Camera 结构注释的域约定与 cameraAimAt）。
  *
  * 门关（origin = dvec3(0)，出厂默认）⟹ toRelative 恒等 ⟹ 与改前逐位相同（交付锚不变；
  * 单元级对应 = tests/test_view_light_rebase.cppm 的门关恒等锚）。
@@ -304,8 +318,11 @@ struct FrameInput {
 void logCameraPose(const Camera& camera, RLLogger* logger) {
 	if (!logger)
 		return;
-	// 机位打印的 `t`（fps 下"沿视线推一段的假想 target"）仍在 float32 里算：绝对层先收窄，
-	// 算式与改动前逐字相同。⚠ 但 position/target 六个分量现在打的是**绝对层的 double**，
+	// 机位打印的 `t`（fps 下"沿视线推一段的假想 target"）**整条改在 double 域**（债-151 同族，
+	// 2026-10-26）：旧写法先把 position/target 各收窄成 float32 再相减取长度、再往 float 的 pos
+	// 上加偏移——|camera| = 1e6 处那个"假想 target"会整分量掉进 0.0625 m 的网格。本行的用途是
+	// **抄回 camera.lua 当绝对机位**，打错位的数比不打更坏。
+	// ⚠ 但 position/target 六个分量打的是**绝对层的 double**，
 	// 不再是它的 float32 影子：交付机位（configs/camera.lua 的 1.1/0.75/1.05/0.14/0.12/0.02
 	// 与 fov 45）实测 {:.6f} 读数逐字符不变，|camera| 到 625 量级那档才会看到差别
 	//（改前 625.123413 = float32 舍入的影子，改后 625.123400 = Lua 里那个数本身）。
@@ -314,12 +331,10 @@ void logCameraPose(const Camera& camera, RLLogger* logger) {
 	// "相机在世界哪里"，绝对才是对的答案（camera.lua 里存的就是绝对机位）。而 shader 侧
 	// 的世界坐标（view / scene data）在门开态是**相对渲染原点**的（cameraView 减过原点），
 	// 两边数值不同是设计如此，不是漂移；门关（出厂默认）两者重合。
-	const glm::vec3 pos{camera.position};
-	const glm::vec3 tgt{camera.target};
-	const glm::vec3 t = camera.mode == CameraMode::Fps
-		? pos + cameraForward(camera) *
-			std::max(glm::length(tgt - pos), 0.05f)
-		: tgt;
+	const glm::dvec3 t = camera.mode == CameraMode::Fps
+		? camera.position + glm::dvec3(cameraForward(camera)) *
+			std::max(glm::length(camera.target - camera.position), 0.05)
+		: camera.target;
 	logger->info("[camera_saved] mode = \"{}\", position = {{ {:.6f}, {:.6f}, {:.6f} }}, target = {{ {:.6f}, {:.6f}, {:.6f} }}, fovDegrees = {:.4f}",
 		camera.mode == CameraMode::Fps ? "fps" : "trackball",
 		camera.position.x, camera.position.y, camera.position.z,
@@ -390,14 +405,23 @@ void applyFpsDrag(Camera& camera, float dx, float dy) {
  * 拖下→object 顶部朝向观察者（相机上移）。offset 长度 < 1e-4 时跳过。
  */
 void applyTrackballDrag(Camera& camera, float dx, float dy) {
-	// 公转的向量算术仍在 float32（本函数是 float 域，见文件头 Camera 的绝对层注释）：
-	// position/target 是绝对层，参与减法/加法前先收窄。
-	glm::vec3 offset = glm::vec3(camera.position) - glm::vec3(camera.target);
-	if (glm::length(offset) <= 1e-4f)
+	// 🔴 差向量在 double 域算、落库也在 double 域加（债-151，2026-10-26；域约定见 Camera 结构注释）。
+	// 两处各治一半，缺一不可：
+	//  ① 相减：`glm::vec3(position) - glm::vec3(target)` 在 |p| = 1e6 处把 offset 量化到
+	//     0.0625 m 的格子上，而 offset 本身只有几米 ⟹ 公转半径与 forward 都是错的。
+	//     改成先减后收窄：差向量量级 ~1e0，收窄只有 1e-7 的相对误差。
+	//  ② 落库：`glm::dvec3(glm::vec3(target) + offset)` 把**float 舍过的相机位置写回 double
+	//     字段** ⟹ 每拖一次，position 被永久量化到 float32 网格（1e6 处 6 cm）且**逐次累积**
+	//     ——比 ① 更隐蔽，因为它不在任何一帧"看起来"出错。
+	// 旋转本身仍留在 float32：它吃的是差向量（相对量，量级 ~1e0），且 float 域行为是当年
+	// trackballSensitivity 调参的依据，不顺手改。
+	const glm::dvec3 offsetAbs = camera.position - camera.target;
+	if (glm::length(offsetAbs) <= 1e-4)
 		return;
+	glm::vec3 offset{offsetAbs};
 	const float s = camera.trackballSensitivity;
 	// 竖直轴 = 屏幕右向量 forward × up（恒 ⊥ 二者，极点非零、无奇异）
-	glm::vec3 forward = glm::normalize(glm::vec3(camera.target) - glm::vec3(camera.position));
+	glm::vec3 forward = glm::vec3(glm::normalize(-offsetAbs));
 	glm::vec3 right = glm::normalize(glm::cross(forward, camera.up));
 	// 水平：绕世界 Y（offset 与 up 同步旋转）
 	offset = rotateAroundAxis(offset, -dx * s, glm::vec3(0.0f, 1.0f, 0.0f));
@@ -405,8 +429,8 @@ void applyTrackballDrag(Camera& camera, float dx, float dy) {
 	// 竖直：绕屏幕右轴（offset 与 up 同步旋转）
 	offset = rotateAroundAxis(offset, -dy * s, right);
 	camera.up = rotateAroundAxis(camera.up, -dy * s, right);
-	// 落库回绝对层：先按老办法在 float32 里加（收窄后加 = 与改动前逐位相同的 bit），再放大
-	camera.position = glm::dvec3(glm::vec3(camera.target) + offset);
+	// 落库回绝对层：double 域相加（见上面 ②），float 的只有旋转后的相对偏移。
+	camera.position = camera.target + glm::dvec3(offset);
 }
 
 /** 拖拽旋转入口：增量限幅（触发时打 debug 日志）后按模式分发（dragging 判定在调用方）。 */
@@ -457,11 +481,14 @@ void applyMovement(Camera& camera, const CameraState& state, float wheel, float 
 	// 相对缩放（同 three.js OrbitControls：半径 ×(1∓zoom)）——加法式（position +=
 	// forward*zoom*step）在远机位失效（cottage 机位半径 ~3535 vs zoomSpeed 0.03 =
 	// 每格 0.0009%，2026-08-28 用户反馈"滚轮缩放没用了"）；滚近（y 正）半径缩小
-	// 🔴 缩放算术仍在 float32（本函数是 float 域）：绝对层分量先收窄、按老办法算完再落库。
+	// 🔴 半径（差向量）在 double 域相减、落库在 double 域相加（债-151，2026-10-26）：
+	// 旧写法 `glm::dvec3(glm::vec3(target) + radius * k)` 把 float 舍过的位置写回 double 字段
+	// ⟹ 每滚一格 position 被永久量化到 float32 网格（|p| = 1e6 处 6 cm，且逐次累积）。
+	// 缩放系数仍作用在 float 的相对偏移上（同 applyTrackballDrag：float 域行为是当年
+	// zoomSpeed 调参的依据，半径量级 ~1e0 时收窄只有 1e-7 相对误差）。
 	const float clamped = std::clamp(wheel, -kMaxWheelPerFrame, kMaxWheelPerFrame);
-	const glm::vec3 radius = glm::vec3(camera.position) - glm::vec3(camera.target);
-	camera.position = glm::dvec3(glm::vec3(camera.target) +
-		radius * (1.0f - clamped * camera.zoomSpeed));
+	const glm::vec3 radius{camera.position - camera.target};
+	camera.position = camera.target + glm::dvec3(radius * (1.0f - clamped * camera.zoomSpeed));
 }
 
 /**

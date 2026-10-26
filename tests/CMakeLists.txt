@@ -72,6 +72,11 @@ set(RGL_TEST_SOURCES
                                  # + ② NDC 偏置世界当量 = 24 mm 量级（与债-150 台账交叉核对）/ 当量对摆位不变 / shadowFar 换性能静默改当量
     test_rebase_consumers.cppm  # 相对坐标批 4 第三刀「自动跟/不用改」表 → 判据：🔴 texelSizes 整链（computeCascadeSpheres→buildShadowVolume→fillShadowData→rebaseSnapGranularity）与相机姿态/位置逐位无关（批 5 粒度不循环定义的唯一凭据）+ 跨档必须变的反向半边 / CPU 剔除可见集逐球平移不变（闭式六面对账）/ meshlet 簇可见集逐元素平移不变 + 两侧不同空间的错位锚点 / 透明排序键顺序平移不变 + 混空间锚点
     test_camera.cppm            # 相机数学
+    test_camera_absolute_domain.cppm  # 债-151 的守卫：绝对层量不许先收窄成 float32 再相减（一族四处）
+                                 # + 落库不许把 float 舍过的值写回 double 字段（累积量化）
+                                 # + 逐位平移不变（机位取 2^-20 整数倍才成立）+ long double 闭式对账
+                                 # + 🔴 阳性锚点「先收窄形态必须因平移改变差向量」+ 分辨力锚点
+                                 # + M3/M4 分离（相减侧与落库侧各自独立承重，无一条冗余）
     test_cube_geometry.cppm     # 内建 cube 顶点/索引契约
     test_state_kit.cppm         # 十段 RenderState 表 + stateFor 分派（纯逻辑）
     test_render_graph.cppm       # 图编译：校验 / barrier 推导 / 装饰 / RT slot
