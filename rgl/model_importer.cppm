@@ -54,11 +54,13 @@ export [[nodiscard]] std::expected<std::vector<uint32_t>, Error> uploadModelMesh
  * @param primitiveTextureIds 纹理资产 id 列表（texture_pool::uploadModelTextures 产物，
  *   与 model.primitives 下标对齐；材质引用图解析有效纹理 id 用）
  * @param resources 资源层（资产表：材质资产注册 / 查询）
- * @param rootTransform 场景根变换（默认 identity）
+ * @param rootTransform 场景根变换（**绝对层 double**，默认 identity；批 3 第二刀起直接吃
+ *   rootTransformOf 的 double 产物，per-primitive 的复合也在 double 域乘——旧形态在 float 域
+ *   乘完再提升，1e6 工作点上会把 node 平移圆到 0.0625 m 网格上）
  * @return 场景根 entity
  */
 export entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
-	RGL::Resources& resources, RGL::AssetTable& assets, const glm::mat4& rootTransform = glm::mat4(1.0f));
+	RGL::Resources& resources, RGL::AssetTable& assets, const glm::dmat4& rootTransform = glm::dmat4(1.0));
 
 }  // namespace RGL

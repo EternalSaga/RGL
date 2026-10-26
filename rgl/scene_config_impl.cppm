@@ -1,6 +1,7 @@
 module;
 #include <sol/sol.hpp>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>  // rootTransformOf（translate/rotate/scale 组装，原 main_scene 的 lambda）
 #include <fmt/format.h>
 module scene_config:impl;
 
@@ -597,6 +598,26 @@ std::vector<std::string> sceneConfigKnownKeys() {
 	for (const auto& k : kSceneKeys)
 		keys.emplace_back(k);
 	return keys;
+}
+
+glm::dmat4 rootTransformOf(const SceneEntityDesc& ent) {
+	// 平移在 **double 域**起步（相对坐标批 3 第二刀，docs/相对坐标地基_plan.md §3 批 3）：
+	// ent.position 本来就是绝对层 double，旧式 `glm::translate(glm::mat4(1.0f),
+	// glm::vec3(ent.position))` 在**生成的那一刻**就把它收窄回 float ⟹ 绝对层拿到的只是
+	// float 影子（1e6 处 ULP = 0.0625 m），之后 toRelative 在 double 域减得再干净也救不回来
+	// ——要减掉的精度已经没了。判据 = tests/test_root_transform_absolute.cppm「保真度」那条
+	//（改前实测：配置 1e6+0.3 读回 0.3125；1e6+0.03125 读回**恰 0**）。
+	// rotation/scale **仍在 float 域**合成：欧拉角与均匀缩放是方向/尺度量，量级 ~1e0，
+	// 与世界原点无关（与 Transform::local 保持 float 同一裁决），复合时无损提升进 double。
+	// 🔴 乘法顺序逐字同构于旧式 `I·T·Rx·Ry·Rz·S`：右乘一个不含平移的矩阵（旋转/缩放）不改变
+	//    平移列，所以 `T(p) · (Rx·Ry·Rz·S)` 收窄回 float 后与旧式**逐位相同**——判据 =
+	//    同文件「顺序同构」那条（4000 组随机位姿 × 16 分量实测零位差）。换序 = 换行为，本刀不许。
+	glm::mat4 rs{1.0f};
+	rs = glm::rotate(rs, glm::radians(ent.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+	rs = glm::rotate(rs, glm::radians(ent.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+	rs = glm::rotate(rs, glm::radians(ent.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+	rs = glm::scale(rs, glm::vec3(ent.scale));
+	return glm::translate(glm::dmat4(1.0), ent.position) * glm::dmat4(rs);
 }
 
 }  // namespace RGL

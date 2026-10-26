@@ -71,6 +71,7 @@ set(RGL_TEST_SOURCES
                                  # + 随机偏侧候选集双侧界 + 出厂形态（跨零点）空操作反向用例
                                  # + ② NDC 偏置世界当量 = 24 mm 量级（与债-150 台账交叉核对）/ 当量对摆位不变 / shadowFar 换性能静默改当量
     test_rebase_consumers.cppm  # 相对坐标批 4 第三刀「自动跟/不用改」表 → 判据：🔴 texelSizes 整链（computeCascadeSpheres→buildShadowVolume→fillShadowData→rebaseSnapGranularity）与相机姿态/位置逐位无关（批 5 粒度不循环定义的唯一凭据）+ 跨档必须变的反向半边 / CPU 剔除可见集逐球平移不变（闭式六面对账）/ meshlet 簇可见集逐元素平移不变 + 两侧不同空间的错位锚点 / 透明排序键顺序平移不变 + 混空间锚点
+    test_root_transform_absolute.cppm  # 相对坐标批 3 第二刀：绝对层是不是**真** double 位姿——1e6 工作点上「配置小数 → 相对值」的闭式保真度（含 float 影子反向半边 + 在网格上的控制样本否掉断言恒真）/ rootTransformOf 的乘法顺序 T·Rx·Ry·Rz·S（线性部分逐位 + 与换序形态分家 + 出厂形态逐位相同 = 出厂锚不必改的机器理由）/ registerBuiltinCube 落库对账（absolute 与 world/Bounds 各自吞掉多少精度）
     test_camera.cppm            # 相机数学
     test_camera_absolute_domain.cppm  # 债-151 的守卫：绝对层量不许先收窄成 float32 再相减（一族四处）
                                  # + 落库不许把 float 舍过的值写回 double 字段（累积量化）

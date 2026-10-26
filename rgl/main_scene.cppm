@@ -1,7 +1,6 @@
 module;
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>  // makeRootTransform（translate/rotate/scale 组装）
 #include <fmt/format.h>
 
 // 入口模块 main 的分区实现单元（module main:scene;）——**场景实体注册 + 渲染后端装配**：
@@ -79,28 +78,6 @@ void wireFsrJitter(entt::registry& registry, Swapchain& swapchain, bool fsrUsabl
 void registerSceneEntities(entt::registry& registry, const UploadedAssets& assets,
 						   const SceneConfig& scene, Resources& resources, AssetTable& table,
 						   ShaderRegistry& pipelines) {
-	/**
-	 * 实体 rootTransform 组装（scene.lua entities 的 transform 字段 → 4x4 世界矩阵）：
-	 * 先 translate(position)，再按 X→Y→Z 顺序依次 glm::rotate 后乘（rotation 为度，
-	 * 手动转弧度——GLM_FORCE_RADIANS 下 radians() 恒等），最后 scale 后乘——
-	 * 结果 = T·Rx·Ry·Rz·S（旋转应用序 X→Y→Z，同 SceneEntityDesc 契约）。
-	 * （lambda 独立计分；模型 entity 与 cube entity 共用）
-	 */
-	auto makeRootTransform = [](const SceneEntityDesc& ent) {
-		// ent.position 是绝对层（double）：烘进 rootTransform 的 float 矩阵前收窄（批 2
-		// 第一刀的落库点，见 scene_config.cppm 的 SceneEntityDesc 注释）。rotation/scale
-		// 本来就在 float 域。
-		// TODO(相对坐标批 3 第二刀): 本函数在生成时就把 dvec3 position 收窄回了 float ⟹ 绝对层
-		// 拿到的只是 float 影子。改成 double 域合成（glm::translate(glm::dmat4(1.0), ent.position)
-		// 起步，rotation/scale 仍在 float 域、复合时提升）才是真绝对层。⚠ 那会改舍入路径
-		// ⟹ 交付图允许变，必须单独一刀、单独重立截图锚（docs/相对坐标地基_plan.md §3 批 3），
-		// 不许与本刀（门关逐位不变）合并。
-		glm::mat4 t = glm::translate(glm::mat4(1.0f), glm::vec3(ent.position));
-		t = glm::rotate(t, glm::radians(ent.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		t = glm::rotate(t, glm::radians(ent.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		t = glm::rotate(t, glm::radians(ent.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-		return glm::scale(t, glm::vec3(ent.scale));
-	};
 	// 湿面图案的**世界锚**（债-152）：装配期算一次并 emplace，运行期只读——锚必须逐帧恒量
 	// （锚随帧变 = 图案换一种方式滑），做成每帧量就是把「按构造不会变」降级成「目前没变」。
 	// 放本函数而不是 main：这里已经在遍历 `scene.entities`（根平移 = 锚的唯一样本），且
@@ -119,7 +96,7 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 			target ? std::string(aaTarget::kModelKey) : ent.file)];
 		registerScene(registry, *um.model, std::span<const uint32_t>(um.assetIds),
 			std::span<const uint32_t>(um.textureIds.base), resources, table,
-			makeRootTransform(ent));
+			rootTransformOf(ent));
 	}
 	// scene data 容量契约（Phase 5 批次 2，Phase 6 instancing 改**实例矩阵槽**计数
 	//——资产共享后 meshSize < 槽数才是常态）：对象矩阵表按实例槽索引，超容量 =
@@ -142,7 +119,7 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 			continue;
 		const uint32_t cubeMat = table.addMaterial(
 			MaterialAsset{glm::vec4{1.0f}, kInvalidTextureId, false});
-		registerBuiltinCube(registry, *assets.cubeAsset, cubeMat, makeRootTransform(ent));
+		registerBuiltinCube(registry, *assets.cubeAsset, cubeMat, rootTransformOf(ent));
 		const uint32_t cubeEntry = pipelines.addCubeEntry(*assets.cubeAsset);
 		pipelines.bindPipelineToAsset("cube", *assets.cubeAsset);
 		if (auto logger = RLLogger::getInstance())

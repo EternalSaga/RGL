@@ -131,19 +131,25 @@ std::expected<uint32_t, Error> uploadBuiltinCube(
 }
 
 entt::entity registerBuiltinCube(entt::registry& rg, uint32_t meshAsset,
-	uint32_t materialAsset, const glm::mat4& rootTransform) {
+	uint32_t materialAsset, const glm::dmat4& rootTransform) {
 	auto e = rg.create();
 	auto& tf = rg.emplace<Transform>(e);
-	tf.local = rootTransform;
-	// 绝对层 = float 合成的无损提升（float→double 精确）；world 由 absolute 派生，逐位不变。
-	tf.absolute = glm::dmat4(rootTransform);
+	// local 仍是 float（节点局部 = 资产局部空间，与世界原点无关，裁决 → scene_context 的
+	// Transform 注释）；收窄的是「绝对位姿的 float 落库」，不是「绝对层本身」。
+	tf.local = glm::mat4(rootTransform);
+	// 绝对层**直接吃 double**（批 3 第二刀）：旧形态是 `glm::dmat4(rootTransform)`，而传进来的
+	// rootTransform 已经是 float 影子 ⟹ 类型是 double、精度还是 float。判据 =
+	// tests/test_root_transform_absolute.cppm「绝对层生产点落库」那条。
+	tf.absolute = rootTransform;
 	tf.world = glm::mat4(tf.absolute);  // cube 几何已在原点 ±0.5
 	glm::vec3 center{0.0f};
 	float radius = 0.0f;
 	for (const auto& v : cubeVertices)
 		radius = std::max(radius, glm::length(glm::vec3(v.position[0], v.position[1], v.position[2])));
-	rg.emplace<Bounds>(e, glm::vec3(rootTransform * glm::vec4(center, 1.0f)),
-		radius * glm::length(glm::vec3(rootTransform[0])));
+	// Bounds::center 仍是 `glm::vec3`（本批不动它的类型，理由 → 交付报告「下一刀的候选」）：
+	// 这里改的是**在哪一域乘**（double 域乘完一次性收窄，少一次中间舍入），不是它的分辨率。
+	rg.emplace<Bounds>(e, glm::vec3(rootTransform * glm::dvec4(glm::dvec3(center), 1.0)),
+		radius * glm::length(glm::vec3(glm::dvec3(rootTransform[0]))));
 	auto& meshRef = rg.emplace<MeshRef>(e);
 	meshRef.asset = meshAsset;
 	meshRef.objectSlot = rg.ctx().get<NextObjectSlot>().next++;

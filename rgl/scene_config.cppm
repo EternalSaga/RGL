@@ -64,8 +64,8 @@ export struct SceneEntityDesc {
 	std::string type = "model";
 	std::string file;
 	// position 是**绝对层**（double，相对坐标计划批 2 第一刀）：Lua 里那个数字原样存
-	// （sol2 的 lua_Number 就是 double，读成 float 才是多舍了一遍），烘进
-	// makeRootTransform 的 float 矩阵前才收窄。
+	// （sol2 的 lua_Number 就是 double，读成 float 才是多舍了一遍），一路到
+	// rootTransformOf 的 double 平移列都不收窄（批 3 第二刀；旧形态在这里收窄回 float）。
 	// rotation/scale **不在**绝对层——欧拉角与均匀缩放是方向/尺度量，平移无关，保持 float。
 	glm::dvec3 position{0.0, 0.0, 0.0};
 	glm::vec3 rotation{0.0f};
@@ -263,5 +263,26 @@ export inline glm::dvec3 wetSceneAnchorOf(const SceneConfig& scene) {
 		roots.push_back(ent.position);  // 绝对层 double（相对坐标批 2 第一刀起）
 	return wetSceneAnchor(roots);
 }
+
+/**
+ * 实体 rootTransform 组装（scene.lua entities 的 transform 字段 → 4x4 世界矩阵）：
+ * 契约 = `T(position) · Rx · Ry · Rz · S`（旋转应用序 X→Y→Z、rotation 为度、scale 均匀，
+ * 三条约束写在 SceneEntityDesc 头上）。实现按域分两段：rotation/scale 先在 **float 域**
+ * 从单位阵合成 `Rx·Ry·Rz·S`（`glm::rotate`/`glm::scale` 都是「右乘」，等价于旧式把 translate
+ * 一路带在左边），平移在 **double 域**起步后左乘复合——两种写法给出同一个矩阵（结合律），
+ * 区别只在「平移列存了多少位」。顺序同构的机器判据见下方函数体注释指向的测试。
+ *
+ * ## 为什么住 scene_config（而不是留在 main 的 lambda 里）
+ * 与 `wetSceneAnchorOf` 同一个理由，且更硬：**「配置字段怎么变成世界矩阵」是配置契约的一部分**
+ * （欧拉角单位/应用序/均匀缩放三条约束就写在 SceneEntityDesc 头上），而 main 住在可执行文件里
+ * ——留在 main ⟹ 这条契约在 `just test` 里**一条判据都写不出**（AGENTS「可测逻辑必须住进库」）。
+ * 判据 = tests/test_root_transform_absolute.cppm（保真度 + 乘法顺序同构 + 生产点落库三组）。
+ * 依赖方向不变：本模块在 rlbase，只认 glm 与自己的配置类型，不认任何执行层模块。
+ *
+ * @param ent 一条 entity 声明（position 绝对层 double，rotation/scale float）
+ * @return 根位姿矩阵（**绝对层 double**：批 3 第二刀起平移列不再经 float 影子；
+ *         线性部分仍是 float 合成的无损提升，理由见函数体注释与 SceneEntityDesc 契约）
+ */
+export glm::dmat4 rootTransformOf(const SceneEntityDesc& ent);
 
 }  // namespace RGL

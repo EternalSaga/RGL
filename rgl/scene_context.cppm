@@ -29,8 +29,10 @@ namespace RGL {
  * docs/相对坐标地基_plan.md §2.1/§3）：origin rebasing 要吃的就是它，float32 存世界
  * 矩阵既存不下也减不掉原点。生产点写 `world = glm::mat4(absolute)`（派生就是这一行，
  * 消费点仍只读 world）——派生点不唯一，「绝对层」就只是又一份副本（AGENTS 哲学第 1 条）。
- * 当前值 = 现有 float 合成的**无损提升**（float→double 精确）；生成端改在 double 域合成
- * → main_scene.cppm 的 makeRootTransform 处注释（批 3 第二刀，允许图变）。
+ * 当前值 = **真绝对层**（批 3 第二刀起：根平移在 double 域合成、逐图元复合也在 double 域乘，
+ * 全程不再经 float 影子；生成端 = scene_config 的 rootTransformOf，判据 =
+ * tests/test_root_transform_absolute.cppm）。⚠ 本字段是 double **且**是 double 精度——
+ * 第一刀那阵子它只是「换了类型的 float 影子」，那段历史见 docs/相对坐标地基_plan.md §3 批 3。
  *
  * ## local 保持 float（不是漏改）
  * 节点局部 = 资产局部空间（glTF node TRS，量级 ~1e0），与世界原点无关，float32 够用；

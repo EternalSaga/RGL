@@ -316,21 +316,23 @@ static std::vector<uint32_t> checkMaterialConsistency(RGL::AssetTable& assets,
 // 真引用（E5.3）——材质身份（baseColor/textureId/alphaMode）收敛进资产表，纹理→primitive
 entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 	std::span<const uint32_t> assetIds, std::span<const uint32_t> primitiveTextureIds,
-	RGL::Resources&, RGL::AssetTable& assets, const glm::mat4& rootTransform) {
+	RGL::Resources&, RGL::AssetTable& assets, const glm::dmat4& rootTransform) {
 	auto sceneRoot = rg.create();
 	rg.emplace<Relationship>(sceneRoot);  // parent = null（根）；children 不存储（单向，E5.2）
 	// 场景根位姿（Phase 6 批次 5：多模型场景 entity 级 transform）：根 local =
 	// rootTransform；Bounds 球心随根变换、半径乘均匀缩放分量（列 0 长度）
 	auto& rootTf = rg.emplace<Transform>(sceneRoot);
-	rootTf.local = rootTransform;
-	// 绝对层 = 现有 float 合成的无损提升（float→double 精确 ⟹ 下面派生出的 world 逐位不变）。
-	// 生成端改在 double 域合成（rootTransform 本身不再掉 float）= 批 3 第二刀，
-	// 落点在 main_scene.cppm 的 makeRootTransform 注释。
-	rootTf.absolute = glm::dmat4(rootTransform);
+	// local 仍是 float（节点局部 = 资产局部空间，与世界原点无关，裁决 → scene_context 的 Transform 注释）
+	rootTf.local = glm::mat4(rootTransform);
+	// 绝对层**直接吃 double**（批 3 第二刀）：旧形态 `glm::dmat4(rootTransform)` 吃的是已经
+	// 收窄成 float 的根矩阵 ⟹ 类型是 double、精度还是 float（1e6 处 ULP = 0.0625 m）。
+	// 判据 = tests/test_root_transform_absolute.cppm（保真度 + 顺序同构 + 生产点落库三组）。
+	rootTf.absolute = rootTransform;
 	rootTf.world = glm::mat4(rootTf.absolute);  // world 由 absolute 派生（真相源 → scene_context 的 Transform 注释）
-	const float rootScale = glm::length(glm::vec3(rootTransform[0]));
+	const float rootScale = glm::length(glm::vec3(glm::dvec3(rootTransform[0])));
+	// Bounds::center 仍是 `glm::vec3`（本批不动它的类型）：改的是「在哪一域乘」，不是它的分辨率。
 	const glm::vec3 boundsCenter = glm::vec3(rootTransform *
-		glm::vec4(model.bounds.center, 1.0f));
+		glm::dvec4(glm::dvec3(model.bounds.center), 1.0));
 	rg.emplace<Bounds>(sceneRoot, boundsCenter, model.bounds.radius * rootScale);
 
 	const size_t n = model.primitives.size();
@@ -357,9 +359,11 @@ entt::entity registerScene(entt::registry& rg, const RGL::GltfModel& model,
 		glm::mat4 local = prim.nodeWorld;  // Phase 7：node 世界矩阵（TRS + 父链，loader 合成，不烘顶点）
 		auto& tf = rg.emplace<Transform>(e);
 		tf.local = local;  // 资产局部空间，保持 float（理由 → scene_context 的 Transform 注释）
-		// 根位姿复合（批次 5；identity = 旧行为）：本刀仍在 float 域乘、结果无损提升进绝对层
-		// （改 double 域合成 = 批 3 第二刀，会改舍入路径，允许图变，单独一刀）。
-		tf.absolute = glm::dmat4(rootTransform * local);
+		// 根位姿复合（批次 5；identity = 旧行为）：**在 double 域乘**（批 3 第二刀）——旧形态
+		// `glm::dmat4(rootTransform * local)` 是 float 域乘完再无损提升，1e6 工作点上 node 的
+		// 小平移会被圆掉（实测：root = T(1e6)、local.tx = 0.03125 ⟹ float 域复合读回**恰 0**）。
+		// local 的无损提升不引入任何舍入（float→double 精确），复合只发生一次收窄（在 world）。
+		tf.absolute = rootTransform * glm::dmat4(local);
 		tf.world = glm::mat4(tf.absolute);  // world 由 absolute 派生
 
 		auto& meshRef = rg.emplace<MeshRef>(e);

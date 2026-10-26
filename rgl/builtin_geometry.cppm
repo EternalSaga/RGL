@@ -1,6 +1,6 @@
 module;
 #include <entt/entt.hpp>
-#include <glm/glm.hpp>  // registerBuiltinCube rootTransform 参数 glm::mat4 名可见
+#include <glm/glm.hpp>  // registerBuiltinCube rootTransform 参数 glm::dmat4 名可见
 export module builtin_geometry;
 
 import rlstd;
@@ -50,10 +50,11 @@ export [[nodiscard]] std::expected<uint32_t, Error> uploadBuiltinCube(
  * @param rg ECS registry
  * @param meshAsset 内建 mesh 资产 id（uploadBuiltinCube 产物）
  * @param materialAsset 材质资产 id（见上：baseColor 不被 cube 管线消费，字段仅为同构保留）
- * @param rootTransform 根变换（默认 identity；几何已在原点 ±0.5）
+ * @param rootTransform 根变换（**绝对层 double**，默认 identity；几何已在原点 ±0.5。
+ *        批 3 第二刀起直接吃 rootTransformOf 的 double 产物，不再经 float 影子）
  * @return 创建的 cube entity
  */
 export entt::entity registerBuiltinCube(entt::registry& rg, uint32_t meshAsset,
-	uint32_t materialAsset, const glm::mat4& rootTransform = glm::mat4(1.0f));
+	uint32_t materialAsset, const glm::dmat4& rootTransform = glm::dmat4(1.0));
 
 }  // namespace RGL
