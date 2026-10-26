@@ -254,6 +254,33 @@ export void collectShadowCasters(const RGL::MeshAsset& asset, const RGL::Materia
 export float shadowTexelSize(float xyRadius);
 
 /**
+ * 本帧下发给采样端的**阴影深度偏置**（NDC 域）= `kShadowDepthBiasWorld / 级 0 光空间盒深度跨度`。
+ * 定义在 render_list_impl（partition impl unit，实现侧不写 export）。债-150 的换算点。
+ *
+ * ## 为什么换算必须在 CPU 侧做
+ * 采样端 `shadow.slang` 的 `ref = ndc.z - params.x` 吃的是 **NDC 域**的值，而光空间正交投影把
+ * `[tMin, tMax]` **线性**映到 `[0, 1]` ⟹ 一枚 NDC 单位恰等于「本帧跨度」那么多米。把偏置钉在
+ * **世界光深域**（一个有物理含义的常数）、每次下发前除以本帧跨度，**shader 一个字不用改**——
+ * 改 shader 要连带动 `.slang` + `rgl/generated/` + 跑 `just reflect`，代价与风险都大一个量级。
+ *
+ * ## 🔴 除数是**级 0** 的跨度，这是「单值共享」下的取舍，不是漏改
+ * `shadowParams.x` 是四级共用的一枚标量（`FrameDrawList::shadowParams` 是 `glm::vec4`，
+ * 不是逐级数组）。所以本函数消掉的是「跨度**整体**随场景摆位 / 渲染原点漂移」这一项
+ * （= 债-149 那条失效链的放大器），而**没有**消掉「四级之间不同量」那一项——出厂四级当量
+ * 仍是 5.85 / 5.89 / 6.82 / 11.17 mm，比值 = 各级跨度比。把它做成逐级要动 scene data 布局
+ * 与 shader，是另一笔改动、另一份归因（本批明令不顺手做）。
+ * 取级 0 当参照的理由：级 0 跨度是四级里**最小**的 ⟹ 其余各级的当量只会 ≥ 标定值，
+ * 不会把任何一级压到比标定值更细（更痤疮）。
+ *
+ * ## 退化跨度返回 0（不返回 inf / NaN）
+ * 级联球半径 ≤ 0（near/far 退化）时跨度非正，除下去会得到 inf/NaN；而 NaN 进 `params.x`
+ * 会让 `ref` 恒为 NaN、深度比较恒假 ⟹ **全图判成受光 = 阴影静默消失**，比「偏置不对」坏得多
+ * （形态同债-149 的「阴影贡献恰为 0 像素」）。出厂路径恒不走到这条（级 0 半径恒 > 0），
+ * 它只兜住上游故障，且由单测钉住（反向用例）。
+ */
+export float shadowDepthBiasNdc(std::span<const ShadowVolume> volumes);
+
+/**
  * ★M-1b 真 MDI 采集上下文（docs/mdi_plan.md §19.2 D4 / §19.5）。非空 = 生效档事实
  * （ctx 里有 `MeshletMdiShadowActivation`，装配层判定一次，本层不重述条件——
  * `collectMeshletOverlay` 判据 5/6 同纪律）。三个数/两个口的来源各有红线：

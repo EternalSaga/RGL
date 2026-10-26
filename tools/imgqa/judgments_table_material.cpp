@@ -91,7 +91,7 @@ const std::vector<JudgmentInfo>& materialSwimJudgments()
               "  fb=1 无记忆 ⟹ 同相位差须恰为 0，一个 bit 都不许差）",
               "material_swim.cpp 头注六臂表：onA2 就是 onA 的重跑，除进程外无任何差别"}},
         {"material-swim-gate-closed-floor", JudgmentFamily::Foundation,
-            "门关态（`coordinate.rebase = false`，出厂默认）同一对机位的翻转率 ≤ 0.5%（与 J1\n"
+            "门关态（`coordinate.rebase = false`，本仪器显式设门到达）同一对机位的翻转率 ≤ 0.5%（与 J1\n"
             "  同一个阈值、同一个算子）。\n"
             "· 门关态渲染原点恒 (0,0,0) ⟹ P = 世界坐标 ⟹ 水洼场按构造世界不变 ⟹ 这条**必须**\n"
             "  绿。它是 J1 的「算子恒红」防线：如果重投影、格归属、阈值或平移搜索里有任何一处\n"

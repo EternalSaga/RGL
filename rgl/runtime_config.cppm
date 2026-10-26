@@ -664,23 +664,27 @@ export struct RuntimeConfig {
 	bool meshletShadowProxy = true;
 
 	/**
-	 * 相对坐标原点 rebase 门（configs/runtime.lua `coordinate.rebase`，默认 false = 门关）。
+	 * 相对坐标原点 rebase 门（configs/runtime.lua `coordinate.rebase`，**默认 true = 门开**）。
 	 *
-	 * 门关（默认）⟹ projectionSystem 把渲染原点（registry ctx `RenderOrigin`）钉为
-	 * dvec3(0) ⟹ toRelative 的减法恒等 ⟹ 交付图**逐位不变**（相对坐标计划批 3 的
-	 * 交付形态，docs/相对坐标地基_plan.md §2.2）。
-	 *
-	 * 门开（true，批 5 第 1 刀起**能跑**）= 每帧把相机位置 snap 到「本帧级联纹素粒度」
+	 * 门开（默认，2026-10-26 翻）= 每帧把相机位置 snap 到「本帧级联纹素粒度」
 	 * （`rebaseOriginGranularity`，债-85 ②：粒度取最粗消费者纹素尺度，不是相机精度）。
-	 * 🔴 但**出厂仍是 false**：翻默认值要等「|camera| ≈ 1e6 工作点开比关好」那条图像判据
-	 * 落地（docs/相对坐标地基_plan.md §3 批 5 的两条判据表）。
+	 * 翻默认的依据 = `docs/相对坐标地基_plan.md` §3 批 5 的两条图像判据都已转绿：出厂点
+	 * 「不坏」（`shadow-edge-rebase` 的 no-harm）+ 远点「变好」（benefit，界未动自己转绿）
+	 * 与时间稳定性（`shadow-swim-flat` 四格里远点·门关比门开差 31.8 倍）。
+	 *
+	 * 门关（显式 `--set coordinate.rebase=false` 到达）⟹ projectionSystem 把渲染原点
+	 * （registry ctx `RenderOrigin`）钉为 dvec3(0) ⟹ toRelative 的减法恒等。
+	 * 🔴 **门关态仍然是可达的、且是阴影归因用的对照态**：批 5 那台四格仪器
+	 * （`just imgqa shadow-edge-rebase` / `shadow-swim-flat` / `material-swim`）的每一臂都
+	 * **自己显式写这枚键**（`overrideCoordinateRebase`），不读默认值；做阴影图像归因时按
+	 * `--set coordinate.rebase=false` 加回门关态，别拿「默认」当门关。
 	 * 🔴 粒度算不出来（NaN）时 projectionSystem 抛 std::runtime_error 点名本键、进程退出——
 	 * 这里刻意不做「true 静默按 false 跑」：配置开了却没生效正是本项目反复登记的假绿形态。
 	 * 消费链：loadRuntimeConfig → main 启动期 emplace `RenderOrigin`（只搬门）→
 	 * projectionSystem 每帧写 position → taaSystem / renderListSystem 消费（原点作为**参数**
 	 * 传入，不是全局单例 → scene_context 的 RenderOrigin 注释）。
 	 */
-	bool coordinateRebase = false;
+	bool coordinateRebase = true;
 
 	/** 「TAA 在不在图里」的唯一推导点（原 `scene.lua taa.enabled` 的消费者全部改走这里）。 */
 	[[nodiscard]] constexpr bool aaWantsTaa() const {

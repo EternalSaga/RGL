@@ -395,7 +395,7 @@ void projectionSystem(entt::registry& rg) {
 				"coordinate.rebase = true 但本帧算不出原点吸附粒度（rebaseSnapGranularity 给出 "
 				"NaN / 非正值 ⟹ 级联纹素坏到选不出格距，通常是 near/far 退化）——宁可进程退出，"
 				"也不拿 NaN 原点渲染（相机凭空消失、无报错）；关掉 configs/runtime.lua 的 "
-				"coordinate.rebase 即回到门关交付态");
+				"coordinate.rebase 即回到门关态（出厂默认已是门开，门关是归因对照态）");
 		origin.position = snapOriginToGranularity(camera.position, granularity);
 	} else {
 		origin.position = glm::dvec3{0.0};  // 门关：减法恒等，交付图逐位不变
@@ -419,8 +419,9 @@ void projectionSystem(entt::registry& rg) {
  *
  * **门红线**：`env.taaEnabled == false` 时完全不碰 `proj`（不是「加 0」而是不调用）
  * ⇒ 下游 objectMvps / @64 / 剔除 逐位不变。
- * **门关（`coordinate.rebase = false`）红线**：原点恒 (0,0,0) ⇒ 原点差恰为零 ⇒
- * motionWithOriginShift 逐位返回自旋比 ⇒ 载荷与改前逐位相同。
+ * **门关（`coordinate.rebase = false`，需显式 `--set` 才到达）红线**：原点恒 (0,0,0) ⇒ 原点差恰为零 ⇒
+ * motionWithOriginShift 逐位返回自旋比 ⇒ 载荷与改前逐位相同。出厂默认已是门开（2026-10-26 翻），
+ * 这条早退分支因此**不是出厂路径**——它是阴影/时域归因的对照态，别当死码删。
  *
  * 抖动为什么加在 proj 而不是各消费方：见 ViewProjection::jitterPx 注释（一处抖，
  * 深度缓冲与所有重建该深度的消费者自动同口径）。

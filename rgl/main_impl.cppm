@@ -257,8 +257,9 @@ void wireTuningContexts(entt::registry& rg, const RuntimeConfig& runtime) {
 	rg.ctx().emplace<SsrTuning>(runtime.ssr);
 	rg.ctx().emplace<WetTuning>(runtime.wet);
 	// 渲染原点（相对坐标批 3 装配置门；批 5 第 1 刀起 position 由 projectionSystem 每帧写）：
-	// 这里**只搬配置门**，一个数都不算。门关 = position 恒 (0,0,0) ⟹ toRelative 减法恒等
-	// ⟹ 逐位不变；门开 = projectionSystem 把相机位置 snap 到级联纹素粒度（粒度 NaN 才抛错拒跑）。
+	// 这里**只搬配置门**，一个数都不算。门关（需显式 `rebase = false`）= position 恒 (0,0,0)
+	// ⟹ toRelative 减法恒等 ⟹ 逐位不变；门开（**出厂默认**）= projectionSystem 把相机位置
+	// snap 到级联纹素粒度（粒度 NaN 才抛错拒跑）。
 	// 它是 **渲染这一个消费者的参数**，不是引擎级全局原点（→ scene_context 的 RenderOrigin 注释）。
 	rg.ctx().emplace<RenderOrigin>(RenderOrigin{.enabled = runtime.coordinateRebase});
 	// 门开态的**回显行**（门关一行都不打 = 出厂日志逐字不变）。为什么必须有它：配置覆写器的写后

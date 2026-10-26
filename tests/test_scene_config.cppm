@@ -1469,15 +1469,16 @@ TEST_CASE("runtime_config：meshlet.shadow_lod_fallback（★18-B1 回落策略�
 	}
 }
 
-TEST_CASE("runtime_config：coordinate.rebase 门（相对坐标批 3；缺省 false、显式 true 读得出、块内拼错键被喊）") {
+TEST_CASE("runtime_config：coordinate.rebase 门（缺省 **true = 门开**、显式 false 读得出、块内拼错键被喊）") {
 	// 被测 = readCoordinateBlock（嵌套块 + readBoolKey，形态先例 = readFsrBlock）。
-	// 门关 = 默认 = 出厂态（交付图逐位不变的前提）；门开的行为（projectionSystem 生产动态
-	// 原点，粒度算不出来才抛错）
+	// **门开 = 默认 = 出厂态**（2026-10-26 翻，依据 = docs/相对坐标地基_plan.md §3 批 5 的
+	// 「不坏」+「变好」两条图像判据都转绿）；门关 = 显式写 `rebase = false`，是阴影归因的
+	// 对照态。门开的行为（projectionSystem 生产动态原点，粒度算不出来才抛错）
 	// 不在配置层——tests/test_render_origin.cppm 钉那条，本用例只钉「键读得对」。
-	// 变异红线（每条实测，读数 → 交付报告；2026-10-25）：
-	//   ① 成员初始化 coordinateRebase 翻成 true → 「成员初始化」「缺块」「缺键」三条红
-	//      （默认漂移 = 出厂即开一条没人实现的门，而所有截图基线都在关上拍的）；
-	//   ② 解析器键名 "rebase" 漂了 → 「显式 true」红（读不到 → 保 false）；
+	// 变异红线（每条实测，读数 → 交付报告；2026-10-25 立、2026-10-26 随翻默认换方向）：
+	//   ① 成员初始化 coordinateRebase 翻成 false → 「成员初始化」「缺块」「缺键」三条红
+	//      （默认漂移 = 出厂悄悄退回门关，而三台批 5 仪器都自己显式设门、看不见这件事）；
+	//   ② 解析器键名 "rebase" 漂了 → 「显式 false」红（读不到 → 保 true）；
 	//   ③ readCoordinateBlock 整个不接进 loadRuntimeConfig → **编译红**（static 函数未用
 	//      = -Werror=unused-function，编译器直接拦死，形态上不可能静默存在）；
 	//   ④ kRuntimeKeys 漏登记 "coordinate.rebase" → rt_cov「表撒谎」红 + 本用例的
@@ -1485,23 +1486,23 @@ TEST_CASE("runtime_config：coordinate.rebase 门（相对坐标批 3；缺省 f
 	//   ⑤ 块内拼错的子键不喊（下钻判据坏）→ 最后一条 LogTailer 用例红
 	//      （实测经 ④ 的形态触发：键表没前缀 ⟹ hasUnknownKeyWarn 拿不到 warn 行）。
 	{  // 成员初始化默认路径（不经 lua 文件）
-		CHECK(RuntimeConfig{}.coordinateRebase == false);
+		CHECK(RuntimeConfig{}.coordinateRebase == true);
 	}
-	{  // 缺块 / 空块 / 缺键 = false（三种「没写」形态同判）
+	{  // 缺块 / 空块 / 缺键 = true（三种「没写」形态同判 = 都落到结构体默认）
 		TempLua f("rt_coord_empty", "return {}\n");
 		auto r = loadRuntimeConfig(f.pathStr());
 		REQUIRE(r.has_value());
-		CHECK(r->coordinateRebase == false);
+		CHECK(r->coordinateRebase == true);
 		TempLua g("rt_coord_block_empty", "return { coordinate = {} }\n");
 		auto r2 = loadRuntimeConfig(g.pathStr());
 		REQUIRE(r2.has_value());
-		CHECK(r2->coordinateRebase == false);
+		CHECK(r2->coordinateRebase == true);
 		TempLua h("rt_coord_nokey", "return { coordinate = { other_g5 = 1 } }\n");
 		// other_g5 是块内未知键 → 未知键 warn（判据本体在下方 LogTailer 用例钉），
 		// 这里只要求它**不改门**且加载不炸。
 		auto r3 = loadRuntimeConfig(h.pathStr());
 		REQUIRE(r3.has_value());
-		CHECK(r3->coordinateRebase == false);
+		CHECK(r3->coordinateRebase == true);
 	}
 	{  // 显式 true / 显式 false 都读得出（反向用例：漏读与错映射在两条上各红一次）
 		TempLua t("rt_coord_true", "return { coordinate = { rebase = true } }\n");
@@ -1511,7 +1512,7 @@ TEST_CASE("runtime_config：coordinate.rebase 门（相对坐标批 3；缺省 f
 		TempLua f2("rt_coord_false", "return { coordinate = { rebase = false } }\n");
 		auto r2 = loadRuntimeConfig(f2.pathStr());
 		REQUIRE(r2.has_value());
-		CHECK(r2->coordinateRebase == false);
+		CHECK(r2->coordinateRebase == false);  // 🔴 门关态**必须**还能显式到达（阴影归因的对照臂）
 	}
 	// 🔴 未知键仍被拦（任务点名的那条）：coordinate 块被键表声明了点分前缀 ⟹ collectPresentKeys
 	// 下钻一层，块内拼错的子键以 `coordinate.子键` 精确成员判据出声（债-129 第三刀口径）。
@@ -1525,7 +1526,7 @@ TEST_CASE("runtime_config：coordinate.rebase 门（相对坐标批 3；缺省 f
 	CHECK(hasUnknownKeyWarn(delta, "runtime", "coordinate.rebse"));   // 拼错的子键点名喊
 	CHECK(delta.find("未知键 'coordinate'") == std::string::npos);     // 表名 = 前缀命中，不喊
 	CHECK(std::ranges::find(trace.present, "coordinate.rebse") != trace.present.end());
-	CHECK(rTypo->coordinateRebase == false);  // 拼错键不改门（也不炸）
+	CHECK(rTypo->coordinateRebase == true);  // 拼错键不改门（也不炸）
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

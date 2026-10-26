@@ -256,20 +256,25 @@ return {
         shadow_proxy = true,
     },
 
-    -- ── 相对坐标原点 rebase（docs/相对坐标地基_plan.md 批 3；债-85 已拍板要做，门关交付）──
+    -- ── 相对坐标原点 rebase（docs/相对坐标地基_plan.md 批 3 / 批 5；债-85 已拍板要做）──
     -- 渲染管线把「绝对 → 相对」的减法收敛在唯一入口 toRelative，原点作为它的显式参数
     --（每个坐标消费者各自携带一份原点，不是全局单例 → rgl/scene_context.cppm 的 RenderOrigin）。
-    --   rebase = false（默认，门关）= projectionSystem 把渲染原点钉为 (0,0,0) ⟹ 减法恒等
-    --     ⟹ 交付图**逐位不变**（出厂截图锚 efa70587… 就是在这条上复现的）。
-    --   rebase = true（批 5 第 1 刀起**能跑**）= 每帧把相机位置 snap 到「本帧级联纹素粒度」
+    --   rebase = true（**默认，门开**）= 每帧把相机位置 snap 到「本帧级联纹素粒度」
     --     （rebaseOriginGranularity；债-85 ②：粒度取最粗消费者纹素尺度而不是相机精度）。
     --     粒度算不出来（NaN）时 projectionSystem 抛错点名本键、进程退出——刻意不做
     --     「true 静默按 false 跑」：配置开了却没生效是本项目最忌的假绿形态
     --     （单测 tests/test_render_origin.cppm 钉住这两条）。
-    --   🔴 出厂**仍是 false**：翻默认值要等「|camera| ≈ 1e6 工作点开比关好」那条图像判据
-    --     落地（docs/相对坐标地基_plan.md §3 批 5 的判据表第二条）。
+    --   rebase = false（门关）= projectionSystem 把渲染原点钉为 (0,0,0) ⟹ 减法恒等。
+    --     🔴 **门关态没有消失，只是不再是默认**：`--set coordinate.rebase=false` 就到得到，
+    --     做**阴影图像归因**（门开 vs 门关到底差多少像素）时用它当对照臂；批 5 那三台仪器
+    --     （`just imgqa shadow-edge-rebase` / `shadow-swim-flat` / `material-swim`）的每一臂
+    --     都**自己显式写这枚键**、不读默认值，所以翻默认不会改变它们的读数——但别把这件事
+    --     当成「门关态没人守」，守它的是那三台仪器的显式双臂，不是这里的默认值。
+    -- 🔴 翻默认的依据（2026-10-26）= 批 5 的两条图像判据都已转绿：出厂点「不坏」+ 远点
+    --   「变好」（`shadow-edge-rebase` 的 benefit 在界未动的前提下自己转绿），另有
+    --   `shadow-swim-flat` 的时间稳定性四格（远点·门关比门开差 31.8 倍）。
     coordinate = {
-        rebase = false,
+        rebase = true,
     },
 
     -- DIAG：隐藏窗启动、第 N 帧后显示（可见窗 fault 排查；-1 = 立即显示）

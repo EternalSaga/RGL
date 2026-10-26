@@ -830,18 +830,22 @@ export struct TaaState {
  * 物理 / 体积光 / 粒子模拟空间将来各自声明自己的原点（新系统 = 新增一份原点声明），
  * **不改本类型、也不与本实例共享**。把它读成「引擎的世界原点」就是用错了它。
  *
- * ## 门关（enabled = false，默认）⟹ position 恒 (0,0,0)
+ * ## `enabled = false` ⟹ position 恒 (0,0,0)（门关）
  * toRelative 在零原点是恒等（tests/test_coordinate_rebase.cppm 钉死）⟹ 减法恒等，
- * 交付图逐位不变。门开（批 5 第 1 刀起能跑）= position = 相机位置 snap 到本帧级联纹素
+ * 交付图逐位不变。门开（**出厂默认**，2026-10-26 翻）= position = 相机位置 snap 到本帧级联纹素
  * 粒度；粒度算不出来（NaN）时 projectionSystem 抛 std::runtime_error 拒跑，**不会**把
  * 「配置开了」静默按门关处理（NaN 原点会让相机凭空消失）。
+ * ⚠ 本结构的 `enabled` 默认写 `false` 而配置默认写 `true` **不是漂**：前者是「还没被
+ *   main 接线」的画像（tests/test_render_origin.cppm 钉那条），后者是出厂态。真实出厂态
+ *   只由 `wireTuningContexts` 搬进来的配置值决定。
  * ⚠ snap 粒度**不进本结构**：它每帧由 `rebaseOriginGranularity` 现算、只有一个消费者
  * （projectionSystem 自己），存进 ctx = 给「谁写的」多开一个可错点。粒度 = 最粗消费者
  * 纹素尺度这条约束（债-85 ②）的判据在 render_list_impl 的接缝与它的单测里。
  */
 export struct RenderOrigin {
-	glm::dvec3 position{};  ///< 当前渲染原点（绝对层坐标）。门关（默认）⟹ 恒 (0,0,0)
-	bool enabled = false;   ///< 配置门 = configs/runtime.lua `coordinate.rebase`（默认 false = 门关）
+	glm::dvec3 position{};  ///< 当前渲染原点（绝对层坐标）。门关 ⟹ 恒 (0,0,0)
+	bool enabled = false;   ///< 门 = configs/runtime.lua `coordinate.rebase`（**默认 true = 门开**）；
+	                        ///< 本结构的 `false` 是「还没被配置接线」的画像，不是出厂态
 };
 
 /**

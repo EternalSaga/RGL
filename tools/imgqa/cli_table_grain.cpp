@@ -42,7 +42,8 @@ std::vector<SubcommandSpec> shadowGrainSpecs()
                 "（N·L̂=0.6）+ **多缝深组**（每组 4 条竖直缝槽、背板各退本组 d；bistro 门板"
                 "读图定案形态的程序化重造）。缝深加密守的是 `ShadowCsmTuning::slopeBias` "
                 "注释挂号的盲区「更细的缝会不会在 8 之下就被提前抹掉」。槽底闭式影带"
-                "s = d·du/dn，分离窗 d ∈ span·(0.0015/dn+1.5/1024, 0.0015/dn+17.5/1024)。"
+                "s = d·du/dn，分离窗 d ∈ W/dn + span·(1.5/1024, 17.5/1024)，W = 世界偏置"
+                " 5.854 mm（债-150 起偏置住世界光深域，第一项不再随 span 漂）。"
                 "判据窗口 = manifest `measure` 块世界角点的投影（区域来自几何，不是"
                 "屏幕矩形）；C++ 不重抄几何常量。缺 `.glb`/manifest 直接 FAIL，**不 SKIP**。",
                 "六臂：`none`（参照）· `dflt`（出厂：shadow.lua **不写** slope_bias 键，吃"

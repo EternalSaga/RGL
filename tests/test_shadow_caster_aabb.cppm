@@ -6,17 +6,33 @@ module;
  * `rgl/render_list_impl.cppm::buildShadowVolumes` 把投影体 AABB 的累加初值写成 `{0.0f}` 时，
  * 本帧坐标系的零点恒被算进包围盒 ⟹ 场景整个偏到零点一侧时 AABB 多出一条从 0 拉到场景的长
  * 尾巴 ⟹ 尾巴按 `|d·轴|` 折进光空间正交盒的深度跨度 `tMax − tMin` ⟹ 采样端那个 **NDC 域**
- * 常数深度偏置（`kShadowDepthBias`）的世界当量 = `bias × 跨度` 随之线性膨胀 ⟹ 超过场景能给出
- * 的最大遮挡深度差 ⟹ **阴影整块消失**（实机：合成场景偏 300 m 处阴影贡献恰为 0 像素）。
- * 修复（初值取第一个候选）2026-10-26 入账，但台账行自己写着：「**还没有一条会红的单测**」。
- * 本文件补那条。没有它，这次修复就只是「闭式预测 + 一次实机差分」——本项目反复实测的对手正是
- * 这种看起来已完工的形态。
+ * 常数深度偏置的世界当量 = `bias × 跨度` 随之线性膨胀 ⟹ 超过场景能给出的最大遮挡深度差
+ * ⟹ **阴影整块消失**（实机：合成场景偏 300 m 处阴影贡献恰为 0 像素）。
+ * 修复（初值取第一个候选）2026-10-26 入账。台账行当时写着「还没有一条会红的单测」——那句
+ * 已过期（本文件就是那条守卫），主 agent 就地订正。
+ *
+ * ## 🔴 2026-10-26 随债-150 换形：② 段三条**全部重立**（不是补注释）
+ * 债-150 把偏置从 NDC 域搬到**世界光深域**（`kShadowDepthBiasWorld / 级 0 跨度`，见
+ * `scene_data.cppm` 与 `render_list.cppm::shadowDepthBiasNdc`）。原来那三条 ② 记的是
+ * 「**NDC 域**偏置的世界当量 = bias × 跨度」这个语义，修法把被记的量本身换掉了：
+ *  - **②-A** 原断「当量 = 24 mm 量级」——`kShadowDepthBias` 已不存在，而「当量 = bias × 跨度」
+ *    对任何 bias 都恒真 ⟹ 换成断「**实际下发**的商乘回级 0 跨度 = 标定值 5.854 mm」，
+ *    并把「跨级当量仍按跨度比漂」这条**没修掉的遗留**写成可见断言。
+ *  - **②-B** 原断「当量对摆位与原点不变」——修完之后偏置本来就是世界常数 ⟹ 那条退化成
+ *    「常数乘不变量」的**同义反复**。换成任务书点名的形态：**世界当量恒为标定常数、而 NDC
+ *    等效值随跨度反比变**（自变量换成候选 AABB 形状，因为 ①-B/①-C 那两条阶梯**故意不动**
+ *    跨度，在它们上面「反比」根本量不出来）。另加一条反事实自证钉住它有牙。
+ *  - **②-C** 原记「调 short shadowFar 会让当量动 0.03…49 %」，并自己写着「按债-150 改到世界域
+ *    下发时本条会红——那是正确的」。现在真的红了 ⟹ 按它自己的话重立：级 0 当量对 far **不变**
+ *    （界 ±0.5 %），跨级那一项仍在（只记录 + 要求至少一档真的动，作区分力自证）。
  *
  * ## 🔴 变异红线声明（哪个变异让我红；本批**全部真跑**，读数见交付报告）
  *  - **M1（任务书点名的那条）** 把累加初值改回改动前那一份：`casterMin/Max` 保持 `{0.0f}`
  *    且循环吃 `cands` 而不是 `cands.subspan(1)`（= 让零点参与 min/max）
  *    → 红：①-A 闭式对账（每个 Δ × 每一级都超上界）、🔴 ①-B 整组候选平移不变、
- *      🔴 ①-C 换坐标系零点不变、①-D 属性测试、🔴 ②-B 偏置世界当量不变。
+ *      🔴 ①-C 换坐标系零点不变、①-D 属性测试、🔴 ②-B（世界当量恒为标定常数）。
+ *      ⚠ 换形前这条还红 ②-A；债-150 把偏置钉到世界域之后跨度撑大**不再改变当量**，
+ *      ②-A 对 M1 失效形态不再可见（实跑记录里有这条对比）。
  *  - **M2（弱化：只吃第一个候选，忘累加其余）** 删掉 `for (const auto& cd : cands.subspan(1))`
  *    的循环体 → 红：①-A 的**下界**半边（AABB 变小 ⟹ 跨度掉到闭式凸包之下）+ ①-D 的下界。
  *    ⚠ 上界半边**不红**（AABB 只会更小）——这就是「对称判据的每一半边各要一条用例」的形态，
@@ -28,18 +44,29 @@ module;
  *    → 「守卫的自证」那条红（`L_old − L` 掉到 0），而其余用例**全绿**
  *      ⟹ 证明 M1 的红来自判据本身，不是「输入恰好让旧代码也对」。
  *
- * ## 变异实跑记录（2026-10-26，harness = 显式建 `rgl_tests` 目标 + 取构建自身返回码 +
- * `shutil.copyfile` 还原不带 mtime + 每条还原后重跑基线断言全绿；四条变异 RC 全 0）
- *  - **M1 → 红 6 条 / 216 断言**：①-A、①-B、①-C、①-D、②-A、②-B。逐级跨度实测
- *    Δ=0 处 67.92 m（闭式上界 15.89 m）、Δ=30 处 97.92 m ⟹ **漂移恰为 Δ 本身**
- *    （= 债-149 的「随偏移线性增长」在毫秒级单测里复现，量级 = 界的 6 万倍）。
- *  - **M2 → 红 6 条**：①-A（**下界**半边：实测 3.62 m < 界 15.87 m）、①-B、①-D、①-E、②-A、②-C。
- *    ⚠ ①-C **不红**——「只吃第一个候选」对平移仍是不变量，这条只能由下界半边抓。
- *  - **M3 → 只红 ①-D 一条**。⚠ 如实报：在 8 球壳配置下 `casterMax` 少一个候选角会被其余 7 个
- *    角**盖住**（glm::max 取大 ⟹ 变异是空操作），只有随机集里 `n = 1` 的样本抓得到。
- *    ⟹ 这条是「手挑输入恰好让变异无效」的现场证据，也是 ①-D 存在的理由。
- *  - **M4 → 红「守卫的自证」+ ①-D 的前提计数**，其余 8 条**全绿** ⟹ 判据的红确实来自
- *    「候选集偏在零点一侧」这个前提，而不是别处。
+ * ## 变异实跑记录（**2026-10-26 债-150 换形后全部重跑**；harness = 显式建 `rgl_tests` 目标 +
+ * 构建与测试各取自身退出码（不经管道）+ `shutil.copyfile` 还原不带 mtime +
+ * 每条还原后重跑全量确认基线全绿；六条变异的「还原后 build/test RC」全 0）
+ *  - **M1 → 红 6 条用例 / 194 断言**：①-A(32)、①-B(12)、①-C(12)、①-D(128)、②-B(9)、②-C(1)。
+ *    🔴 **与换形前的差别（这条本身就是修法的读数）**：原来 M1 会红 ②-A，现在**不红**——
+ *    因为偏置已经钉在世界域，跨度被零点撑大**不再改变它的物理当量**，②-A 量不到了。
+ *    债-149 的守卫因此完全落在 ①-A…E 上（那五条仍在，且 M1 下红 184 条），而 ② 段守的是
+ *    「偏置的下发形态」——两段的分工比换形前更干净。
+ *  - **M2（只吃第一个候选）→ 红 5 条用例 / 145 断言**：①-A（**下界**半边）、①-B、①-D、①-E、
+ *    ②-A。⚠ ①-C **不红**——「只吃第一个候选」对平移仍是不变量，只能由下界半边抓。
+ *  - **M3（上界半边专用）** `casterMax = cands[0].center + cands[0].radius` 改成 `… - radius`
+ *    → 🔴 **实测只红 ①-D**（不是预期的 ①-A/①-B/①-C）：8 球壳里第一个候选的角被其余 7 个角
+ *      盖住 ⟹ 该变异在主配置上是**空操作**，只有随机集里 `n = 1` 的样本抓得到。原样记在这。
+ *  - **M4（激励有区分力的自证，反向半边）** 把判据候选集整体搬回**跨过零点**（= 出厂形态）
+ *    → 「守卫的自证」那条红（`L_old − L` 掉到 0），而其余用例**全绿**。
+ *  - 🔴 **M-150a（任务书点名的那条：世界偏置常数被写成随跨度漂 = 把 `shadowDepthBiasNdc`
+ *    改回 `return 0.0015f`）→ 红 5 条用例 / 26 断言**：②-A、②-B、②-C、
+ *    `fillShadowData：params = (bias, …) 两态`、`fillShadowData：params.x 的除数是级 0 跨度…`。
+ *    ⟺ 换形后的 ② 段真的在守「下发的是商而不是常数」。
+ *  - **M-150b（除数错吃级 3 的跨度）→ 红 5 条用例 / 15 断言**：②-A、②-B、②-C、
+ *    `params 两态`、`shadowDepthBiasNdc 退化跨度` 那条。⟹ 「除以哪一级」不是瞎的选择。
+ *  - **M-150c（删掉退化跨度的守卫）→ 只红 1 条**：`shadowDepthBiasNdc：退化跨度出 0`。
+ *    ⚠ 如实报：这是**唯一**守它的用例——退化跨度在出厂路径上恒不出现，所以图像侧零覆盖。
  *
  * ## 期望值出处（🔴 不抄被测码的算式）
  *  - **闭式（盒的 support function 定义）**：轴对齐盒 `B = ∏[lo_k, hi_k]` 在单位向量 d 上的
@@ -57,8 +84,13 @@ module;
  *    🔴 **两端都不含「候选集到零点多远」这个量** —— 这就是「跨度不许知道零点在哪」的闭式表达。
  *    特殊情形「候选区间含住切片区间」时 `H = L` 且与吸附相位无关 ⟹ `D = L + 2·pad` **取等号**
  *    （主用例刻意做成这一形态，判据因此收得进一枚纹素，而不是「小于某个绝对数」）。
- *  - **实机**：②-A 的毫米数与 `docs/还债总账.md` 债-150 行的出厂读数（跨度 16.2 m ⟹ 当量
- *    24 mm）交叉核对 —— 本文件的候选集刻意做成同量级跨度（闭式 L = 15.88 m）。
+ *  - **实机（②-A 的标定出处）**：本批在 `fillShadowData` 里打点读**出厂交付场景**（bistro，
+ *    门开态，第 8 帧）逐级跨度 = 3.903 / 3.928 / 4.544 / 7.449 m，乘改前那枚 NDC 常数 0.0015
+ *    ⟹ 级 0 当量 **5.854 mm**（= `kShadowDepthBiasWorld`，标定就锚在这一个数上）。
+ *    ⚠ `docs/还债总账.md` 债-150 行写的「出厂跨度 16.2 m ⟹ 24.3 mm」是**合成场景**
+ *    `shadow_edge_rig` 的数（本文件的候选集刻意做成同量级，闭式 L = 15.88 m ⟹ 实测 23.84 mm
+ *    对得上它），**不是**出厂交付场景的——两条数分家居留在此，是因为债-150 的修法必须挑一条
+ *    当锚，挑的是交付场景那条（理由：让出厂交付图零像素改动，见 scene_data.cppm 注释）。
  *
  * ## 与相邻测试文件的分工（别读成重复覆盖）
  *  - `tests/test_shadow_texel_absolute.cppm`（批 5 第 0.5/1 刀）测的是**盒心吸附**（XY 落位与
@@ -95,10 +127,10 @@ export module test_shadow_caster_aabb;
 import rlstd;
 import test_support;        // testing::Lcg / expectNear（写死种子，禁真随机）
 import scene_context;       // Bounds / Light / ShadowVolume / ViewProjection / quantizeShadowDistance
-import scene_data;          // kActiveShadowCascades / kShadowDepthBias
+import scene_data;          // kActiveShadowCascades / kShadowDepthBiasWorld / kShadowDepthBiasRefSpan
 import render_graph;        // shadowAtlasColumns / shadowTileSize
-import render_list;         // 🔴 buildShadowVolumes（本批抬出的接缝）/ computeCascadeSpheres / ShadowCandidate
-import frame_draw_list;     // DrawCall / ShadowDrawArgs / ShadowMeshletDrawArgs
+import render_list;         // 🔴 buildShadowVolumes（本批抬出的接缝）/ computeCascadeSpheres / ShadowCandidate / fillShadowData（② 段取实际下发的偏置）
+import frame_draw_list;     // DrawCall / ShadowDrawArgs / ShadowMeshletDrawArgs / FrameDrawList
 import coordinate_rebase;   // toRelative（全仓唯一「绝对 → 相对」换算入口）
 
 namespace RGL {
@@ -246,6 +278,16 @@ struct Reading {
 	std::array<double, kActiveShadowCascades> texel{};
 	/** 候选区间是否**含住**切片区间（含住 ⟹ H = L 且与吸附相位无关 ⟹ 可用紧式）。 */
 	std::array<bool, kActiveShadowCascades> contains{};
+	/** 这一次调用里 `fillShadowData` **实际下发**的 NDC 偏置（② 段用；-1 = 未填）。 */
+	float biasNdc = -1.0f;
+};
+
+/** 两种跨度主导形态（②-C 的自变量）。`loBound/hiBound` 留给需要给界的两条判据。 */
+struct Regime {
+	const Scene& scene;
+	std::string what;
+	double loBound;
+	double hiBound;
 };
 
 /** 造一个候选球（只填本文件用得上的五个字段，簇路径字段保持默认 = 不切）。 */
@@ -345,10 +387,10 @@ double spanOf(const ShadowVolume& v) {
 	return static_cast<double>(v.tMax) - static_cast<double>(v.tMin);
 }
 
-/** 把跨度换算成「NDC 域常数偏置的世界当量」，单位毫米（债-150 那条耦合的本体）。 */
-double biasWorldMm(double spanM) {
-	return static_cast<double>(kShadowDepthBias) * spanM * 1000.0;
-}
+// ⚠ 这里原来有一枚 `biasWorldMm(spanM) = kShadowDepthBias × span × 1000`（把跨度换算成
+//   「NDC 域常数偏置的世界当量」）。债-150 把偏置搬到世界域之后 NDC 常数不复存在，该算子的
+//   自变量少了一个（当量取决于**实际下发**的那枚商，而不是任何常数乘跨度）⟹ 已删，
+//   替代物是 ② 段那枚吃 (ndcBias, span) 的两参数版本。
 
 /** 闭式上下界（通式）：`H(m0) ± 半纹素 + 2pad`，两侧都查。 */
 void checkClosedFormBand(const Reading& r, uint32_t c, double slack = kFloatSlackM) {
@@ -664,172 +706,333 @@ TEST_CASE("①-E 反向用例：出厂形态（候选集跨过零点）跨度仍
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ② 偏置的世界当量：把债-150 的耦合钉成可见的数
+// ② 偏置的下发形态：债-150 修完之后这条链在守什么
 // ═══════════════════════════════════════════════════════════════════════════════
 
+namespace {
+
 /**
- * ②-A 记录性断言：出厂跨度下 `kShadowDepthBias × D` 的世界当量是多少**毫米**。
+ * 跑完一帧后**实际下发**的 NDC 偏置（走 `fillShadowData` 这条真实访问路径）。
  *
- * 期望值出处（两条，互不相关）：
- *  ① 闭式：`D = L + 2pad`（①-A 已证）⟹ 当量 = `bias × (L + 2pad)`，L 由本文件的候选集定义
- *     （15.88 m），不来自被测码；
- *  ② 实机：`docs/还债总账.md` 债-150 行「合成场景出厂跨度 16.2 m ⟹ 当量 24 mm」。本文件的
- *     候选集刻意做成同量级跨度，两条应当对上（界取 ±25 %，覆盖刻意留的取值余量）。
- * 🔴 为什么这条不是恒真式：「`bias × D` 对 D 是线性的」确实是恒真，**本条不测乘法**，测的是
- * `D` 这个由生产级联几何 + 候选 AABB 算出来的数落在哪，以及它与一次实机读数的量级关系。
- * 有人调 `kShadowDepthBias` / 改级联深度界 / 改 AABB 初值，本条都会红。
+ * 🔴 为什么从这里取而不是自己调 `shadowDepthBiasNdc`：AGENTS 哲学第 1 条——「单一来源不承重，
+ * 访问路径必须消费那个来源」。自己调 helper 会绿于「换算写对了但 `fillShadowData` 没接上」。
+ * `shadowNear/shadowFar` 只影响 splits，不影响 x（末级淡出用 w），传出厂那对即可。
  */
-TEST_CASE("②-A 记录：出厂跨度下 NDC 偏置的世界当量 = 24 mm 量级（与债-150 台账实机读数交叉核对）") {
+float deliveredBiasNdc(const Reading& r) {
+	FrameDrawList list;
+	fillShadowData(list, kNearRaw, kFarRaw, {r.volumes.data(), r.volumes.size()}, true, -1);
+	return list.sceneData.shadowParams.x;
+}
+
+/** 一枚 **NDC 域**偏置作用在跨度 `spanM` 上的世界当量，单位毫米（正交投影 ⟹ 线性，闭式）。 */
+double biasWorldMm(double ndcBias, double spanM) { return ndcBias * spanM * 1000.0; }
+
+/**
+ * 候选集的形状缩放档（乘在 `kShellHalf` 上）——**跨度的自变量**。
+ *
+ * 为什么需要新自变量：①-B/①-C 那两条阶梯（沿光轴平移 / 换渲染原点）**故意不动跨度**
+ * （它们钉的就是「跨度不许知道零点在哪」），所以修完债-150 之后，「NDC 等效值随跨度反比变」
+ * 这件事在那两条阶梯上**根本量不出来**。要量它必须动候选 AABB 在光轴上的投影长度 L，
+ * 而 L = 2·Σ|d_k|·(h_k+ρ) ⟹ 缩放 h 就是缩放 L。档位取 0.25…4 ⟹ 跨度约 4…60 m。
+ */
+constexpr double kShapeLadder[5] = {0.25, 0.5, 1.0, 2.0, 4.0};
+
+/** 以 center 为中心的 8 球壳，半轴乘 shape（其余与 `shell8` 同）。 */
+std::vector<ShadowCandidate> shell8Scaled(const glm::dvec3& center, double shape) {
+	return shell8(center, kShellHalf * shape, kShellRho);
+}
+
+/** 场景整体沿光轴搬 base 米 + 候选形状缩放 shape。 */
+Scene sceneAt(double base, double shape) {
+	const glm::dvec3 shift = base * lightDir();
+	return Scene{.eye = kEyeAbs + shift, .target = kTargetAbs + shift,
+	             .cands = shell8Scaled(kTargetAbs + shift, shape)};
+}
+
+/** 给定场景与 far，跑一帧（②-C 的自变量是 `shadowFar`，其余配置一律不动 ⟹ 单变量）。 */
+Reading runFrameAtFar(const Scene& s, float farRaw) {
+	const glm::vec3 eyeRel = toRelative(s.eye, glm::dvec3{0.0});
+	const glm::vec3 tgtRel = toRelative(s.target, glm::dvec3{0.0});
+	ViewProjection vp;
+	vp.view = glm::lookAt(eyeRel, tgtRel, glm::vec3{0.0f, 1.0f, 0.0f});
+	vp.proj = glm::perspective(glm::radians(kFovYDeg), kAspect, kNearRaw, farRaw);
+	vp.nearPlane = kNearRaw;
+	vp.farPlane = farRaw;
+	std::vector<ShadowCandidate> rel;
+	for (const ShadowCandidate& c : s.cands) {
+		ShadowCandidate rc = c;
+		rc.center = toRelative(glm::dvec3{c.center}, glm::dvec3{0.0});
+		rel.push_back(rc);
+	}
+	const uint32_t slots = std::max<uint32_t>(1u, static_cast<uint32_t>(rel.size()));
+	std::vector<ShadowDrawArgs> args(static_cast<std::size_t>(kActiveShadowCascades) * slots);
+	std::vector<ShadowMeshletDrawArgs> marg(args.size()), pargs(args.size());
+	std::array<std::vector<DrawCall>, kActiveShadowCascades> draws;
+	Reading out;
+	out.candCount = rel.size();
+	out.slices = computeCascadeSpheres(vp, quantizeShadowDistance(kNearRaw),
+	                                   quantizeShadowDistance(farRaw));
+	out.volumes = buildShadowVolumes(kSun, out.slices, rel, slots, args, marg, pargs, draws,
+	                                 glm::dvec3{0.0});
+	// 🔴 走真实消费点取下发的偏置（`fillShadowData` 的 n/f 用**量化后**那对，与生产同源）
+	FrameDrawList list;
+	fillShadowData(list, quantizeShadowDistance(kNearRaw), quantizeShadowDistance(farRaw),
+	               {out.volumes.data(), out.volumes.size()}, true, -1);
+	out.biasNdc = list.sceneData.shadowParams.x;
+	return out;
+}
+
+}  // namespace
+
+/**
+ * 🔴 ②-A（**2026-10-26 随债-150 换断言对象**）：实际下发的偏置，乘回**级 0** 跨度必须落在
+ * 标定值 5.854 mm 上；同时把「四级之间仍不同量」这条**遗留**钉成可见的数。
+ *
+ * ## 原来那条为什么不能留
+ * 原 ②-A 断「`kShadowDepthBias × 跨度` 的世界当量 = 24 mm 量级」。修法把偏置搬到了世界域，
+ * `kShadowDepthBias` 这枚 NDC 常数**已经不存在**，而「当量 = bias × 跨度」这个乘法对任何
+ * bias 都成立 ⟹ 原断言要么恒真、要么去断一个已经不存在的量。
+ *
+ * ## 现在这条在守什么（三条各自独立）
+ *  ① **级 0 当量 = 5.854 mm ±25 %**。期望值的出处 = **本批实机探针读数**（在 `fillShadowData`
+ *    里打点读出厂交付场景 bistro 门开态第 8 帧的 `volumes[0].tMax − tMin` = 3.90290284 m，
+ *    乘改前那枚 NDC 常数 0.0015 ⟹ 5.854 mm）。它**不是**从被测码里抄的算式。
+ *    ⚠ 台账债-150 行写的 24.3 mm 是**合成场景** `shadow_edge_rig` 的数（那里跨度 15.89…15.95 m），
+ *    不是出厂交付场景的；本批实测把这两条分开，原样记在 scene_data.cppm 的常数注释里。
+ *  ② **NDC 值不是常数**：本文件的跨度 ≈ 15.9 m，若实现被改回下发常数 0.0015f，级 0 当量会
+ *    读到 0.0015 × 15.89 m = **23.8 mm**，与 5.854 mm 差 4 倍 ⟹ 本条红。这就是它不是恒真的证明。
+ *  ③ **跨级比值 ≠ 1 且等于跨度比**：`shadowParams.x` 是四级共用的一枚标量（不是逐级数组），
+ *    所以修法只钉住级 0，级 1..3 的当量 = W × D_c/D_0 仍随级漂。这条把「单值共享」这个**没修
+ *    掉的部分**写成可见断言，而不是留在注释里——有人以为债-150 已把跨级不同量也治了，本条红。
+ */
+TEST_CASE("②-A 实际下发的偏置：级 0 世界当量 = 标定值 5.854 mm；跨级当量仍按跨度比漂（遗留）") {
 	const Reading r = runFrame(sceneAtBase(kOneSidedBase), glm::dvec3{0.0});
 	REQUIRE(r.candCount == 8u);
-	int pinned = 0;
-	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+	const float x = deliveredBiasNdc(r);
+	REQUIRE(x > 0.0f);
+	REQUIRE(std::isfinite(x));
+
+	// ① 级 0 当量 = 5.854 mm ±25 %（期望值出处 = 出厂交付场景实机读数，见用例头）
+	const double mm0 = biasWorldMm(x, spanOf(r.volumes[0]));
+	MESSAGE("【读数 ②-A】级 0：跨度 D = " << spanOf(r.volumes[0]) << " m，下发 NDC 偏置 x = "
+	        << x << " ⟹ 世界当量 = " << mm0 << " mm（标定 5.854 mm；改前下发常数 0.0015 时"
+	        << "本场景会读到 " << biasWorldMm(0.0015, spanOf(r.volumes[0])) << " mm）");
+	CHECK(mm0 >= 5.854 * 0.75);
+	CHECK(mm0 <= 5.854 * 1.25);
+	// ② NDC 值必须**不是** 0.0015f（本文件跨度 ≈ 15.9 m，反推出 x ≈ 3.7e−4，差 4 倍）
+	CHECK(x < 0.0015f * 0.5f);
+
+	// ③ 跨级比值 = 跨度比（同一条 x 乘不同跨度），且必须真的不等于 1
+	int pinned = 1;
+	for (uint32_t c = 1; c < kActiveShadowCascades; ++c) {
+		const double ratio = spanOf(r.volumes[c]) / spanOf(r.volumes[0]);
+		const double mmc = biasWorldMm(x, spanOf(r.volumes[c]));
 		INFO("级 " << c);
-		const double D = spanOf(r.volumes[c]);
-		const double mm = biasWorldMm(D);
-		// ① 闭式期望（容差 = bias × 半纹素，再加 1e-2 mm 的浮点余量）
-		const double pad = kPadScale * static_cast<double>(r.slices[c].radius);
-		const double closedMm = biasWorldMm(r.extentL[c] + 2.0 * pad);
-		testing::expectNear(mm, closedMm, 0.0,
-		                    biasWorldMm(0.5 * r.texel[c]) + 1.0e-2);
-		// ② 与台账实机读数（24.3 mm @ 16.2 m 跨度）交叉核对
-		CHECK(mm >= 24.3 * 0.75);
-		CHECK(mm <= 24.3 * 1.25);
-		MESSAGE("【读数 ②-A】级 " << c << "：跨度 D = " << D << " m ⟹ NDC 偏置 "
-		        << kShadowDepthBias << " 的世界当量 = " << mm << " mm（闭式 " << closedMm
-		        << " mm，债-150 台账 24.3 mm）");
+		// 闭式：当量之比 = 跨度之比（同一个 x，线性）
+		testing::expectNear(mmc / mm0, ratio, 1.0e-9, 1.0e-9);
+		// 遗留事实：四级跨度不同 ⟹ 当量不同量；本文件里差得小（候选主导），但**不为零**
+		CHECK(ratio > 1.0);
+		MESSAGE("【读数 ②-A】级 " << c << "：跨度 " << spanOf(r.volumes[c]) << " m ⟹ 当量 "
+		        << mmc << " mm = 级 0 的 " << ratio
+		        << " 倍（shadowParams.x 单值共享 ⟹ 这一项**没有**被债-150 消掉）");
 		++pinned;
 	}
 	CHECK(pinned == static_cast<int>(kActiveShadowCascades));  // 空转守卫
 }
 
 /**
- * 🔴 ②-B 反向半边：偏置的世界当量对「场景离坐标系统零点有多远」**不变**。
+ * 🔴 ②-B（**2026-10-26 换断言对象**，任务书点名的那条）：
+ * **世界当量恒为标定常数、而 NDC 等效值随跨度反比变**；外加一条「摆位/原点不动跨度 ⟹ x 逐位不变」。
  *
- * 这是 ①-B/①-C 的物理单位版本，也是债-150 真正要守的东西：`kShadowDepthBias` 住在 NDC 域，
- * 它的物理含义 = `bias × 跨度`。跨度一旦随场景摆位漂（= 债-149 的形态），**「阴影偏置」这个
- * 旋钮的实际毫米数就跟着漂**，而调参的人看的是配置里的常数，不会知道。本条把这件事钉成
- * 「同一个常数在四种摆位 × 两种原点下必须是同一个毫米数」，容差 = `bias × 1 纹素`。
- * M1 下本条必红（会读到 24 mm → 上百 mm）。
+ * ## 原来那条为什么退化成同义反复
+ * 原 ②-B 断「NDC 偏置的世界当量对场景摆位与渲染原点都不变」。修完之后当量 = `W × D_c/D_0`
+ * 里的 W 本来就是编译期常数，而 ①-B/①-C 已经单独钉死「跨度对摆位/原点不变」⟹ 原断言变成
+ * 「常数乘不变量还是不变量」，**恒真**，不再守任何东西。
+ *
+ * ## 现在这两条半边各自有牙
+ *  · **半边 A（跨度扫开）**：候选形状缩放 0.25…4 倍 ⟹ 跨度约 4…60 m。断
+ *    ① 世界当量恒 = W（界 = float 落库的相对 1e−6）；② **x 本身必须跟着动**，且与跨度成
+ *    **反比**（比值对数域 ≤ 2 %）。② 是灵魂：把实现改回下发常数 0.0015f，① 会红（当量随
+ *    跨度线性漂），② 也会红（x 根本不动）。
+ *    🔴 反向自证：跨度阶梯必须真的扫开（max/min ≥ 4 倍），否则「反比」是拿一个不动的自变量
+ *    在断言（同「注入量无区分力」那一族失效）。
+ *  · **半边 B（摆位 / 原点扫开）**：①-B/①-C 只保证跨度对摆位/原点不变到 **1 枚纹素**以内，
+ *    而 x 是从跨度除出来的 ⟹ x 必然跟着动那么一点（相对 ~3e−5）。所以**不能**断「x 逐位不变」
+ *    （我第一版断了，实测红 5 次——那是量具错，不是代码错）。有牙的断言是：
+ *    🔴 **x 的变化完全由跨度的变化解释**，即世界当量 `x × D0` 恒等于标定常数 W（相对界 1e−6，
+ *    只吃 float 落库），而 x 本身**确实在动**（区分力自证，否则「乘积不变」是拿一个不动的
+ *    x 在自证）。有人把换算写成 `W / (D0 + |casterBox.lo|)` 这类「看起来更保守」的形式，
+ *    跨度不变而 x 会动 4 倍 ⟹ 乘积当场红，半边 A 却可能还绿（两条不冗余）。
  */
-TEST_CASE("🔴 ②-B NDC 偏置的世界当量（毫米）对场景摆位与渲染原点都不变") {
+TEST_CASE("🔴 ②-B 世界当量恒为标定常数、NDC 等效值随跨度反比变；摆位/原点不动它") {
+	// 单位纪律：biasWorldMm 返回**毫米**，kShadowDepthBiasWorld 是**米** ⟹ 比之前先 ×1000。
+	const double calibMm = static_cast<double>(kShadowDepthBiasWorld) * 1000.0;
+
+	// ── 半边 A：跨度扫开 ────────────────────────────────────────────────────────
+	std::vector<double> spans, xs;
+	for (const double shape : kShapeLadder) {
+		const Reading r = runFrame(sceneAt(kOneSidedBase, shape), glm::dvec3{0.0});
+		REQUIRE(r.candCount == 8u);
+		const float x = deliveredBiasNdc(r);
+		const double D = spanOf(r.volumes[0]);
+		REQUIRE(x > 0.0f);
+		REQUIRE(D > 0.0);
+		spans.push_back(D);
+		xs.push_back(static_cast<double>(x));
+		// ① 世界当量恒 = 标定常数（相对界 1e−6：只吃 float 落库的一次舍入）
+		testing::expectNear(biasWorldMm(x, D), calibMm, 1.0e-6, 0.0);
+		MESSAGE("【读数 ②-B·A】形状 ×" << shape << "：跨度 D = " << D << " m ⟹ x = " << x
+		        << " ⟹ 当量 " << biasWorldMm(x, D) << " mm（标定 " << calibMm << " mm）");
+	}
+	REQUIRE(spans.size() == std::size(kShapeLadder));
+	// 反向自证：自变量真的动了
+	const double spanMax = std::ranges::max(spans);
+	const double spanMin = std::ranges::min(spans);
+	CHECK(spanMax / spanMin >= 4.0);
+	// ② x 与跨度成反比：任取相邻两档，x_i/x_j 必须 ≈ D_j/D_i（对数域 2 %）
+	int pairs = 0;
+	for (std::size_t i = 0; i + 1 < spans.size(); ++i) {
+		const double rx = xs[i + 1] / xs[i];
+		const double rD = spans[i] / spans[i + 1];
+		INFO("档 " << i << " → " << i + 1 << "（跨度 " << spans[i] << " → " << spans[i + 1] << "）");
+		CHECK(std::abs(std::log(rx / rD)) <= 0.02);
+		// x 必须**确实变了**（不是「反比」碰巧由一个不动的 x 满足）
+		CHECK(std::abs(rx - 1.0) > 0.05);
+		++pairs;
+	}
+	CHECK(pairs == static_cast<int>(std::size(kShapeLadder)) - 1);  // 空转守卫
+
+	// ── 半边 B：摆位 / 原点扫开（x 会随纹素级漂，但乘积必须钉在 W 上）───────────
 	const Reading base = runFrame(sceneAtBase(kOneSidedBase), glm::dvec3{0.0});
 	REQUIRE(base.candCount == 8u);
+	const float xBase = deliveredBiasNdc(base);
 	int compared = 0;
 	for (const double delta : kDeltaLadder) {
 		if (delta == 0.0)
 			continue;
 		const auto check = [&](const Scene& s, const glm::dvec3& origin, const std::string& what) {
 			const Reading r = runFrame(s, origin);
-			for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
-				INFO(what << " Δ = " << delta << " 级 " << c);
-				const double mm = biasWorldMm(spanOf(r.volumes[c]));
-				const double ref0 = biasWorldMm(spanOf(base.volumes[c]));
-				const double bound = 2.0 * biasWorldMm(r.texel[c] + kFloatSlackM);
-				CHECK(std::abs(mm - ref0) <= bound);
-				MESSAGE("【读数 ②-B】" << what << " Δ = " << delta << " 级 " << c << "：当量 = "
-				        << mm << " mm（基准 " << ref0 << " mm，界 ±" << bound << " mm）");
-				++compared;
-			}
+			const float x = deliveredBiasNdc(r);
+			const double D = spanOf(r.volumes[0]);
+			INFO(what << " Δ = " << delta);
+			const double rel = std::abs(static_cast<double>(x) / xBase - 1.0);
+			// 🔴 断的是**乘积**（世界当量）恒等于标定常数，不是 x 本身。x 允许随纹素级吸附
+			// 漂（①-B 的界就是 1 纹素），但只要换算只吃 D0，乘积就钉死在 W 上。
+			testing::expectNear(biasWorldMm(x, D), calibMm, 1.0e-6, 0.0);
+			// 但漂动必须是**纹素级**的（相对 ≤ 1e−3），否则说明换算掺进了别的自变量
+			CHECK(rel <= 1.0e-3);
+			MESSAGE("【读数 ②-B·B】" << what << " Δ = " << delta << " m：x = " << x
+			        << "（基准 " << xBase << "，相对漂 " << rel << "）⟹ 当量 "
+			        << biasWorldMm(x, D) << " mm（标定 " << calibMm << " mm）");
+			++compared;
 		};
 		check(sceneAtBase(kOneSidedBase + delta), glm::dvec3{0.0}, "沿光轴平移整组候选");
 		check(sceneAtBase(kOneSidedBase), glm::dvec3{delta, 0.0, 0.0}, "换渲染原点");
 	}
-	CHECK(compared == 6 * static_cast<int>(kActiveShadowCascades));  // 空转守卫
+	CHECK(compared == 2 * (static_cast<int>(std::size(kDeltaLadder)) - 1));  // 空转守卫
+	// 🔴 **区分力自证（反事实）**：上面「乘积钉在 W 上」这条到底有没有牙？在本文件的输入上现场
+	// 算一枚**看起来更保守的错公式** `W / (D0 + 候选盒离零点的最小距离)`——它的跨度 D0 与真公式
+	// 完全相同（所以半边 A 照样绿），但分母掺进了摆位量。断它的乘积在阶梯上**至少漂一半**
+	// ⟹ 证明半边 B 的红不是纸上的：同一批输入能把一个真实写错的实现抓出来。
+	// （先例 = 本文件「守卫的自证」那条：判据自己证明自己吃得到缺陷，否则「绿」没有内容。）
+	const double wMm = static_cast<double>(kShadowDepthBiasWorld) * 1000.0;
+	double cfMin = 1e300, cfMax = -1e300;
+	for (const double delta : kDeltaLadder) {
+		const Reading r = delta == 0.0 ? base
+		                               : runFrame(sceneAtBase(kOneSidedBase + delta),
+		                                          glm::dvec3{0.0});
+		const double d0 = spanOf(r.volumes[0]);
+		// 掺进去的量 = 候选盒离零点的最小距离（测试自己的闭式量，不吃生产内部）
+		const double polluted = minAbsComponent(casterBox(sceneAtBase(kOneSidedBase + delta).cands));
+		const double cf = wMm * d0 / (d0 + polluted);
+		cfMin = std::min(cfMin, cf);
+		cfMax = std::max(cfMax, cf);
+	}
+	MESSAGE("【读数 ②-B·反事实】错公式 W/(D0+离零点距离) 的乘积在阶梯上 " << cfMax << " → "
+	        << cfMin << " mm（比值 " << cfMin / cfMax
+	        << "）⟹ 半边 B 那条 1e−6 的相对界与它差五个数量级，抓得住");
+	CHECK(cfMin / cfMax < 0.5);  // 错公式至少漂一半；真实现必须漂 0（界 1e−6 相对）
 }
 
 /**
- * ②-C 记录：把 `shadowFar` 调短换性能，偏置的物理当量到底跟着动多少——**分两种跨度形态量**。
+ * ②-C（**2026-10-26 随债-150 换断言对象**）：`shadowFar` 这个**性能旋钮**现在还能不能改到
+ * 偏置的物理当量——分级联量。
  *
- * 🔴 这条不是恒真的乘法：自变量是 `shadowFar`（性能旋钮），因变量是跨度，中间隔着
- * `quantizeShadowDistance → cascadeSplitDistance → frustumBoundingSphere → 候选 AABB 的凸包`
- * 一整条链。跨度是**两段的凸包**：候选 AABB 的投影（与 shadowFar 无关）与切片球的 `[−r, r]`
- * （随 shadowFar 走）。哪一段主导，决定了这枚耦合有多大 —— 于是本条量两种形态：
- *  · **形态 A 候选主导**（合成靶出厂那种：一坨比视锥大的投影体）
- *  · **形态 B 级联球主导**（一小团投影体挂在视锥中段，四级里越粗的级越主导）
- * 判据 = A 的比值必须 ≈ 1（界 ±1 %）、B 至少一级显著小于 1（界 0.99），两侧都有界。
- * ⚠ **本条实测与债-150 台账的措辞不符**（台账写「任何把 shadowFar 调短换性能的改动都会改变
- * 偏置的物理当量」）：在**候选 AABB 主导**的跨度下实测只动 0.03…0.2 %，量级来自形态 B。
- * 读数原样进交付报告，不为了让台账那句话成立而挑形态 B 的数字当代表。
- * 将来按债-150 把偏置改到世界光深域下发时本条会红——那是**正确**的：耦合被拆掉，记录必须重立。
+ * ## 原来那条记的是什么、为什么必须换
+ * 原 ②-C 记「调短 shadowFar 会让当量动 0.03…0.2 %（候选主导）或 10…49 %（级联球主导）」，
+ * 它是债-150 那枚耦合在单测里**唯一的可见面**，并且自己写着「将来按债-150 把偏置改到世界光深域
+ * 下发时本条会红——那是正确的」。现在真的红了，所以按它自己的话重立。
+ *
+ * ## 现在断什么
+ *  · **级 0（换算的参照级）**：世界当量对 far **必须不变**（界 ±0.5 %）。这正是修法的直接
+ *    后果，也是台账那句「任何把 shadowFar 调短换性能的改动都会改变偏置的物理当量」被**消掉**
+ *    的机器判据。有人把偏置改回 NDC 常数，本条立刻红。
+ *  · **级 1..3（非参照级）**：当量 = W × D_c/D_0，仍会随 far 动（单值共享的遗留）。本条
+ *    **只记录、不判对错**，但要求「至少一档真的动了」（区分力自证：若全都不动，说明本文件的
+ *    far 阶梯根本没动跨度，那级 0 那条「不变」也是假绿）。
+ *  · **NDC 等效值必须跟着 far 动**：`x` 与级 0 跨度成反比，而跨度随 far 动 ⟹ x 必须动。
+ *    这条与级 0 的「当量不变」是一对：一个动一个不动，才说明除的是跨度本身。
  */
-TEST_CASE("②-C 记录：shadowFar 换性能改多少偏置物理当量，取决于跨度由候选 AABB 还是级联球主导") {
-	/** 给定场景与 far，取四级跨度（其余配置一律不动 ⟹ 单变量）。 */
-	auto spansAtFar = [](const Scene& s, float farRaw) {
-		const glm::vec3 eyeRel = toRelative(s.eye, glm::dvec3{0.0});
-		const glm::vec3 tgtRel = toRelative(s.target, glm::dvec3{0.0});
-		ViewProjection vp;
-		vp.view = glm::lookAt(eyeRel, tgtRel, glm::vec3{0.0f, 1.0f, 0.0f});
-		vp.proj = glm::perspective(glm::radians(kFovYDeg), kAspect, kNearRaw, farRaw);
-		vp.nearPlane = kNearRaw;
-		vp.farPlane = farRaw;
-		std::vector<ShadowCandidate> rel;
-		for (const ShadowCandidate& c : s.cands) {
-			ShadowCandidate rc = c;
-			rc.center = toRelative(glm::dvec3{c.center}, glm::dvec3{0.0});
-			rel.push_back(rc);
-		}
-		const uint32_t slots = std::max<uint32_t>(1u, static_cast<uint32_t>(rel.size()));
-		std::vector<ShadowDrawArgs> args(static_cast<std::size_t>(kActiveShadowCascades) * slots);
-		std::vector<ShadowMeshletDrawArgs> marg(args.size()), pargs(args.size());
-		std::array<std::vector<DrawCall>, kActiveShadowCascades> draws;
-		const auto slices = computeCascadeSpheres(vp, quantizeShadowDistance(kNearRaw),
-		                                          quantizeShadowDistance(farRaw));
-		const auto vols = buildShadowVolumes(kSun, slices, rel, slots, args, marg, pargs, draws,
-		                                     glm::dvec3{0.0});
-		std::array<double, kActiveShadowCascades> out{};
-		for (uint32_t c = 0; c < kActiveShadowCascades; ++c)
-			out[c] = spanOf(vols[c]);
-		return out;
-	};
-
-	// 形态 A：候选 AABB 主导（本文件主用例那坨 8 球壳，闭式 L = 15.88 m ≫ 任何一级 2r）
+TEST_CASE("②-C shadowFar 换性能不再改级 0 的偏置当量；跨级那一项仍在（记录 + 区分力自证）") {
+	// 形态 A：候选 AABB 主导（本文件主用例那坨 8 球壳）
 	const Scene casterDominated = sceneAtBase(kOneSidedBase);
-	// 形态 B：一小团投影体挂在视锥中段（直径 0.3 m ≪ 粗级 2r）⟹ 越粗的级越由级联球主导。
-	// 🔴 相机与形态 A **同一摆位**（唯一自变量是候选团的大小，不是它离零点多远）
+	// 形态 B：一小团投影体挂在视锥中段 ⟹ 越粗的级越由级联球主导（与形态 A 同一摆位，
+	// 唯一自变量是候选团的大小）
 	const glm::dvec3 axis = glm::normalize(casterDominated.target - casterDominated.eye);
 	const glm::dvec3 midView = casterDominated.eye
 	                           + axis * (0.5 * static_cast<double>(quantizeShadowDistance(kFarRaw)));
 	const Scene sliceDominated{.eye = casterDominated.eye, .target = casterDominated.target,
 	                           .cands = shell8(midView, glm::dvec3{0.15, 0.15, 0.15}, 0.05f)};
 
-	struct Regime {
-		const Scene& scene;
-		std::string what;
-		double loBound;  // 比值的下界断言
-		double hiBound;  // 比值的上界断言
-	};
 	const Regime regimes[2] = {
-	    // A：跨度几乎全由候选 AABB 出 ⟹ 调 far 几乎不动当量（界 ±1 %）
-	    Regime{.scene = casterDominated, .what = "A 候选 AABB 主导", .loBound = 0.99, .hiBound = 1.0001},
-	    // B：越粗的级越由级联球出 ⟹ 当量跟着 far 走（必须至少一级显著小于 1）
-	    Regime{.scene = sliceDominated, .what = "B 级联球主导", .loBound = 0.05, .hiBound = 1.0001},
+	    Regime{.scene = casterDominated, .what = "A 候选 AABB 主导", .loBound = 0.0, .hiBound = 1.0},
+	    Regime{.scene = sliceDominated, .what = "B 级联球主导", .loBound = 0.0, .hiBound = 1.0},
 	};
 	int compared = 0;
-	bool bMoved = false;
+	bool c0SpanMoved = false;   // 区分力自证：级 0 跨度确实随 far 动过（否则「当量不变」是假绿）
+	bool crossMoved = false;    // 遗留记录：至少一个非参照级的当量真的动了
 	for (const Regime& g : regimes) {
-		const auto full = spansAtFar(g.scene, kFarRaw);
-		const auto half = spansAtFar(g.scene, 0.5f * kFarRaw);
-		for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+		const Reading full = runFrameAtFar(g.scene, kFarRaw);
+		const Reading half = runFrameAtFar(g.scene, 0.5f * kFarRaw);
+		REQUIRE(full.candCount == 8u);
+		REQUIRE(half.candCount == 8u);
+		REQUIRE(full.biasNdc > 0.0f);
+		REQUIRE(half.biasNdc > 0.0f);
+
+		const double d0f = spanOf(full.volumes[0]), d0h = spanOf(half.volumes[0]);
+		const double mm0f = biasWorldMm(full.biasNdc, d0f), mm0h = biasWorldMm(half.biasNdc, d0h);
+		INFO(g.what << " 级 0");
+		// 🔴 级 0 当量对 far 不变（界 ±0.5 %）——债-150 修法的直接判据
+		CHECK(std::abs(mm0h / mm0f - 1.0) <= 0.005);
+		// x 必须跟着动（与级 0 跨度反比）；跨度没动就自证失败
+		if (std::abs(d0h / d0f - 1.0) > 0.005) {
+			c0SpanMoved = true;
+			CHECK(std::abs(half.biasNdc / full.biasNdc - d0f / d0h) <= 0.01);
+		}
+		MESSAGE("【读数 ②-C】" << g.what << "：shadowFar " << kFarRaw << " → "
+		        << 0.5f * kFarRaw << " m ⟹ 级 0 跨度 " << d0f << " → " << d0h
+		        << " m，x " << full.biasNdc << " → " << half.biasNdc
+		        << " ⟹ 当量 " << mm0f << " → " << mm0h << " mm（比值 " << mm0h / mm0f
+		        << "，界 ±0.5 %）");
+		++compared;
+
+		for (uint32_t c = 1; c < kActiveShadowCascades; ++c) {
 			INFO(g.what << " 级 " << c);
-			REQUIRE(full[c] > 0.0);
-			const double ratio = biasWorldMm(half[c]) / biasWorldMm(full[c]);
-			CHECK(ratio >= g.loBound);
-			CHECK(ratio <= g.hiBound);
-			bMoved = bMoved || ratio <= 0.99;
-			MESSAGE("【读数 ②-C】" << g.what << "：shadowFar " << kFarRaw << " → "
-			        << 0.5f * kFarRaw << " m ⟹ 跨度 " << full[c] << " → " << half[c]
-			        << " m ⟹ 偏置当量 " << biasWorldMm(full[c]) << " → " << biasWorldMm(half[c])
-			        << " mm（比值 " << ratio << "，界 [" << g.loBound << ", " << g.hiBound << "]）");
+			const double a = biasWorldMm(full.biasNdc, spanOf(full.volumes[c]));
+			const double b = biasWorldMm(half.biasNdc, spanOf(half.volumes[c]));
+			CHECK(b > 0.0);
+			crossMoved = crossMoved || std::abs(b / a - 1.0) > 0.005;
+			MESSAGE("【读数 ②-C·遗留】" << g.what << " 级 " << c << "：当量 " << a << " → " << b
+			        << " mm（比值 " << b / a << "；单值共享 ⟹ 这一项**没有**被债-150 消掉）");
 			++compared;
 		}
 	}
 	CHECK(compared == 2 * static_cast<int>(kActiveShadowCascades));
-	// 🔴 反向半边：若两种形态的比值全都 ≈ 1，说明这枚耦合在本文件的输入下**根本量不出来**，
-	//    那这条记录就是假判据（同「注入量无区分力」那一族）。bMoved 就是它的自证。
-	CHECK(bMoved);
-	MESSAGE("【读数 ②-C】结论：耦合真实存在但**不是**「调短一半就减半」——形态 A 几乎不动、"
-	        "形态 B 的粗级才跟着走（债-150 拍板修法前，这是它唯一的可见面）");
+	// 🔴 两条区分力自证（缺一条就是假绿）
+	CHECK(c0SpanMoved);
+	CHECK(crossMoved);
+	MESSAGE("【读数 ②-C】结论：级 0 的当量已与世界光深常数钉死、不再跟 shadowFar 走；"
+	        "跨级那一项因 shadowParams.x 单值共享而仍在（本批明令不顺手改成逐级）");
 }
 
 }  // namespace RGL

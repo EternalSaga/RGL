@@ -2086,15 +2086,21 @@ def scene_blend_lit_opaque() -> Scene:
 # 两列 = 门板的**竖直拼缝槽**（concave moldings）。槽机制闭式：前墙（朝光）+ 后退 d 的背板，
 # 竖直缝槽内背板被前墙右缘遮光，影带宽度 s = d·du/dn（du = 光沿墙 u 轴分量、dn = 朝光分量），
 # 带与受光区的**光深度差 = d·dn**。三股偏置里：
-#   · 采样端常数 bias（kShadowDepthBias = 0.0015 NDC，shadow.slang `ref = ndc.z − params.x`）
-#     与 normal offset（1.5 texel 沿法线，②）都把比较推向**受光**——带要活过 slope=0 档，
-#     要求 d·dn > 常数 bias + 1.5 texel 的补偿；
+#   · 采样端常数 bias（**债-150 起住在世界光深域**：`kShadowDepthBiasWorld = 5.854 mm`，由
+#     `shadowDepthBiasNdc` 除以本帧级 0 跨度换算成 NDC 后下发；shadow.slang 仍是
+#     `ref = ndc.z − params.x`）与 normal offset（1.5 texel 沿法线，②）都把比较推向**受光**
+#     ——带要活过 slope=0 档，要求 d·dn > 世界 bias + 1.5 texel 的补偿；
 #   · 光栅端斜率偏置（`csm.slope_bias`，16·dZ/dpixel）把前墙的存储深度**推远**——带要在
 #     slope=16 档被抹掉，要求 d·dn < 16·dn/1024 NDC + 上项。
-# 合并成**尺度不变**的分离窗（span = 级联光空间跨度，texel = span/1024）：
-#   span·(0.0015/dn + 1.5/1024) < d < span·(0.0015/dn + 17.5/1024)
-# 窗宽 = 16·texel（dn 约掉）；dn=0.6 时 d ∈ (0.0040, 0.0196)·span。投影系统按 SceneBounds
-# 自适应 near/far ⟹ span ∝ 机位距离 ⟹ 整套几何随 D 缩放自相似（换 D 只换 px 刻度）。
+# 合并成分离窗（span = 级联光空间跨度，texel = span/1024，W = 世界偏置 5.854 mm）：
+#   W/dn + 1.5·span/1024 < d < W/dn + 17.5·span/1024
+# 🔴 **债-150 改的就是这一行的第一项**：改前它是 `0.0015·span/dn`（跟着 span 线性漂），改后是
+#   `W/dn`（世界常数，与 span 无关）。窗宽仍是 16·texel（dn 约掉），但**窗心的缩放律变了**
+#   ——旧窗随机位距离整体缩放自相似，新窗的 bias 项不缩。本靶的槽深 d 是**按旧窗**排的
+#   （dn=0.6 时旧窗 d ∈ (0.0040, 0.0196)·span），2026-10-26 随债-150 重跑 `imgqa shadow-grain`
+#   三条判决线仍全绿（J1 最严一条存活率 100 %，下限 50 %）⟹ 靶仍然合格，**没有重排几何**；
+#   若哪天要按新窗重排，那是另一次改动，得连 J1 的下限一起重立。
+# 投影系统按 SceneBounds 自适应 near/far ⟹ span ∝ 机位距离 ⟹ texel 项仍随 D 缩放自相似。
 # ⚠ 已证伪、别再试的两条（各烧过一轮实机）：
 #   ① 「完美平面 + normal map 掠射椒盐」：平面上法线偏移**数学上永不**自遮
 #     （stored − ref = δ·cosθ/dn > 0 恒受光），γ=8°/amp=20° 实测两档 cov ≡ 0；
@@ -2131,8 +2137,9 @@ def scene_blend_lit_opaque() -> Scene:
 # 实机翻车记录写在 GRAIN_GROOVES 常量注释里）。每条缝独立出密度/存活率读数、独立过
 # slope=0 在场闸门——画不出带的死缝由闸门抛（rc=3），绝不许静默进判据
 # （penumbra_ladder 的「靶瞎了与带被正确抹除给出同一个绿」教训）。
-# 缝深选点判据（按尺度不变分离窗，span 由引擎级联决定、生成器不可知）：
-#   · 下界：d > span·(0.0015/dn + 1.5/1024)（slope=0 存活）。本靶（宽 ≈1.29 m）实测定锚：
+# 缝深选点判据（分离窗见上「机制」；span 由引擎级联决定、生成器不可知）：
+#   · 下界：d > W/dn + 1.5·span/1024（slope=0 存活；W = 世界偏置 5.854 mm，债-150 起不再随
+#     span 缩放）。本靶（宽 ≈1.29 m）实测定锚：
 #     d=0.10 在 slope=0 仍**在场**（探针 0.834、存活率 1.000）⟹ 下界 < 0.10（旧窄靶上
 #     「d=0.12 cov 0.345」的锚点随 span 标定作废，别照抄）。再细的缝先撞 assert ⑧
 #     （带宽 < 4 px 探针放不下），进不了靶。
@@ -2144,7 +2151,7 @@ def scene_blend_lit_opaque() -> Scene:
 # 新发现，读数表住 tools/imgqa/shadow_grain.cpp 头注「跑起来该看到什么」）。
 
 
-GRAIN_DN = 0.6                 # 墙朝光分量 N·L̂（分离窗下界 ∝ 0.0015/dn，见头注「机制」）
+GRAIN_DN = 0.6                 # 墙朝光分量 N·L̂（分离窗下界含 W/dn 项，见头注「机制」）
 GRAIN_CENTER = (0.0, 2.0, 0.0)  # 墙心（离地 2 m 纯取景考虑，场景无地面）
 GRAIN_D = 6.0                  # 机位沿 +N 距墙心（米）；span ∝ D，整套几何随它自相似
 GRAIN_FOV = 70.0               # 竖直 fov（度）；s_px = 360/(D·tan(fov/2))，密度闭式的 px 刻度
@@ -2269,8 +2276,9 @@ def scene_shadow_grain() -> Scene:
                             "（带在场闭式 = 1、被抹 = 0；分母是闭式刻度，不抄实测）。"
                             "存活窗/探针窗的列区间由仪器从 bands 角点投影导出（±3 px 裕量"
                             "与中央 50%），生成器 assert ⑪ 钉住「邻带存活窗互不重叠」",
-                "separationWindow": "span·(0.0015/dn + 1.5/1024, 0.0015/dn + 17.5/1024)"
-                                    "（slope=0 存活下界 / slope=16 抹除上界，头注「机制」）",
+                "separationWindow": "W/dn + span·(1.5/1024, 17.5/1024)，W = 世界偏置 5.854 mm"
+                                    "（slope=0 存活下界 / slope=16 抹除上界，头注「机制」；"
+                                    "债-150 前第一项写作 0.0015·span/dn，随 span 线性漂）",
             },
             # ── 测量接口（imgqa shadow-grain 读本块，**不在 C++ 里重抄几何** = 不造第二真相）──
             "measure": {

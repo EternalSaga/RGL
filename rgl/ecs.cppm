@@ -153,9 +153,11 @@ export struct PickingHook {
  * 搬进来之后「先有粒度、再有原点、再有 view」变成**词法顺序**，写不错。
  * 顺序（承重，别调换）：near/far → proj → 级联球半径 → texels → 粒度 → 原点 → view。
  *
- * ## 门关（`RenderOrigin::enabled == false`，默认）
+ * ## 门关（`RenderOrigin::enabled == false`；**出厂默认已是门开**，门关要显式
+ * `--set coordinate.rebase=false` 才到达）
  * position 钉回 dvec3(0)（幂等：main emplace 的初值也是它）后**不进粒度那条路**，
- * 与改动前逐位相同（toRelative 在零原点是恒等 ⟹ 交付图逐位不变）。
+ * 与接原点之前逐位相同（toRelative 在零原点是恒等）。⚠ 这条早退分支**不再是出厂路径**
+ * （2026-10-26 翻默认），它是阴影/时域归因的对照态，别当死码删。
  * ## 门开：粒度 NaN 必须响亮 throw
  * `rebaseSnapGranularity` 对坏输入返回 NaN，而 **NaN 原点会让相机凭空消失**（view 的平移列
  * 全 NaN ⟹ 整个场景被裁掉，且不报任何错）——那是本项目最难查的形态。取代批 3 留的

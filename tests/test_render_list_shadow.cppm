@@ -22,7 +22,15 @@ module;
  *   texel 用例    ：分母 kShadowMapSize 代 shadowTileSize(cols) → 差 2 倍红；
  *                  分子丢 ×2 → 差 2 倍红
  *   params 用例   ：params.w 改 0（或漏 shadowFar）→ 两态 w==shadowFar 红；
- *                  enabled 三元写反 → 两态 z 红；删 enabled 依赖（恒 1）→ 关态 z==0 红
+ *                  enabled 三元写反 → 两态 z 红；删 enabled 依赖（恒 1）→ 关态 z==0 红。
+ *                  🔴 **x 一栏 2026-10-26 随债-150 换形态**（原来是「x == 常数 0.0015f」，
+ *                  现在 x 是「世界常数 ÷ 级 0 跨度」的商）：把实现改回下发常数 → 新的
+ *                  「跨度加倍 ⟹ NDC 值减半」那条红（原断言在常数下**照样绿**，这就是
+ *                  「记录性断言会随修法退化成同义反复」的现场，所以换了断言对象）；
+ *                  除数错吃级 1/2/3 → 「级 0 = 标定跨度 ⟹ 逐位 0.0015f」那条红（差 2/4/8.33 倍）；
+ *                  删掉退化跨度的守卫 → 「退化跨度出 0」用例红（拿到 inf/NaN）。
+ *                  ⚠ 阳性对照已补在退化用例末尾：四条「应当为 0」+ 一条「正常跨度必须
+ *                  非零且 == 0.0015f」，恒返回 0 的坏实现不能全绿。
  *   atlas 用例    ：cols 与 tileSize 错位 → 红。**已知弱锚**：FrameDrawList 默认值
  *                  (2048,1024,2,0) 恰等于契约值，"整行删除写入"本用例不红——
  *                  该字段真正的失效形态是 cols/tileSize 不同步（改级联时），此断言有效；
@@ -35,16 +43,17 @@ module;
 #include <doctest/doctest.h>
 #include <initializer_list>  // 必须：modules 下 std::initializer_list 不从 import 带进来
 #include <cmath>
+#include <limits>            // std::numeric_limits（退化跨度用例的 inf/NaN；modules 下同上）
 #include <glm/glm.hpp>
 
 export module test_render_list_shadow;
 
 import rlstd;
 import test_support;
-import render_list;    // fillShadowData（12.3d 接缝）
+import render_list;    // fillShadowData（12.3d 接缝）/ shadowDepthBiasNdc（债-150 换算接缝）
 import frame_draw_list;  // FrameDrawList / SceneFrameData
 import scene_context;  // ShadowVolume / cascadeSplitDistance
-import scene_data;     // kActiveShadowCascades / kSceneShadowCascadeCount / kShadowDepthBias / kShadowNormalOffsetScale
+import scene_data;     // kActiveShadowCascades / kSceneShadowCascadeCount / kShadowNormalOffsetScale / kShadowDepthBiasWorld / kShadowDepthBiasRefSpan
 import render_graph;   // kShadowMapSize / shadowAtlasColumns / shadowTileSize
 import shadow_config;  // ShadowConfig / setShadowConfig（按档分立用例，N6b）
 
@@ -69,6 +78,15 @@ constexpr float kFar = 48.0f;
 /** 逐级可辨识的 xyRadius（2r/1024 在二进制下逐值精确，期望可写死对比式）。 */
 constexpr std::array<float, kSceneShadowCascadeCount> kRadii{1.5f, 2.25f, 3.75f, 100.5f};
 
+/**
+ * 逐级互不相同的光空间盒深度跨度（米）= `tMax − tMin`。
+ *
+ * 债-150 之前 `makeVolumes` 把 tMin/tMax 留 0（本文件不碰深度界）；改成给**真跨度**，
+ * 因为 `shadowParams.x` 现在吃它了（= `kShadowDepthBiasWorld / 级 0 跨度`）。级 0 取
+ * **3.75 = 3 × kRadii[0]**（二进制精确），级 1..3 各不同 ⟹ 「除数取哪一级」不是瞎的。
+ */
+constexpr std::array<float, kSceneShadowCascadeCount> kSpans{3.75f, 7.5f, 15.0f, 31.25f};
+
 /** 造一组逐级特征不同的阴影体：viewProj 每个元素都不同且跨级不同
  *  （元素 = 1000·(c+1) + 列·4 + 行），拷贝错位/漏写都藏不住。 */
 std::array<ShadowVolume, kActiveShadowCascades> makeVolumes() {
@@ -80,6 +98,8 @@ std::array<ShadowVolume, kActiveShadowCascades> makeVolumes() {
 				m[col][row] = static_cast<float>(1000u * (c + 1u) + 4u * col + row);
 		vols[c].viewProj = m;
 		vols[c].xyRadius = kRadii[c];
+		vols[c].tMin = -0.5f * kSpans[c];
+		vols[c].tMax = +0.5f * kSpans[c];
 	}
 	return vols;
 }
@@ -144,15 +164,93 @@ TEST_CASE("fillShadowData：params = (bias, normalOffsetScale, enabled, shadowFa
 
 	FrameDrawList on;
 	fillShadowData(on, kNear, kFar, {vols.data(), vols.size()}, true, kForceOff);
-	CHECK(on.sceneData.shadowParams ==
-		glm::vec4(kShadowDepthBias, kShadowNormalOffsetScale, 1.0f, kFar));
+	// 🔴 params.x **不再是常数**（债-150，2026-10-26）：它是「世界光深常数 ÷ 本帧级 0 跨度」。
+	// 期望值的出处是**契约定义本身**（下发的 NDC 值 × 级 0 跨度 = 世界常数），不是抄实现里
+	// 那行除法；容差只吃 float 落库的一次舍入（相对 1 ULP）。
+	CHECK(on.sceneData.shadowParams.y == kShadowNormalOffsetScale);
+	CHECK(on.sceneData.shadowParams.z == 1.0f);
+	CHECK(on.sceneData.shadowParams.w == kFar);
+	CHECK(on.sceneData.shadowParams.x > 0.0f);
+	CHECK(on.sceneData.shadowParams.x < 1.0f);
+	const double back = static_cast<double>(on.sceneData.shadowParams.x) * kSpans[0];
+	expectNear(back, static_cast<double>(kShadowDepthBiasWorld), 1.0e-6, 0.0);
 
 	// 反向用例：关阴影只改 z=0，其余三项**照常填**（w 仍 = shadowFar——末级淡出的
 	// 采样端契约不因开关退化；z 误写死 1 或 w 改 0 都在本断言红）。
 	FrameDrawList off;
 	fillShadowData(off, kNear, kFar, {vols.data(), vols.size()}, false, kForceOff);
-	CHECK(off.sceneData.shadowParams ==
-		glm::vec4(kShadowDepthBias, kShadowNormalOffsetScale, 0.0f, kFar));
+	CHECK(off.sceneData.shadowParams.y == kShadowNormalOffsetScale);
+	CHECK(off.sceneData.shadowParams.z == 0.0f);
+	CHECK(off.sceneData.shadowParams.w == kFar);
+	// 偏置与开关**无关**（关掉采样段时 x 照常填，与改造前同形；x 跟着 z 一起归零会红）
+	CHECK(off.sceneData.shadowParams.x == on.sceneData.shadowParams.x);
+}
+
+TEST_CASE("fillShadowData：params.x 的除数是**级 0** 跨度，且级 0 = 标定跨度时逐位 = 0.0015f（债-150）") {
+	// 为什么单独一条：`shadowParams.x` 是四级共用的一枚标量，所以「除以哪一级的跨度」是
+	// 一个**有后果的选择**（出厂四级跨度 3.90/3.93/4.54/7.45 m，取错一级就差 1.006…1.91 倍）。
+	// 本文件 `makeVolumes()` 把四级跨度做成 3.75 / 7.5 / 15 / 31.25（互差 2/4/8.33 倍）⟹
+	// 实现若错吃级 1/2/3，下面两条各红一次（分别差 2 / 4 / 8.33 倍，不是容差能吞掉的量）。
+	//
+	// 🔴 期望值 0.0015f 的出处 = **历史事实**：它是改动前 `fillShadowData` 直接下发的那枚
+	// NDC 常数（`kShadowDepthBias`，见 docs/还债总账.md 债-150 行与 git 上的旧值）。标定就是
+	// 按「级 0 跨度取出厂实测值时除回来逐位等于它」做的 ⟹ 这条把标定钉进了消费点，而不只是
+	// 钉在 scene_data.cppm 那枚 static_assert 上（AGENTS 哲学第 1 条：单一来源不承重，
+	// **访问路径必须消费那个来源**）。
+	std::array<ShadowVolume, kActiveShadowCascades> vols = makeVolumes();
+	for (uint32_t c = 0; c < kActiveShadowCascades; ++c) {
+		vols[c].tMin = -0.5f * kShadowDepthBiasRefSpan;
+		vols[c].tMax = +0.5f * kShadowDepthBiasRefSpan;
+	}
+	FrameDrawList list;
+	fillShadowData(list, kNear, kFar, {vols.data(), vols.size()}, true, kForceOff);
+	CHECK(list.sceneData.shadowParams.x == 0.0015f);
+
+	// 反向半边：跨度加倍 ⟹ NDC 值减半（正交投影下 NDC 与光深是线性关系，这是**闭式**，
+	// 不吃实现）。同时它钉住「x 真的跟着跨度走」——把实现改回常数 0.0015f 时本条红。
+	std::array<ShadowVolume, kActiveShadowCascades> wide = vols;
+	for (auto& v : wide) {
+		v.tMin *= 2.0f;
+		v.tMax *= 2.0f;
+	}
+	FrameDrawList list2;
+	fillShadowData(list2, kNear, kFar, {wide.data(), wide.size()}, true, kForceOff);
+	expectNear(static_cast<double>(list2.sceneData.shadowParams.x),
+	           0.5 * static_cast<double>(list.sceneData.shadowParams.x), 1.0e-6, 0.0);
+	CHECK(list2.sceneData.shadowParams.x != list.sceneData.shadowParams.x);
+}
+
+TEST_CASE("shadowDepthBiasNdc：退化跨度出 0（不许 inf/NaN），空输入出 0（债-150 的反向半边）") {
+	// 为什么值得测：NaN 进 `params.x` ⟹ shader 里 `ref = ndc.z - NaN` 恒为 NaN ⟹ 深度比较
+	// 恒假 ⟹ **全图判成受光 = 阴影静默消失**，与债-149 那次「阴影贡献恰为 0 像素」同形。
+	// 出厂路径恒不走到这条（级 0 半径恒 > 0），所以它**没有图像侧的覆盖**——只有这条单测。
+	// 变异红线：删掉 `!(span > 0)` 那条守卫 → 前两条红（得到 inf/NaN）；把守卫写成
+	// `span >= 0` → 跨度恰 0 那条红（得到 inf）。
+	auto make = [](float tMin, float tMax) {
+		std::array<ShadowVolume, 1> v{};
+		v[0].tMin = tMin;
+		v[0].tMax = tMax;
+		return v;
+	};
+	// 跨度 = 0（`buildShadowVolume` 在 r ≤ 0 时返回的全零体）
+	auto zero = make(0.0f, 0.0f);
+	CHECK(shadowDepthBiasNdc({zero.data(), zero.size()}) == 0.0f);
+	// 跨度为负（上游写反 tMin/tMax）
+	auto neg = make(1.0f, -1.0f);
+	CHECK(shadowDepthBiasNdc({neg.data(), neg.size()}) == 0.0f);
+	// 跨度非有限（inf − (−inf) = inf 那类）
+	auto infSpan = make(-std::numeric_limits<float>::infinity(), 1.0f);
+	CHECK(shadowDepthBiasNdc({infSpan.data(), infSpan.size()}) == 0.0f);
+	// NaN 跨度
+	auto nanSpan = make(std::numeric_limits<float>::quiet_NaN(), 1.0f);
+	CHECK(std::isfinite(shadowDepthBiasNdc({nanSpan.data(), nanSpan.size()})));
+	// 空输入（volumes 没填）
+	CHECK(shadowDepthBiasNdc({}) == 0.0f);
+	// 阳性对照（🔴 上面四条全是「应当为 0」，一条恒返回 0 的坏实现会全绿）：
+	// 正常跨度必须给出**非零**且等于世界常数/跨度的值。
+	auto ok = make(-0.5f * kShadowDepthBiasRefSpan, 0.5f * kShadowDepthBiasRefSpan);
+	const float bias = shadowDepthBiasNdc({ok.data(), ok.size()});
+	CHECK(bias == 0.0015f);
 }
 
 TEST_CASE("fillShadowData：atlas = (图集边长, 单块边长, 列数, 0)（与图装饰 extent 同源）") {

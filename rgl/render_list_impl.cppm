@@ -140,7 +140,8 @@ std::array<ShadowVolume, kActiveShadowCascades> buildShadowVolumes(const Light& 
 	// 🔴 **初值 = 第一个候选，不是 0**（债-149）。写成 `{0.0f}` 等于让「本帧坐标系的零点」
 	// 恒被算进投影体 AABB：场景整个偏到零点一侧时，AABB 多出一条从 0 拉到场景的长尾巴，
 	// 而这条尾巴按 `|d·轴|` 折进 `buildShadowVolume` 的 `tMax − tMin`（光空间正交盒深度跨度），
-	// 采样端那个 **NDC 域**常数深度偏置（`kShadowDepthBias`）的世界当量 = `bias × 跨度` 随之线性
+	// 采样端那个 **NDC 域**常数深度偏置（当时的 `kShadowDepthBias`，现已搬到世界光深域
+	// ⟶ 见 `kShadowDepthBiasWorld` 与 `shadowDepthBiasNdc`）的世界当量 = `bias × 跨度` 随之线性
 	// 膨胀——实测出厂 24 mm → 场景偏 300 m 处 246 mm，超过合成靶上任何一块板能给出的最大遮挡
 	// 深度差（228 mm）⟹ **每个片元都判成受光，阴影贡献恰为 0 像素**（整块消失，不是变淡）。
 	// 死亡界闭式 = `(h/|d.y| − 1.5·texel·|d.y|)/bias`，实测三条独立自变量（偏移 / bias / 换场景）
@@ -321,6 +322,25 @@ float shadowTexelSize(float xyRadius) {
 }
 
 /**
+ * 定义（接口声明与「为什么在 CPU 侧除 / 为什么除数是级 0 / 为什么退化跨度返回 0」的完整
+ * 理由 → render_list.cppm；债-150 的修法本体，2026-10-26）。
+ *
+ * 数值域：跨度与除法都在 **double** 里做、只在最后收窄回 float。出厂工作点上
+ * `kShadowDepthBiasWorld / 级 0 跨度` 按 IEEE754 逐位等于旧的 `0.0015f`（标定就是按这个要求
+ * 做的，见 scene_data.cppm 那两枚常数的注释），所以债-150 本体在出厂交付图上是**零像素**改动。
+ */
+float shadowDepthBiasNdc(std::span<const ShadowVolume> volumes) {
+	if (volumes.empty())
+		return 0.0f;
+	const double span = static_cast<double>(volumes[0].tMax) - static_cast<double>(volumes[0].tMin);
+	// 「非正」与「非有限」两条都要判：`!(span > 0)` 已经把 NaN 与 0/负数一起挡掉（NaN 比较恒假），
+	// 而 +inf 跨度能通过它、除出 0 偏置（= 不偏置 = 痤疮回来），所以单独再判一次有限。
+	if (!(span > 0.0) || !std::isfinite(span))
+		return 0.0f;
+	return static_cast<float>(static_cast<double>(kShadowDepthBiasWorld) / span);
+}
+
+/**
  * 定义（接口声明与 @param 契约见 render_list.cppm；12.3d 接缝 = shadowPassEnabled
  * 显式入参取代内部单例读取，调用点传形态决策表的 `drawAtlas`；forceCascade 同走入参，
  * 判据 = 写进 scene data 的 splits 字节，见下方填写处）。
@@ -366,7 +386,10 @@ void fillShadowData(FrameDrawList& out, float shadowNear, float shadowFar,
     // params = (depthBias, normalOffsetScale, enabled, shadowFar)。**w 从"预留 0"改为
     // shadowFar**（5a-9）：采样端用它做末级距离淡出（shadow.slang ⑦，Filament 同款），
     // 消掉"超出级联覆盖 → 出块旁路全亮"的硬边。传的是**量化后**的远界，与 splits/切片同源。
-    out.sceneData.shadowParams = {kShadowDepthBias, kShadowNormalOffsetScale,
+    // 🔴 **x 从「NDC 域常数」改为「世界光深常数 ÷ 本帧级 0 跨度」**（债-150，2026-10-26）：
+    // 旧写法让偏置的物理当量被光空间盒跨度绑走（出厂 5.85 mm，跨度漂到 164 m 就变 246 mm
+    // ⟹ 债-149 那次「阴影整块消失」的放大器）。换算收在 shadowDepthBiasNdc 一处，shader 不动。
+    out.sceneData.shadowParams = {shadowDepthBiasNdc(volumes), kShadowNormalOffsetScale,
         shadowPassEnabled ? 1.0f : 0.0f, shadowFar};
     // 列数与图装饰的 extent 同源（shadowAtlasColumns）——两处不同步 = 采样端把块叠到错位置
     out.sceneData.shadowAtlas = {static_cast<float>(kShadowMapSize),

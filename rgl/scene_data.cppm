@@ -233,18 +233,43 @@ static_assert(sizeof(IrradianceBlock) == kSceneDataIrradianceBytes,
  * 不随贴图尺寸增长。
  */
 /**
- * 阴影偏置默认值（Phase 11 批 11.2，look-dev 目标值，可通过后续 RPC 调参覆盖）。
+ * 阴影偏置默认值（Phase 11 批 11.2 立；**债-150 于 2026-10-26 把深度偏置从 NDC 域搬到世界域**）。
  *
- * - `kShadowDepthBias`：**NDC 深度域**的常数偏置。为何不用光深 bias 推导出来的世界尺寸：
- *   正交投影的深度是**线性**的（无透视组归一化敏感度），NDC 偏置 × (深度范围/世界尺寸)
- *   = 常数。直接给 NDC 值使 bias 在**距离变化时自动缩放**（远处阴影图深度精度低、
- *   近处高）——这正是我们要的行为，不需要再乘世界尺寸。
+ * - `kShadowDepthBiasWorld`：**世界光深域**的常数偏置（米）。唯一合法消费点 =
+ *   `render_list.cppm` 的 `shadowDepthBiasNdc(本帧跨度)`，它除以本帧级 0 光空间盒的深度跨度
+ *   换算成 NDC 后写进 `shadowParams.x`；shader 侧 `ref = ndc.z - params.x` **一个字没改**。
+ *   🔴 **不许再直接下发一枚 NDC 常数**（那就是债-150 本体）：NDC 偏置的世界当量 = `bias × 跨度`，
+ *   而跨度 = `buildShadowVolume` 的 `tMax − tMin`，随投影体 AABB 与级联球走 ⟹ 偏置的物理含义被
+ *   场景摆位与 `shadowFar` 绑走。债-149 那次「世界偏移 300 m 后阴影整块消失」就是它被跨度撑爆
+ *   （合成场景当量 24 mm → 246 mm，超过该场景任何一块板能给出的最大遮挡深度差 228 mm）。
+ * - 🔴 **标定关系（不是拍的）**：`kShadowDepthBiasWorld = 0.0015 NDC × kShadowDepthBiasRefSpan`，
+ *   即**让出厂交付场景（bistro，门开态）级 0 保持它改前的 5.854 mm 世界当量**。这样债-150 本体
+ *   在出厂工作点上不改一个像素，图像差异只可能来自「跨度漂移被消掉」，不混进一次重新调参。
+ *   ⚠ **台账债-150 行写的 24.3 mm 是合成场景 `shadow_edge_rig` 的数**（那里跨度 15.89…15.95 m），
+ *   不是出厂交付场景的；交付场景出厂逐级跨度实测 3.903 / 3.928 / 4.544 / 7.449 m ⟹ 逐级当量
+ *   5.85 / 5.89 / 6.82 / 11.17 mm。两条数都保留在 `tests/test_shadow_caster_aabb.cppm` ②-A。
+ * - ⚠ **`shadowParams.x` 是四级共用的一枚标量**（`FrameDrawList::shadowParams` 是 `glm::vec4`，
+ *   不是逐级数组），所以本修法把**级 0** 的世界当量钉成常数，其余级按 `D_c / D_0` 缩放（出厂
+ *   恰好 = 改前各级的当量）。逐级各钉各的动的是 scene data 布局 + shader，是另一笔改动。
+ *   参照取级 0 而不是最粗级：级 0 跨度是四级里最小的 ⟹ 其余级的当量只会 **≥** 标定值，
+ *   不会把任何一级压到比标定值更细（更痤疮）。
  * - `kShadowNormalOffsetScale`：法线外推的 texel 数。acne 的**主手段**（bias 只是补丁）。1.5 是常见甜点：
  *   小于 1 接近不足一个纹素 → 自遮挡仍发生（黑斑）；大于 2.5 接触阴影明显回撤。
  *   剩余常数的含义见 shadow.slang 采样函数注释。
  */
-export inline constexpr float kShadowDepthBias = 0.0015f;        // NDC 深度域
-export inline constexpr float kShadowNormalOffsetScale = 1.5f;   // texel 数
+export inline constexpr float kShadowDepthBiasRefSpan = 3.90290284f;   // 米，出厂交付场景级 0 跨度
+export inline constexpr float kShadowDepthBiasWorld = 0.0058543543f;   // 米，世界光深域
+export inline constexpr float kShadowNormalOffsetScale = 1.5f;         // texel 数
+
+// 🔴 **标定关系的机器判据**（不是注释里的"必须同步"）：这两枚常数是**一对**，按生产那条
+// 换算（double 域相除、最后收窄 float）除回来必须逐位等于旧的 NDC 常数 0.0015f。改任一枚而
+// 没重做标定，编译直接红——这正是 AGENTS 哲学第 4 条「让错的东西编不过 > 让错的东西被看见」。
+// 判据的形态与 `shadowDepthBiasNdc` 的表达式**逐字同**（double 相除再收窄），否则这条断言
+// 测的不是生产那条路。单测（tests/test_shadow_caster_aabb.cppm ②-A）另外钉住「0.0015f 就是
+// 改动前下发的那个数」这条历史事实。
+static_assert(static_cast<float>(static_cast<double>(kShadowDepthBiasWorld)
+	                                  / static_cast<double>(kShadowDepthBiasRefSpan))
+	          == 0.0015f);
 
 /**
  * 当前**生效**的级联数（与 scene data 区容量 kSceneShadowCascadeCount = 4 **分离**）。
