@@ -1090,7 +1090,7 @@ TEST_CASE("runtime_config：wet 块（批 15.2A 湿面参数）——缺块回�
 }
 
 TEST_CASE("runtime_config：meshlet 块（★0-b1 簇路径总门）——缺块 = true、显式关门、无扁平键双读") {
-	// 判据来源 = 实读 runtime_config_impl::readMeshletBlock / readBoolKey（缺键 = 不写目标字段）。
+	// 判据来源 = 实读 runtime_config:failfast 的 readMeshletBlock / readBoolKey（缺键 = 不写目标字段）。
 	// 🔴 ★18-C 起默认 **true**（用户拍板「默认开 D=5」）。P5「门关 = 逐位不变」仍是硬护栏，
 	// 只是**门关不再是出厂态** ⟹ 本用例钉的是「缺块落到出厂默认 true」，而「显式关掉必须生效」
 	// 由「块内键名命中」那条钉。

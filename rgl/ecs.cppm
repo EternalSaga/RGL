@@ -15,7 +15,7 @@ namespace RGL {
 /**
  * 窗口尺寸（registry context，eventSystem 在 resize 事件写入；projectionSystem/resizeSystem 读）。
  * **口径 = 窗口物理像素**（与 swapchain extent 同口径——resizeSystem 拿两者比较，口径不同即误判）；
- * Wayland 分数缩放下与 SDL「逻辑点」尺寸不同，见 ecs_impl eventSystem。
+ * Wayland 分数缩放下与 SDL「逻辑点」尺寸不同，见 ecs:frame_input 的 eventSystem。
  * 无 needsResize 标志：resizeSystem 比较本值与 swapchain 实际尺寸（派生状态不存标志位）。
  */
 export struct WindowExtent {

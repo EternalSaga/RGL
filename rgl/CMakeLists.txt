@@ -256,6 +256,8 @@ set(RGL_BASE_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/lua_read.cppm"   # 批 0（相对坐标计划）：配置层公共 Lua 三元表读取，scene_config_impl 与 camera_config_impl 共用那一份
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config_keys.cppm"  # 键名真相源 + 未知键 lint 分区（kRuntimeKeys / collectPresentKeys / lintUnknownRuntimeKeys / runtimeConfigKnownKeys），自 runtime_config_impl 拆出（拆前 481/500 代码行；判据 = 输入输出类型 + 消费方：本分区进出全是键名（std::string_view / RuntimeKeyTrace），**没有一处写 RuntimeConfig 字段**，且它同时是 tests 覆盖率断言与 gate_lint 读的对外名单——"改一个字段"与"改一份对外承诺的名单"不该落在同一个 diff 里；留下的装配函数恰好相反，存在理由就是"键 → 字段"）
+    "${CMAKE_CURRENT_SOURCE_DIR}/runtime_config_failfast.cppm"  # 「配置笔误不静默回落」那一族的键装配分区（aa / present_mode / meshlet 块 + readStrictBoolKey / readStrictIntKey），自 runtime_config_impl 拆出（同款 500 行红线；判据 = 错误处理契约，且这条缝是源码里已经写好的——applyFailFastKeys 头注本来就写着「新增 fail-fast 键 = 在此加一行」，本刀把那条注释指向一个文件；与留在 :impl 的宽容装配是**相反**契约（那边 ssr/wet 明写"原样透传，一条 warn 都不发"），两种刻意相反的契约混在一处最容易发生"顺手给 ssr 也补一句 clamp"）
     "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/diagnostics_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/shadow_config.cppm"      # 批 N6a：configs/shadow.lua loader（阴影路线枚举）
@@ -424,6 +426,7 @@ set(RGL_FRAME_MODULE_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs_impl.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/ecs_frame_diag.cppm"      # 批 14.3：帧循环诊断旁路分区（截图时序 / 帧时间统计）
+    "${CMAKE_CURRENT_SOURCE_DIR}/ecs_frame_input.cppm"     # 帧首「外部世界 → registry」边界翻译分区（SDL 事件翻译 / resize 重建 / 配置热重载 / picking 回读），自 ecs_impl 拆出（拆前 ecs_impl 497/500 代码行；判据 = 三条同时落在同一条缝：生命周期阶段全是"帧首 system 链之前那一拍"、数据流方向全是"外部源 → context"（:impl 留下的 animation/bounds/projection/taa 是 registry→registry 纯几何变换、无外部源）、可选性同构（钩子未装配/门未开 = 零调用）；可机械复核的推论 = 本分区不出现 ViewProjection/RenderOrigin/FrameDrawList，:impl 拆完不出现 SDL_Event；接口分区先例 = 上一行 :frame_diag）
     "${CMAKE_CURRENT_SOURCE_DIR}/param_pages.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/param_pages_impl.cppm"
 )

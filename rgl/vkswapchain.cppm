@@ -179,7 +179,7 @@ export class Swapchain {
 	 * @return true = 已重建（extent 可能已变，调用方须重建深度图等附属资源）；
 	 *   false = 全部未变（重建无益），调用方负责观测（日志）且不得重建深度图等
 	 *   附属资源
-	 * @note 调用方：resizeSystem（窗口 resize，ecs_impl）/
+	 * @note 调用方：resizeSystem（窗口 resize，ecs:frame_input）/
 	 *   Renderer::recreateSwapchainAndDepth（acquire OUT_OF_DATE / present
 	 *   OUT_OF_DATE·SUBOPTIMAL）/ RPC /resize（headless，B2-4③′）
 	 */

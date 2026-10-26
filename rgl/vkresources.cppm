@@ -105,7 +105,7 @@ export class Resources {
 	 * @param extent 新的**渲染** extent（= `Swapchain::getRenderExtent()`，批 14.3 起不再
 	 *   等于交换链 extent；传交换链 extent 会让深度图与颜色附件网格不一致）
 	 * @return expected<void, Error>；Error = VMA 图像创建失败（createDepthImage 透传）
-	 * @note 调用方：resizeSystem（ecs_impl，窗口 resize 且 swapchain.recreate 返回
+	 * @note 调用方：resizeSystem（ecs:frame_input，窗口 resize 且 swapchain.recreate 返回
 	 *   true 后）/ Renderer::recreateSwapchainAndDepth（acquire/present OUT_OF_DATE）
 	 */
 	[[nodiscard]] std::expected<void, Error> recreateDepthImage(vk::Extent2D extent) {
