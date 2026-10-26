@@ -67,6 +67,10 @@ description: 写/评审单元测试的硬纪律——阳性锚点、反向用例
   旧产物与新 BMI 不兼容。**解法 = 删该 TU 的产物再建**：
   `find build -name "test_render_list_light*" \( -name "*.o" -o -name "*.pcm" \) -delete`。
   ⚠ 别把它读成「我的改动有错」——先删产物重试，再判红。
+  🔴 **`build/checks_cache/` 里同一个源文件有【多代】缓存**（键是内容哈希，不清理）。**跨代取最大值当"当前值"读会读到旧构建的数**
+  （2026-10-26 实测：主 agent 这样读出「某文件 488 行、函数 114/102/100/81」并据此派工，真实值是 375 / 63，
+  前提整个不成立）。**要当前数字就现算**：`python3 tools/checks/main.py --build-dir build --only style --file-threshold 1 --func-threshold 1`
+  （护栏口径 = token 级代码行，去注释去空行，**不是 `wc -l` 也不是 grep**）。
   🔴 **变异工装必须内置「构建失败就重试」的循环**（2026-10-26 实测：一轮里 `just test` 首跑崩 1 次、
   7 条变异中 3 条连崩 3 次）。工装不重试 ⟹ 某条变异读成 BUILD-FAILED，而**它后面那条「还原后基线」
   的构建同样会崩** ⟹ 拿陈旧二进制读基线 = 假红，一整轮变异读数作废。

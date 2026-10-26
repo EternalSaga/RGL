@@ -1,10 +1,12 @@
 module;
 #include <entt/entt.hpp>  // 启动流 helper 签名含 entt::registry
+#include <fmt/format.h>  // orThrow（本接口**唯一**的函数定义，理由见其注释）
 
 // 入口模块 main 的主接口单元——2026-09-14 由 main.cpp 转模块（CMake CXX_MODULES FILE_SET
 // 只收接口单元/分区，不收纯实现单元，故 main() 放分区实现单元 main_impl.cppm）。
 // 形状：本接口 = 启动流 helper 声明 + 轻量 struct（接口瘦身惯例）；重定义在分区
-// main:scene（main_scene.cppm），轻定义 + main() 在分区 main:impl（main_impl.cppm）。
+// main:scene（main_scene.cppm）/ main:assets（main_assets.cppm），轻定义 + main() 在分区
+// main:impl（main_impl.cppm）。
 // 本模块无外部 importer（入口叶子），导出仅为分区间可见性走接口声明惯例。
 export module main;
 
@@ -38,6 +40,32 @@ import shutdown_ledger;      // ShutdownLedger（registerDiagnosticReporters 签
 import vk_renderer;         // Renderer
 
 namespace RGL {
+
+// 用 `export { }` 包一块：doc 检查的"可跳过 template 引入行"只认行首 `template`，
+// 而 `export template` 同一行写法会漏判（先例 = pass_vocabulary.cppm 同款注释）。
+export {
+
+/**
+ * 解包启动期 expected：失败即抛，消息 = 「标签: 底层描述」。
+ *
+ * 定义放在主接口单元是**被迫的例外**（本文件其余全是声明）：它是个模板，而 main:scene 与
+ * main:assets 两侧都要用（拆分区前它住 main:scene 的匿名 namespace）。模板要么写在接口里，
+ * 要么每个分区各抄一份——后者正是它当初要治的病（见下一段），所以选前者。
+ *
+ * main:scene 此前有 **10 处**逐字同构的四行段 `if (!x) throw std::runtime_error(fmt::format(
+ * "{} …失败: {}", x.error().describe()))`。批 14.4 加第 11 处（velocity RT）时收成一处——
+ * 十份副本意味着"改错误消息口径"要改十处，而漏改的那处**只在失败路径上被读到**，
+ * 正是最不容易被发现的那条路径（本项目在日志文案上漂过不止一次）。
+ * 消息格式与旧代码逐字一致（`"{}: {}"` + 原标签），启动失败输出零变化。
+ */
+template <class Exp>
+auto orThrow(Exp&& result, const char* what) {
+	if (!result)
+		throw std::runtime_error(fmt::format("{}: {}", what, result.error().describe()));
+	return *result;
+}
+
+}  // export
 
 /** 启动四配置包（camera/scene/runtime 按值持有；diagnostics 在 loadAllConfigs 内 setDiagnostics 应用）。 */
 export struct StartupConfigs {
@@ -159,6 +187,18 @@ export std::unique_ptr<SDLWindow> createAppWindow(const RuntimeConfig& runtime, 
 export std::optional<PreWindow> prepareWindow(const StartupConfigs& configs);
 
 /**
+ * 加载 configs/render_graph.lua + `compileRenderGraph`（校验 + barrier 布局链推导）+
+ * 按**图事实**求值 `deferredMode` + 六个装饰失败出口全部拒启动。定义在 main:graph
+ * （渲染图这一族），调用点在 main:impl 的 `main()`；装饰次序契约与 warn→throw 的
+ * 完整理由写在该定义处注释，搬动这条链前先读它。
+ * @param path   render_graph.lua 的路径（调用点给 `configPath(...)`）
+ * @param runtime 已解析的 runtime 配置（四个图形态开关的唯一来源）
+ * @return 编译图 + 各装饰是否落图（`CompiledGraphResult`；抛异常时调用方拿不到它）
+ * @note 任何图错误、或任何「配置请求了本图接不了的能力」→ 抛 std::runtime_error
+ */
+export CompiledGraphResult compileGraphOrThrow(const char* path, const RuntimeConfig& runtime);
+
+/**
  * push data 容量契约（Phase 5）：shader object + descriptor heap 模式无 pipeline
  * layout，per-draw push data（DrawArgs 4B——Phase 7b+ 仅 objectIndex，vkCmdPushDataEXT）
  * 受设备硬限约束
@@ -270,6 +310,21 @@ export void bakePipelineEntries(UploadedAssets& uploaded, const SceneConfig& sce
 export void addDiagnosticCloneEntries(ShaderRegistry& pipelines);
 
 /**
+ * G-buffer 领槽 + light 条目（Phase 7 D1；批 15.1 前半把领槽条件放宽到
+ * `deferredMode || ssrDecorated` 后抽成 helper 控 assembleBackEnd 行数）。
+ * 领槽 = ensureDeferredGBufferSlots（幂等，light / ssr 条目复用同一组槽号）；light
+ * 条目仅 deferred 建（无 G-buffer 附件的自定义图接不了 light pass，ssr 装饰器的跳过条件 3
+ * 也保证 ssrDecorated ⟹ 图里 kGBufferAttachments 契约表全部通道都在 ⟹ 槽可领）。
+ * 定义在 main:assets（与 bakePipelineEntries 同属"烘画东西/打光的条目"，且共用
+ * evssmMomentsSlotOf 这个幂等发号 helper）；调用点在 main:scene 的 assembleBackEnd。
+ * @return G-buffer 5 个堆槽号；既非 deferred 也非 ssr 时为空 optional（此时不建 light 条目）
+ * @note G-buffer RT 创建失败 → 抛 std::runtime_error
+ */
+export std::optional<std::array<uint32_t, 5>> gBufferSlotsAndLightEntry(
+	Resources& resources, SamplerLibrary& samplers, RenderTargetCache& rtCache,
+	Swapchain& swapchain, ShaderRegistry& pipelines, bool deferredMode, bool ssrDecorated);
+
+/**
  * C2/C2b：场景实体注册——per **entity**：模型 entity（rootTransform = T·Rx·Ry·Rz·S，
  * 旋转应用序 X→Y→Z）+ 独立实例矩阵槽；cube entity（内建资产 + 默认材质 + cube 管线条目，
  * 下标写回启动期一次幂等）；灯 entity（index = lights 列表位，正序契约：deferred 全数组按
@@ -368,6 +423,19 @@ export MeshletAssembly wireMeshletOverlay(
  */
 export std::unique_ptr<MeshletShadowArgsService> wireMeshletShadowArgs(entt::registry& registry,
 	Resources& resources, DeviceContext& device, const RuntimeConfig& cfg);
+
+/**
+ * ★M-1b（docs/mdi_plan.md §19.2 D2 / §19.5）：真 MDI 阴影段的**条目烘焙 + 资产回填 + 生效标记**
+ * （定义在 `main:meshlet_mdi`，与上一步的载体接线同分区）。
+ * **调用点 = `wireMeshletPostRegistration` 第五步**（🔴 紧跟 `wireMeshletShadowArgs` 之后：条目
+ * 要 `argSlot()` 的真值），而整个函数仍在 `assembleBackEnd` **之前**（DGC/GpuCull 的条目数快照
+ * 口径 → 定义处头注释的雷 1 / 雷 2 逐条论证）。
+ * @param registry 场景 registry（`MeshletMdiShadowActivation` 的 emplace 目标）
+ * @param assembly 服务持有者（读第④步的 `shadowArgs` 与 α 的 `bindingSlots`）
+ */
+export void wireMeshletMdiShadowActivation(entt::registry& registry, ShaderRegistry& pipelines,
+	const AssetTable& assets, MeshletAssembly& assembly, const RuntimeConfig& cfg,
+	DeviceContext& device);
 
 /**
  * 簇化轴 ★1-a2-i：逐簇视锥剔除的**生效开关**（`meshlet.cull` → Renderer 帧首 dispatch）。

@@ -156,7 +156,8 @@ rgl_shader(stream_fanout.comp STREAM_FANOUT_SPV cull_tables)
 # 分配至 32GB 后回归目标级 -O2（启动路径代码质量优先，编译峰值内存已非瓶颈）。
 #
 # main.cppm（主接口：启动流 helper 声明 + 轻量 struct）+ main_scene.cppm（module
-# main:scene; 重函数定义）+ main_wiring.cppm（module main:wiring; 诊断/热重载挂点装配）
+# main:scene; 场景实体注册 + 后端装配）+ main_assets.cppm（module main:assets; 资产上传与
+# 管线条目烘焙）+ main_wiring.cppm（module main:wiring; 诊断/热重载挂点装配）
 # + main_impl.cppm（module main:impl; 轻函数 + main()）
 # ——2026-09-14 由 main.cpp 转来：CMake FILE_SET 不收**无 module 声明的裸实现文件**
 #（旧 main.cpp），故"接口声明 + 分区实现"形状（同 ecs/ecs_impl 惯例；分区实现单元
@@ -431,9 +432,13 @@ set(RGL_APP_MODULE_SOURCES
     # ── 入口 —— 含 main()，**必须**留在可执行文件 ──
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/main_impl.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_startup.cppm"  # 启动前置分区（四份 lua 加载 + 尺寸契约 + 建窗 → StartupConfigs / PreWindow），自 main:impl 拆出（拆掉 main:graph 后 main:impl 仍 408/500 且 main() 顶在 120 行上限，按阶段抽的 helper 需要落点；判据 = main.cppm 早已把这五个函数成组 export、PreWindow 注释即"启动前置产物"，本刀接口面零新增）
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_graph.cppm"  # 渲染意图图分区（render_graph.lua 加载 + 六个装饰失败出口 + compileRenderGraph），自 main:impl 拆出（该文件已顶到 500 行代码上限，实测 499/500，且 main() 单函数顶到 120 行上限；判据 = 吃 RgGraphDesc / 吐 CompiledGraphResult 的一族，与"进程怎么活起来"无交集）
     "${CMAKE_CURRENT_SOURCE_DIR}/main_scene.cppm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_assets.cppm"  # 资产上传 + 逐资产/逐光源管线条目烘焙分区（A0/A1/A2 + env + C1 + 克隆 + light 条目），自 main:scene 拆出（该文件已顶到 500 行代码上限，实测 500/500；缝在"资产驱动 vs 图形态驱动"的数据流上，判据 → main_assets.cppm 文件头）
     "${CMAKE_CURRENT_SOURCE_DIR}/main_wiring.cppm"
     "${CMAKE_CURRENT_SOURCE_DIR}/main_meshlets.cppm"   # ★1-a1i：簇区间表装配（★1-a1 挂号 ①：装配接线不再塞 main_scene）
+    "${CMAKE_CURRENT_SOURCE_DIR}/main_meshlet_mdi.cppm"   # ★M-1a/b：阴影段真 MDI 行表的接线分区（行表 GPU buffer 分配 + 条目烘焙与回填），自 main:meshlets 拆出（拆前 main:meshlets 460/500；判据 = 源码里 ★M-1a 那条分隔线本就把这块自成一段，四个函数不引用该分区任何文件内符号，与「簇 buffer 环 + 逐簇条目」的事实面不重叠）
     "${CMAKE_CURRENT_SOURCE_DIR}/main_meshlet_tables.cppm"  # ★18-B2：簇轴「建表半区」分区（区间表 + 阴影 LOD 表），自 main_meshlets 拆出（500 行红线）
     "${CMAKE_CURRENT_SOURCE_DIR}/main_shadow_proxy.cppm"    # N10 P2：阴影代理钉段表装配分区（读 MustL0 段 + texel 门读数表），自 main:meshlet_tables 拆出（同款 500 行红线）
 )

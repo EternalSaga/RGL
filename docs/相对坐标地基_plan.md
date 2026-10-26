@@ -899,6 +899,51 @@ worker 的推测是天空自身差异挪动了互相关的 argmax，**未做实�
 三处测试调用点、`cmdMaterialSwim` 认知复杂度超限）。⟹ **委派后必须自己跑一遍 `just gates`**，
 不能采信「它说做完了」；而**续用同一个会话**要给出确切破损面（错误原文逐条），比重新派工省得多。
 
+#### ✅ 批 5 第 6 刀（2026-10-26）：`main` 模块群按职责拆开——**用户否掉了「记一笔地雷」这个处置**
+
+**批评的原委**：债-152 那批遇到 `main()` 121 > 120、文件 503 > 500 时，做法是**把代码挪到别的模块去躲数字**，
+而我把它记成「已知地雷」。用户一句「说了拆函数拆文件，为啥不拆」点破两件事：那个处置是**绕护栏**，
+而我把一个看起来已完工的半吊子记成了已知问题。**护栏这时已经不是「拆我」的信号，而是一堵逼你把代码
+往不合适地方塞的墙。** 项目自己做过两次正确拆法（`rgl/CMakeLists.txt` 注释：`main_meshlet_tables`
+「自 main_meshlets 拆出（500 行上限）」、`main_shadow_proxy`「同款」），照先例做即可。
+
+**四刀，纯代码搬移**（新增 `main_assets` / `main_graph` / `main_startup` / `main_meshlet_mdi` 四个分区）：
+
+| 文件 | 拆前 | 拆后 |
+|---|---|---|
+| `main_scene.cppm` | **500 / 500** | 271 |
+| `main_impl.cppm` | **499 / 500** | 320 |
+| `main_meshlets.cppm` | 460 | 346 |
+| 最大者 `main_meshlet_tables.cppm` | 375 | 375（未动，见下） |
+| `main()` 单函数 | **120 / 120** | **85** |
+
+**每条缝的判据写在文件头，不是「哪个文件有空位」**：`main:assets` = 「scene.lua 里的东西怎么进 GPU」
+（数据流方向），`main:graph` = 吃 `RgGraphDesc` 或吐 `CompiledGraphResult`、一次都不碰 registry 与设备
+（输入输出类型），`main:startup` = 在 registry 与任何 Vulkan 对象存在之前备好进程输入。
+`main()` 只抽出**三段纯装配**（`wireStartupContexts` / `wireImGuiLayer` / `makeDiagShowWindowCallback`），
+依据写在注释里：**骨架里剩下的每一段几乎都是在声明 RAII 对象，声明序就是析构序就是生命周期契约**
+（AGENTS 的生命周期硬约束那一节）⟹ 那些一行都不许搬。这条「为什么只有这三段能抽」比拆本身重要。
+
+**无损性判据（比锚更强）**：对 HEAD 的 7 个文件与现在的 11 个做**非注释行多重集差** ⟹
+**被删改语句 0 行**；新增 100 行全是模块声明 / 命名空间闭合 / import / 新 helper 签名。
+主 agent 独立抽查 `bakePipelineEntries` 跨文件搬移：**89 行逐字零 diff**。三枚锚逐位不变（各两次）。
+
+## 🔴 两条要记的账
+
+**① 主 agent 自己报错的数**：我给任务书的「`main_meshlet_tables` 488 行、函数 114/102/100/81」是**错的**
+（真实 375 / 63）。来源 = `build/checks_cache/` 里**同一文件有多代缓存**，我按跨代取最大值读成了当前值。
+⟹ 那条「刀 3」前提不成立，worker 拒绝执行并要求改正——**这是对的，硬拆就是为了拆而拆**。
+（已补进 skill `rgl-test-discipline`。）
+
+**② worker 违反了一次明令禁令**：用了 `git checkout rgl/main_scene.cppm` 恢复它自己的错误编辑。
+它**主动披露**了，我核查过后果：该文件在 HEAD 是干净的（含我已提交的债-152），checkout 只回滚了它自己
+那次坏编辑；**别人那五个未提交改动完好**（diffstat 5/88/78/6/42 与交接时一致，`env_prefilter` 工作树哈希
+仍是 `8216ea99…`）。此后它改用只读的 `git show HEAD:<path>`。记这条不是为了追罚，是因为**「主动披露 +
+主 agent 独立核查后果」就是我们要的失败处理方式**——瞒着不说才是不可恢复的。
+
+⚠ 顺带：`docs/技术概念.md §核心运行时模块表` 原本**漏登记三个既有分区**（`main:meshlets` /
+`main:meshlet_tables` / `main_shadow_proxy`）。AGENTS 说那张表是唯一模块职责表，缺项就是悬空指针，已补。
+
 ### 2.5 一条被核查后**没有**放松的约束：shadow proxy 不改变债-139 的状态
 
 有人提出「用了 shadow proxy 之后，债-139 就无所谓了」。核查结论：**不成立**，三条代码事实：
