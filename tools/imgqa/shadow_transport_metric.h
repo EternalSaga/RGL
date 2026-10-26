@@ -60,6 +60,7 @@
 //   · 类型/尺寸守卫各一条 `throwsStd`：改成返回空读数即红（空读数 = 零翻转 = 假绿）。
 //   · 判据名拼错或漏 append → 挂号那条红。
 //
+#include "field_diff_metric.h"    // meanAbsPermille / p99Abs（连续量口径，与 material-swim 共用）
 #include "shadow_kernel_metric.h"  // Projector / makeProjector / projectPoint3（复用，别重写）
 
 #include <opencv2/core.hpp>

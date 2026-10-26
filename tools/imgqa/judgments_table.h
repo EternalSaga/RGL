@@ -88,13 +88,22 @@ namespace RGL::imgqa {
 /// `shadow-edge-ruler` 段同住 `judgments_table_edge.cpp`（缝按命令切，见该文件段注释）。
 [[nodiscard]] const std::vector<JudgmentInfo>& shadowEdgeRebaseJudgments();
 
-/// 地基族 · **材质场世界不变性**（`material-swim`，债-152，4 条）：门开两机位的材质场翻转率
+/// 地基族 · **材质场世界不变性 · 二值半段**（`material-swim`，债-152，4 条）：门开两机位的材质场翻转率
 /// 与滑移（主判据，修前红）/ 同机位两跑恰 0（阴性对照）/ 门关地板（堵「算子恒红」）/
 /// 注入已知世界偏移必须报出该偏移（区分力守卫，堵「算子恒绿」，修前也红）。与 `swim` 的
 /// 关系 = 同一个世界不变性形状从影场推广到材质场，共用 `ground_field_metric` 那一份对拍口径。
+/// 🔴 债-154 起这**四条降为辅助**（判据形状与阈值一字未动）：它们只守「滑到跨阈值」那一格，
+/// 对「场动了但没跨阈值」结构性失明——补位的是下面那半段。
 /// 族仍是 Foundation（静态单帧、无时域比值口径），缝按**仪器**切。📄 正文在
 /// `judgments_table_material.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& materialSwimJudgments();
+
+/// 地基族 · **材质场世界不变性 · 连续量半段**（`material-swim`，债-154，4 条）：门关地板 /
+/// 门开不坏（🔴 主判据）/ 同机位两跑连续量恰 0 / 🔴 亚阈值可见性（旧判据读绿 + 新判据读红）。
+/// 与上一条同属一台仪器，缝在**统计量**上（二值翻转率 vs 连续量 mean/p99）——两半的界来自
+/// 不同的实测（33/28270 格 vs 0.272 ‰ 地板），挤在一个函数里会把两种容差推导混成一段散文。
+/// 📄 正文在 `judgments_table_material_cont.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& materialSwimContinuousJudgments();
 
 /// 地基族 · **零起伏平地上影场的世界不变性**（`shadow-swim-flat`，债-139 结案批，5 条）：
 /// 无地板残差（Q1）/ 阴性对照 / 不坏 / 变好 🔴（Q2）/ 区分力守卫。与 material-swim 的差别不是

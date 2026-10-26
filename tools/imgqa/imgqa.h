@@ -249,6 +249,20 @@ struct ProfileOpts {
     ///   否则「覆写落盘了但引擎没读到」与「引擎读到了但原点恒零」两种失效都长得像绿。
     bool overrideCoordinateRebase = false;
     bool coordinateRebaseValue = true;
+    /// **第 10 个例外门**（`material-swim`，债-154）：true = 把交付配置 `runtime.lua` 的 `wet`
+    /// 块做一趟**关于阈值的对称对比度展开**（`rough_lo −= δ`、`rough_hi += δ`，δ =
+    /// `wetContrastBias`；出厂值从配置里读，工具不抄第二份）。
+    ///
+    /// 为什么这**不算**「工具再抄一份真相」（同第 6..9 枚的判据 = 覆写的是不是 A/B 实验本身）：
+    /// 本仪器的新判据是「材质场的连续量差」，而它要守的失效形态恰好是**二值标签看不见**的那一格
+    /// ——「场动了但没跨阈值」。要证明这条判据真的多抓东西，就必须能造出这一形态的注入，而
+    /// 🔴 **只有等量反向挪两端**才造得出来：二值阈值 = 全臂字节 (min+max)/2 = 两端点的中点，
+    /// 湿面粗糙度又是 `puddle` 的线性函数 ⟹ 中点不动 ⟹ `puddle = 0.5` 那条等值线一格都不跨阈值，
+    /// 而每格数值都按到那条线的距离被拉开。单端挪会把中点一起挪掉 ⟹ 边界带翻标签 ⟹ 注入退化成
+    /// 「新旧判据都看得见」，本批的核心验收当场失效。推导全文 → `engine_profile_gates.cpp` 该门头注。
+    /// 🔴 只在交付配置路径有实现（同第 6..9 枚）；门开而 `wet` 块/任一枚键不在 = 抛。
+    bool overrideWetContrast = false;
+    double wetContrastBias = 0.0;  ///< δ（粗糙度线性域，非字节域）；两臂共用同一个 δ
     /// 可选机位（**写进 profile 的 camera.lua**，从第 1 帧生效）。false = 不动 camera.lua。
     ///
     /// 为什么不能只靠 `Engine::setCamera`（RPC）：RPC 落在引擎已经跑了几帧之后，而那些帧是用

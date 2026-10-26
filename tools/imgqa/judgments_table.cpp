@@ -464,6 +464,9 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         append(shadowEdgeRulerJudgments());
         append(shadowEdgeRebaseJudgments());
         append(materialSwimJudgments());
+        // 材质场的**连续量半段**（债-154，4 条）紧跟二值半段：同一台仪器的两种统计量，相邻
+        // 打印才能让读的人看见「换成连续量之后界挂在哪个实测上」，以及 J8 那条「旧绿新红」。
+        append(materialSwimContinuousJudgments());
         // `shadow-swim-flat`（债-139 结案批，5 条）紧跟 material-swim：同一个形状的两副面孔
         // （材质场 / 影场），相邻能让 `imgqa check` 的读者看见「换了口径之后判据变成什么」。
         append(swimFlatJudgments());

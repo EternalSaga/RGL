@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 69 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 73 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -62,7 +62,7 @@
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}                   # = 658
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}                   # = 671
 //   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。）
 //   🔴 改这个数字的仪式：只在**逐条可红**的断言进出时改。曾删掉 `topLevelValueOf` 的两条断言
 //   ——npos 分支经 findKeyHits 不可达 ⟹ 改前改后都绿，**买了信心不买覆盖**，那种断言不配进这个数。
@@ -150,7 +150,7 @@ std::string captureStdout(F fn)
     return out;
 }
 
-// ── 69 条测试的声明（定义按仪器族分散在十六个 TU；调用顺序只写在 `cmdSelftest`）──
+// ── 73 条测试的声明（定义按仪器族分散在十七个 TU；调用顺序只写在 `cmdSelftest`）──
 void testSrgb(Checker& c);
 void testObjectId(Checker& c);
 void testRegion(Checker& c);
@@ -214,6 +214,15 @@ void testGroundFieldUnmeasurable(Checker& c);
 void testGroundFieldPairing(Checker& c);
 void testGroundFieldSearchGuards(Checker& c);
 void testGroundFieldCellGrid(Checker& c);
+
+// —— `field_diff_metric.*`（连续量差的 mean/p99 口径层，债-154）——
+// 影场与材质场**共用**的那一份统计口径 ⟹ 它红两台仪器的同名统计量一起不可比，而没有任何一条
+// 判据会红（判据比的是各自的界）。四个测试的缝 = 问的东西（mean 口径 / p99 下标口径 /
+// p99 不是 max 也不是 median 的反向 / 挂号），逐条说明见 `selftest_field_diff.cpp` 头注。
+void testFieldDiffMean(Checker& c);
+void testFieldDiffP99Index(Checker& c);
+void testFieldDiffP99NotMaxNorMedian(Checker& c);
+void testFieldDiffRegistration(Checker& c);
 
 // —— `shadow_transport_metric.*`（shadow-swim-flat 的像素域搬运口径层，债-139 结案批）——
 // 六个测试的缝 = **问的东西**（往返 / 横移 / 恒等与反向 / 侵蚀带 / 搜索 / 守卫与挂号），

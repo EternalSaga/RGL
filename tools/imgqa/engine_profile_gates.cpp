@@ -208,4 +208,71 @@ void applyCoordinateRebaseGate(const std::string& dir, const ProfileOpts& o)
     writeFile(dir + "/runtime.lua", rt);
 }
 
+namespace {
+
+/// 从 `wet` 块的文本里取一枚数值键（第 10 枚门的**读**侧）。
+/// 为什么要读而不是在工具里写死出厂值：出厂值住在 `configs/runtime.lua`，工具抄一份就是
+/// 第二份真相（AGENTS 哲学第 1 条）——而本门要写的恰好是「出厂值 ± δ」，抄错了 δ 就白给。
+/// 找不到键 = 抛（宁可不写，也不要「以为加了 δ、其实加在空气上」）。
+double blockNumber(const std::string& block, const std::string& file, const std::string& table,
+    const std::string& key)
+{
+    const size_t at = block.find(key);
+    if (at == std::string::npos)
+        throw std::runtime_error(file + " 的 `" + table + "` 块里没有键 `" + key
+            + "` ⟹ 第 10 枚门（湿面对比度）无处可加 δ，拒绝在猜出来的出厂值上跑判据");
+    const size_t eq = block.find('=', at + key.size());
+    if (eq == std::string::npos)
+        throw std::runtime_error(file + " 的 `" + table + "." + key + "` 不像 `键 = 值` 形态");
+    return std::stod(block.substr(eq + 1));
+}
+
+/// 浮点字面量（17 位有效数字 = double 逐位往返）。
+std::string luaDouble(double v)
+{
+    char buf[40];
+    std::snprintf(buf, sizeof buf, "%.17g", v);
+    return buf;
+}
+
+}  // namespace
+
+/**
+ * 第 10 个例外门（`material-swim`，债-154）：把交付配置 `runtime.lua` 的 `wet` 块做一趟
+ * **关于阈值的对称对比度展开**——`rough_lo −= δ`、`rough_hi += δ`。
+ *
+ * 🔴 为什么是「两端等量反向」而不是「整体加一个偏置」（这条必须写清，否则本门就是错的仪器）：
+ * 材质场的二值阈值 = 全臂观测字节的 (min+max)/2，而湿面粗糙度 = `lerp(roughHi, roughLo, puddle)`
+ * 是 `puddle` 的**线性**函数 ⟹ 阈值那条等值线**恰落在 `puddle = 0.5` 上，且只由两端点的
+ * **中点**决定**。两端等量反向挪 ⟹ 中点不动 ⟹ `puddle = 0.5` 那条线一格都不跨阈值，
+ * 而每一格的**数值**都按到那条线的距离被拉开 ⟹ **翻转率恒等于地板、连续量严格变大**。
+ * 这就是债-154 要的「标签一张都不翻、但场确实动了」的注入本体。
+ * ⚠ 单端挪（只动 rough_hi）会把中点也挪掉 ⟹ 阈值线平移 ⟹ 边界带上的格翻标签，
+ *   注入就退化成「新旧判据都看得见」，本批的核心验收随之失效（实测见 material_swim.cpp 头注）。
+ *
+ * 与第 6/7/9 枚同族同判据（覆写的是 A/B 实验本身；门闭 = 第一行返回 = 逐位不变）；
+ * 出厂值**从配置里读**（见 `blockNumber`），工具不抄第二份真相。
+ * @throws wet 块/任一枚键不在、写后读回不是给定值
+ */
+void applyWetContrastGate(const std::string& dir, const ProfileOpts& o)
+{
+    if (!o.overrideWetContrast)
+        return;
+    std::string rt = readFile(dir + "/runtime.lua");
+    const std::string block = topLevelValueOf(rt, "wet", "runtime.lua");
+    const double d = o.wetContrastBias;
+    const double lo = blockNumber(block, "runtime.lua", "wet", "rough_lo") - d;
+    const double hi = blockNumber(block, "runtime.lua", "wet", "rough_hi") + d;
+    if (!(lo > 0.0))
+        throw std::runtime_error("第 10 枚门：rough_lo − δ = " + luaDouble(lo)
+            + " 不是正数 ⟹ 粗糙度写负进 G-buffer 会被 clamp 成 0，注入形态就不是「对比度展开」了");
+    const std::string slo = luaDouble(lo);
+    const std::string shi = luaDouble(hi);
+    overrideValueInTable(rt, "runtime.lua", "wet", "rough_lo", slo);
+    requireBlockKey(rt, "runtime.lua", "wet", "rough_lo", slo);
+    overrideValueInTable(rt, "runtime.lua", "wet", "rough_hi", shi);
+    requireBlockKey(rt, "runtime.lua", "wet", "rough_hi", shi);
+    writeFile(dir + "/runtime.lua", rt);
+}
+
 }  // namespace RGL::imgqa

@@ -28,5 +28,9 @@ void applyShadowForceCascadeGate(const std::string& dir, const ProfileOpts& o);
 void applyDeliveryEntitiesGate(const std::string& dir, const ProfileOpts& o);
 /// 第 9 枚门：覆写 `runtime.lua` 的 `coordinate.rebase`（相对坐标原点 rebase 总闸）。
 void applyCoordinateRebaseGate(const std::string& dir, const ProfileOpts& o);
+/// 第 10 枚门：把 `runtime.lua` 的 `wet` 块做**关于阈值的对称对比度展开**（债-154 的亚阈值注入）。
+/// 🔴 必须两端等量反向：只挪一端会把二值阈值（= 两端点中点）一起挪走 ⟹ 注入退化成
+/// 「新旧判据都看得见」，本批「旧绿新红」的核心验收当场失效。
+void applyWetContrastGate(const std::string& dir, const ProfileOpts& o);
 
 }  // namespace RGL::imgqa

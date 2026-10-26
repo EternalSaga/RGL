@@ -675,6 +675,10 @@ std::string makeProfile(const std::string& outDir, const ProfileOpts& o)
         // 第 9 例外门（coordinate.rebase）。放在第 8 枚之后：两枚门各自 read-modify-write
         // 同一批已落盘的 profile 文件，顺序 = 后写的吃前写的结果。门闭 = 第一行返回 = 逐位不变。
         applyCoordinateRebaseGate(outDir, o);
+        // 第 10 例外门（wet 对比度，债-154 的亚阈值注入臂）。放在第 9 枚之后、requireLuaSyntax
+        // 之前：同上一条——各门 read-modify-write 同一份 runtime.lua，后写的吃前写的结果。
+        // 门闭 = 第一行返回 = 逐位不变（六臂里只有 offT 开这扇门）。
+        applyWetContrastGate(outDir, o);
         // 所有覆写落盘后统一过一遍语法护栏（理由见该函数注释：坏配置必须在生成期点名文件，
         // 不能变成引擎的 `'{' expected` 天书）。
         requireLuaSyntax(outDir);

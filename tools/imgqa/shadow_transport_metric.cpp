@@ -194,7 +194,9 @@ double ShadowFlipReadout::flipPct() const
 
 double ShadowFlipReadout::meanAbsCovPermille() const
 {
-    return trust ? 1000.0 * sumAbsCov / static_cast<double>(trust) : 0.0;
+    // 🔴 口径不在这里定义——`field_diff_metric` 是 mean(Δ) 千分点与 p99(Δ) 的**唯一出处**，
+    // 影场与材质场共用（两份定义会各自漂，漂了之后两个「mean |Δ|」看着可比、其实不可比）。
+    return meanAbsPermille(sumAbsCov, trust);
 }
 
 namespace {
@@ -300,12 +302,8 @@ ShadowFlipReadout compareTransported(const cv::Mat& covA, const cv::Mat& covB,
     r.trust = cs.trust;
     r.flips = cs.flips;
     r.sumAbsCov = cs.sumAbs;
-    if (!diff.empty()) {
-        // nth_element 而不是 sort：p99 只要那一个分位，O(n) 就够。
-        const size_t idx = static_cast<size_t>(0.99 * static_cast<double>(diff.size() - 1));
-        std::nth_element(diff.begin(), diff.begin() + static_cast<long>(idx), diff.end());
-        r.p99AbsCov = diff[idx];
-    }
+    if (!diff.empty())
+        r.p99AbsCov = p99Abs(diff);  // 🔴 分位下标口径的唯一出处在 field_diff_metric
     return r;
 }
 

@@ -39,6 +39,13 @@ add_executable(imgqa
     cli_table_swim_flat.cpp
     analytic.cpp
     ao_metrics.cpp
+    # `field_diff_metric.{h,cpp}` = **连续量差的 mean/p99 口径层**（债-154）。它被两台仪器共用：
+    # `shadow-swim-flat`（影场，像素域搬运后的 |Δcov|）与 `material-swim`（材质场，世界格中位数
+    # 之差）。配对口径**不能**合并（一个 double 域像素搬运、一个刻意 float32 的世界格，各自头注
+    # 写了改不动的理由），但「配对完之后怎么数」必须只有一份——尤其 p99 取哪个下标：两份定义会
+    # 各自漂，而两个 p99 数字看着可比、其实不可比，且没有任何一条判据会红（AGENTS 哲学第 1 条）。
+    # 泛化边界的全文 → `field_diff_metric.h` 头注「泛化的边界在哪」。
+    field_diff_metric.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
     # `ao_noise_metric.h` 头注释。`ao_noise_metric.cpp` = **口径层**（帧差算子 / 逐位相同判定 /
     # 取值分布与扫描线 / 存图可视化，同 shadow_kernel_metric.* 与 diff_struct_metric.* 那条缝）；
@@ -96,8 +103,13 @@ add_executable(imgqa
     # 只报数】/ |误差| 随 D 单调不减），缝按仪器切（`judgments_table_survival.cpp` 把头注缝
     # 声明为「本段两条属于 shadow-caster-survival」）。
     judgments_table_edge.cpp
-    # `material-swim` 判据段（债-152，4 条），缝按仪器切（同 edge / ssr / block 段）。
+    # `material-swim` 判据段（债-152，4 条**二值翻转率**线），缝按仪器切（同 edge / ssr / block 段）。
     judgments_table_material.cpp
+    # `material-swim` 判据段的**连续量半段**（债-154，4 条 mean/p99 线）。从上一条拆出是护栏逼的
+    # （那个函数加完四条变 186 代码行 > 120），🔴 但缝按**统计量**切而不是按行数切：二值那半问
+    # 「湿/干标签跨没跨阈值」，连续量这半问「场的数值搬动了多少」，两半的界来自不同的实测
+    # （33/28270 格 vs 0.272 ‰ 地板），挤进一个函数会把两种容差推导混成一段散文。
+    judgments_table_material_cont.cpp
     # `shadow-swim-flat` 判据段（债-139 结案批，5 条：无地板残差 / 阴性对照 / 不坏 / 变好 🔴 /
     # 区分力守卫），缝按仪器切（同 material / edge / ssr / block 段）。
     judgments_table_swim_flat.cpp
@@ -157,6 +169,11 @@ add_executable(imgqa
     # `material-swim` 口径层自检（债-152）：横移不变性 / 转向不是平移 / 三条不可量支路 /
     # 注入平移闭式回收 / 覆盖率下限 / tie-break / 挂号，全部闭式不启引擎。
     selftest_material.cpp
+    # `field_diff_metric` 连续量差口径层（债-154）的自检段：mean 的千分点口径 / 空集回 0 不回
+    # NaN / 🔴 p99 下标口径 `floor(0.99·(n−1))` 的 n=1·2·101·1000 四边 / p99 既不是 max 也不是
+    # median 的反向用例（堵「尾部顶穿界」与「尾部看不见」两种相反的失效）/ 幂等 / 八条挂号，
+    # 全部闭式不启引擎。这层被影场与材质场**共用** ⟹ 它红了没有任何一条判据会响，只能靠本段。
+    selftest_field_diff.cpp
     # `shadow-swim-flat` 口径层（`shadow_transport_metric.cpp`，债-139 结案批）自检：🔴 往返恒等
     # （像素中心约定，差 0.5 就红）/ 横移不变性 / 恒等场恰 0 与无关场显著失配 / 侵蚀带三条（刀锋场
     # 零侵蚀必翻、侵蚀 2 像素后**恰 0**、两臂并集）/ 注入平移同号回收 / 覆盖率下限 / 五条守卫各抛 /
