@@ -458,7 +458,12 @@ export void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds,
  * @param out    出参：本帧 draw list（写 sceneData.wetParams / sceneData.wetSpatial）
  * @param tuning 本帧湿面参数（registry ctx，启动期由 RuntimeConfig 拷入；CPU 侧**不**
  *               clamp、不校验不变式——`strength = 0` 是合法消融档，理由 → readWetBlock 注释）
+ * @param origin 本帧渲染原点（`RenderOrigin::position`，绝对层）。🔴 是**参数不是全局**
+ *               （与 toRelative 同一条纪律：调用点传进来，接缝不自己去读别人的 ctx）
+ * @param anchor 场景锚（`WetAnchor::position`，绝对层，装配期写死）。wetSpatial.zw =
+ *               `wetAnchorOffset(origin, anchor)` = 图案的世界锚定偏移（债-152）
  */
-export void fillWetParams(FrameDrawList& out, const WetTuning& tuning);
+export void fillWetParams(FrameDrawList& out, const WetTuning& tuning,
+	const glm::dvec3& origin, const glm::dvec3& anchor);
 
 }  // namespace RGL

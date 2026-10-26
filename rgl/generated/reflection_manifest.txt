@@ -11,7 +11,7 @@ a0faeb1569713ba8a904fde50faef48c8c388242  rgl/shaders/material.slang
 2c438777a9045fc848d039f44e218be50dc76cc3  rgl/shaders/lights.slang
 a92e9a35d6a89ea4395c2082517d33046736957d  rgl/shaders/lights_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
-012287f1deff4848565d2b7289b3abb03a510e8e  rgl/shaders/scene.slang
+8889c5c6cf1cdd2b80edb912771ada7b338cba16  rgl/shaders/scene.slang
 a62ed2dd11b51ef32d98f7626d993e4d47328973  rgl/shaders/scene_forward_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
@@ -34,7 +34,7 @@ b4e1ba49e66440300ecb1edb896f74f534571df2  rgl/shaders/meshlet_cull.comp.slang
 dc706da86391289ef922df6d0cb910fe9f8d2843  rgl/shaders/cube.frag.slang
 36e236640b9a15dc229540cdc00f0f3b090f08a1  rgl/shaders/cube.mesh.slang
 e9fd016660fbc17933e695bfb8503fdf1496d78b  rgl/shaders/cull_tables.slang
-f9a41c3325c47a0c94ed12f5431967f12b3715ac  rgl/shaders/deferred_geometry.frag.slang
+b6b881abfee08f89a749116505c68543a124a95f  rgl/shaders/deferred_geometry.frag.slang
 cd9450e6ee8011dcee7a61b3f1df2adb22b37cd6  rgl/shaders/deferred_geometry_light.frag.slang
 a438962e54ea691590a92870e7a7436c539c7572  rgl/shaders/deferred_geometry_unlit.frag.slang
 e7ca6b40bcb186223d6e9bb6af603f10f13152a4  rgl/shaders/deferred_geometry_vegetation.frag.slang
@@ -53,7 +53,7 @@ db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 2e32e07500f87266c0d3425e5bef199898f469c2  rgl/shaders/normalmap.slang
 c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
-012287f1deff4848565d2b7289b3abb03a510e8e  rgl/shaders/scene.slang
+8889c5c6cf1cdd2b80edb912771ada7b338cba16  rgl/shaders/scene.slang
 8fe5a123abeb0d4c5d823c953fa90be0a5f1fdcd  rgl/shaders/scene_tables.slang
 e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
@@ -85,7 +85,7 @@ b4e1ba49e66440300ecb1edb896f74f534571df2  rgl/shaders/meshlet_cull.comp.slang
 dc706da86391289ef922df6d0cb910fe9f8d2843  rgl/shaders/cube.frag.slang
 36e236640b9a15dc229540cdc00f0f3b090f08a1  rgl/shaders/cube.mesh.slang
 e9fd016660fbc17933e695bfb8503fdf1496d78b  rgl/shaders/cull_tables.slang
-f9a41c3325c47a0c94ed12f5431967f12b3715ac  rgl/shaders/deferred_geometry.frag.slang
+b6b881abfee08f89a749116505c68543a124a95f  rgl/shaders/deferred_geometry.frag.slang
 cd9450e6ee8011dcee7a61b3f1df2adb22b37cd6  rgl/shaders/deferred_geometry_light.frag.slang
 a438962e54ea691590a92870e7a7436c539c7572  rgl/shaders/deferred_geometry_unlit.frag.slang
 e7ca6b40bcb186223d6e9bb6af603f10f13152a4  rgl/shaders/deferred_geometry_vegetation.frag.slang
@@ -104,7 +104,7 @@ db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 2e32e07500f87266c0d3425e5bef199898f469c2  rgl/shaders/normalmap.slang
 c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
-012287f1deff4848565d2b7289b3abb03a510e8e  rgl/shaders/scene.slang
+8889c5c6cf1cdd2b80edb912771ada7b338cba16  rgl/shaders/scene.slang
 8fe5a123abeb0d4c5d823c953fa90be0a5f1fdcd  rgl/shaders/scene_tables.slang
 e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang
@@ -135,7 +135,7 @@ effbf005ee0fddf5ea1f3ef0be3e952ed6fc4413  rgl/shaders/izb_prime.comp.slang
 dc706da86391289ef922df6d0cb910fe9f8d2843  rgl/shaders/cube.frag.slang
 36e236640b9a15dc229540cdc00f0f3b090f08a1  rgl/shaders/cube.mesh.slang
 e9fd016660fbc17933e695bfb8503fdf1496d78b  rgl/shaders/cull_tables.slang
-f9a41c3325c47a0c94ed12f5431967f12b3715ac  rgl/shaders/deferred_geometry.frag.slang
+b6b881abfee08f89a749116505c68543a124a95f  rgl/shaders/deferred_geometry.frag.slang
 cd9450e6ee8011dcee7a61b3f1df2adb22b37cd6  rgl/shaders/deferred_geometry_light.frag.slang
 a438962e54ea691590a92870e7a7436c539c7572  rgl/shaders/deferred_geometry_unlit.frag.slang
 e7ca6b40bcb186223d6e9bb6af603f10f13152a4  rgl/shaders/deferred_geometry_vegetation.frag.slang
@@ -155,7 +155,7 @@ db854a9ecd279d5f942795ad49d9379e91f67226  rgl/shaders/meshlet_cull.slang
 2e32e07500f87266c0d3425e5bef199898f469c2  rgl/shaders/normalmap.slang
 c9c25c3259c8ceb4aff7bcf162b1f17da7b5fa54  rgl/shaders/pbr.slang
 734339cccb45ddeed4ea966061f26b8523094cdf  rgl/shaders/picking.frag.slang
-012287f1deff4848565d2b7289b3abb03a510e8e  rgl/shaders/scene.slang
+8889c5c6cf1cdd2b80edb912771ada7b338cba16  rgl/shaders/scene.slang
 8fe5a123abeb0d4c5d823c953fa90be0a5f1fdcd  rgl/shaders/scene_tables.slang
 e4ee3a43258c8d04f2acc64e906a76056a41773d  rgl/shaders/shadow.frag.slang
 9e67c76f9f4fcbe7e27e7afbcf85070ea554be20  rgl/shaders/shadow.mesh.slang

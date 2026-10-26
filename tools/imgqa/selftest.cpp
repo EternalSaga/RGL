@@ -279,7 +279,7 @@ void testJudgmentFamilies(Checker& c)
     // 存在」（csm 臂与 none 臂逐位相同），而那种格子在误差表上是一个 NaN，与「阴影对但量不出」
     // 同形 ⟹ 必须有一条独立判据在这里分家（详见 judgments_table_edge.cpp 的 rebase 段）。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 89（族拆分最容易掉条目）", all.size() == 89, std::to_string(all.size()));
+    c.chk("判据总数 == 93（族拆分最容易掉条目）", all.size() == 93, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -590,6 +590,11 @@ int cmdSelftest()
     testBlendSort(c);
     testBlendLit(c);
     testBlendLitBuckets(c);
+    testGroundFieldReprojection(c);
+    testGroundFieldUnmeasurable(c);
+    testGroundFieldPairing(c);
+    testGroundFieldSearchGuards(c);
+    testGroundFieldCellGrid(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }

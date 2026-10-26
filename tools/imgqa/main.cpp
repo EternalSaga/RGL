@@ -194,6 +194,9 @@ int dispatch(const std::string& cmd, const Args& P)
         // 六道闸门 G1–G6 抛 = rc 3。相对坐标批 5 第 2 刀。
         { "shadow-edge-rebase", cmdShadowEdgeRebase },
         { "blend-sort", cmdBlendSort },
+        // 同上：零 flag。债-152 的守卫——材质场（G-buffer roughness）世界不变性，六臂四判据，
+        // J1/J4 修前红（量具先行：没有红读数的修复等于没修）。
+        { "material-swim", cmdMaterialSwim },
         // 同上：零 flag。债-134 的先决——透明段 lit 变体的常驻像素贡献（双臂同源 + 引擎回显条数）。
         { "blend-lit", cmdBlendLit },
     };

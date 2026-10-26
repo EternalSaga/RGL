@@ -460,6 +460,13 @@ void registerSceneEntities(entt::registry& registry, const UploadedAssets& asset
 		t = glm::rotate(t, glm::radians(ent.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 		return glm::scale(t, glm::vec3(ent.scale));
 	};
+	// 湿面图案的**世界锚**（债-152）：装配期算一次并 emplace，运行期只读——锚必须逐帧恒量
+	// （锚随帧变 = 图案换一种方式滑），做成每帧量就是把「按构造不会变」降级成「目前没变」。
+	// 放本函数而不是 main：这里已经在遍历 `scene.entities`（根平移 = 锚的唯一样本），且
+	// main_impl 的 `main()` 与文件代码行都贴着上限。缺它则 renderListSystem 的
+	// get<WetAnchor>() 当场抛，不静默按零锚跑（零锚 = 远工作点上图案又跟着原点走）。
+	registry.ctx().emplace<WetAnchor>(WetAnchor { .position = wetSceneAnchorOf(scene) });
+
 	// C2：场景实体注册（per **entity**——同文件各实例独立 rootTransform/矩阵槽；
 	// 材质经 addMaterial find-or-add 去重，重复注册返回既有 id）
 	// 批 12.6 T4：aa_target 与 model 同路（差别只在去重键 = 合成模型的固定键）

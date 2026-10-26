@@ -88,6 +88,14 @@ namespace RGL::imgqa {
 /// `shadow-edge-ruler` 段同住 `judgments_table_edge.cpp`（缝按命令切，见该文件段注释）。
 [[nodiscard]] const std::vector<JudgmentInfo>& shadowEdgeRebaseJudgments();
 
+/// 地基族 · **材质场世界不变性**（`material-swim`，债-152，4 条）：门开两机位的材质场翻转率
+/// 与滑移（主判据，修前红）/ 同机位两跑恰 0（阴性对照）/ 门关地板（堵「算子恒红」）/
+/// 注入已知世界偏移必须报出该偏移（区分力守卫，堵「算子恒绿」，修前也红）。与 `swim` 的
+/// 关系 = 同一个世界不变性形状从影场推广到材质场，共用 `ground_field_metric` 那一份对拍口径。
+/// 族仍是 Foundation（静态单帧、无时域比值口径），缝按**仪器**切。📄 正文在
+/// `judgments_table_material.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& materialSwimJudgments();
+
 /// 地基族 · **湿面/SSR 结构差分**（`diffstruct`，2 条）：变暗阳性锚点（减法在不在）/ 域外变暗
 /// 恰 0（减法有没有漏出湿区）。族仍是 Foundation（两张静态图，不涉时域比值口径），缝按**仪器**切。
 /// 📄 正文在 `judgments_table_ssr.cpp`。

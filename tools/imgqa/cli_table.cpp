@@ -538,6 +538,10 @@ std::vector<SubcommandSpec> allSpecs()
     append(shadowEdgeRulerSpecs());
     // `shadow-edge-rebase` 排在 shadow-edge-ruler 之后（同 `cli_table_edge.cpp`，缝按仪器族切）。
     append(shadowEdgeRebaseSpecs());
+    // `material-swim` 排在 shadow-edge-rebase 之后（正文住 `cli_table_material.cpp`）。同上一条
+    // 的理由：-h 顺序只是打印序，不挪既有条目。它排在影场族之后是顺带的——两台仪器共用
+    // `ground_field_metric` 那一份对拍口径，相邻能让读 -h 的人看见「同一个形状推广到材质场」。
+    append(materialSwimSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

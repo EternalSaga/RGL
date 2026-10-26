@@ -579,15 +579,21 @@ void fillSsrParams(FrameDrawList& out, const SceneBounds& bounds, const SsrTunin
  *  · wetParams  = (strength, dark, roughLo, roughHi)——身份调制系数；湿面**身份**不占参数
  *    （= 1 − smoothstep(ssrGate.x, ssrGate.y, roughness)，与 SSR 门控同区间同源，理由 →
  *    scene_data.cppm 湿面区注释）。
- *  · wetSpatial = (rippleAmp, puddleFreqRadii, 0, 0)——空间变化参数，与身份调制系数
- *    语义分组不同，故分槽。
+ *  · wetSpatial = (rippleAmp, puddleFreqRadii, 锚定偏移 x, 锚定偏移 z)——空间变化参数，与
+ *    身份调制系数语义分组不同，故分槽。zw 自债-152 起占用（此前恒 0 的「保留」位）：
+ *    🔴 水洼噪声的自变量本该是**世界** xz，而着色器手里的 P 是相对渲染原点的，原点跟相机走
+ *    ⟹ 图案整片随相机滑。zw 送「渲染原点 − 场景锚」这个小偏移，着色器算 (P + zw)·freq。
+ *    减法在 double 域做（`wetAnchorOffset`，与 toRelative 同一条「最后一步才收窄」纪律）。
  *  两槽**一次填、同源同帧**是刻意的（拆两个接缝 = 允许"系数新、空间参数旧"的半帧状态）。
  *  无条件写（同尾区纪律：不按门分支、无消费者不改像素）；CPU 侧**不 clamp 不校验**
  *  （`strength = 0` 是合法消融档、`roughLo < roughHi` 是 shader 侧不变式），理由 →
  *  readWetBlock。可测接缝声明 → render_list.cppm。 */
-void fillWetParams(FrameDrawList& out, const WetTuning& tuning) {
+void fillWetParams(FrameDrawList& out, const WetTuning& tuning, const glm::dvec3& origin,
+	const glm::dvec3& anchor) {
 	out.sceneData.wetParams = {tuning.strength, tuning.dark, tuning.roughLo, tuning.roughHi};
-	out.sceneData.wetSpatial = {tuning.rippleAmp, tuning.puddleFreqRadii, 0.0f, 0.0f};
+	const glm::dvec2 offset = wetAnchorOffset(origin, anchor);
+	out.sceneData.wetSpatial = {tuning.rippleAmp, tuning.puddleFreqRadii,
+		static_cast<float>(offset.x), static_cast<float>(offset.y)};
 }
 
 /** 每帧填 SSR + 湿面调参的 scene data 尾区（批 15.1 参数面 + 批 15.2 子步 A 湿面参数）：
@@ -595,11 +601,13 @@ void fillWetParams(FrameDrawList& out, const WetTuning& tuning) {
  *  本函数只是它们在 renderListSystem 里的**唯一调用点**——该函数已在 120 行代码红线
  *  （每新增一枚调参加一行必破线，main_impl wireSceneSpinContext 同款抽法）。两份调参
  *  都是每帧量、都由 main 启动期灌 ctx（同一 ctx 约定），口径与不变式 → scene_data.cppm
- *  各区注释。 */
+ *  各区注释。
+ *  🔴 债-152 起多带两个坐标参数（origin / anchor）走同一条「参数传进来，接缝不自己读别人」
+ *  的纪律；两者都**不**在本函数做减法之外的任何加工。 */
 void fillTuningTail(FrameDrawList& out, const SceneBounds& bounds, const SsrTuning& ssr,
-	const WetTuning& wet) {
+	const WetTuning& wet, const glm::dvec3& origin, const glm::dvec3& anchor) {
 	fillSsrParams(out, bounds, ssr);
-	fillWetParams(out, wet);
+	fillWetParams(out, wet, origin, anchor);
 }
 
 /** 簇化轴 ★1-a1i：把四张 **per-objectSlot 表**镜像进本帧 draw list（对象矩阵 / MVP / ObjectDraw
@@ -897,7 +905,11 @@ void renderListSystem(entt::registry& rg, RGL::Resources&,
 	// configs/runtime.lua 的 ssr/wet 块灌进 registry，每帧量；缺块时 ctx 里就是结构体默认值 = 出厂系数）
 	// → fillTuningTail 内两个 fill*Params 各写 scene data 尾区。湿面消费者 = deferred_geometry
 	// 湿面 G-buffer 调制（15.2B 接线，默认开）——无条件写；strength=0 消融档实测逐位 = 换锚前旧图。
-	fillTuningTail(fresh, rg.ctx().get<SceneBounds>(), rg.ctx().get<SsrTuning>(), rg.ctx().get<WetTuning>());
+	// 债-152：湿面图案的世界锚定偏移 = 本帧渲染原点 − 场景锚（两者都是**参数**传进接缝，不在
+	// fillWetParams 里自己去读别人的 ctx；与 toRelative 同一条纪律）。WetAnchor 缺 emplace 即抛
+	// ——静默按零锚跑 = 远工作点上图案又跟着原点走 = 债-152 复发，且只有图像级判据抓得到。
+	fillTuningTail(fresh, rg.ctx().get<SceneBounds>(), rg.ctx().get<SsrTuning>(),
+		rg.ctx().get<WetTuning>(), origin.position, rg.ctx().get<WetAnchor>().position);
 	fillFsrCameraInput(fresh, viewProj);  // 批 14.5：FSR 相机输入
 	// 批 12.6 TAA 载荷（三矩阵/参数，细节见 fillTaaData）
 	fillTaaData(fresh, viewProj, env, taa);

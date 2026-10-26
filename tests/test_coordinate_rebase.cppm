@@ -66,8 +66,17 @@ using RGL::snapOriginToGranularity;
 using RGL::testing::expectNear;
 using RGL::testing::Lcg;
 using RGL::toRelative;
+using RGL::wetAnchorOffset;  // 债-152：湿面图案的世界锚定偏移（原点 − 锚）
+using RGL::wetSceneAnchor;   // 债-152：湿面图案的世界锚（各 entity 根平移的均值）
 
 namespace {
+
+/// 花括号列表 → `std::span<const glm::dvec3>`（`wetSceneAnchor` 的入参形态）。
+/// 有它测试里才写得动空列表——`span` 推不出 `{}`，而写 `std::array<dvec3,0>` 会把
+/// 「空」这个语义淹在模板参数里。
+glm::dvec3 anchorOf(std::initializer_list<glm::dvec3> roots) {
+	return wetSceneAnchor(std::vector<glm::dvec3>(roots));
+}
 
 /** 判据：v 是 2 的幂（frexp 尾数恰 0.5 ⟺ v = 2^k，闭式定义，不依赖被测码）。 */
 bool isPowerOfTwo(double v) {
@@ -823,6 +832,55 @@ TEST_CASE("motionWithOriginShift 恒等早退的第二档：门开但原点未�
 		REQUIRE(o != glm::dvec3{0.0});  // 前提：这条测的是「门开但没动」，不是门关
 		checkMat4BitwiseEqual(motionWithOriginShift(glm::mat4{1.0f}, o, o), glm::mat4{1.0f});
 	}
+}
+
+TEST_CASE("wetSceneAnchor：空列表 / 单 entity 恰等于它自己 / 出厂恰零 / 多 entity 取均值（债-152）") {
+	// 锚的三条裁决（→ coordinate_rebase::wetSceneAnchor 头注释）里前两条在本用例钉死：
+	//  · **出厂恰零**：出厂 scene.lua 的 entities 不写 position ⟹ 根平移恰 (0,0,0)。这是
+	//    「门关态三枚截图锚逐位不变」的前提之一（另一半是门关原点恒零），写不出图像级判据
+	//    之前先在这里钉住，别等截图锚动了再回头找。
+	//  · **单 entity 恰等于它自己**：现网全部靶与出厂场景都是单 entity，均值必须是它本身
+	//    （sum/1 在 IEEE 下精确），不能是"约等于"。
+	CHECK(anchorOf({}) == glm::dvec3 { 0.0 });  // 空 = 无实体可锚
+	const glm::dvec3 factory { 0.0, 0.0, 0.0 };
+	CHECK(anchorOf({ factory }) == factory);  // 🔴 出厂工作点：恰零（逐位，不是 Approx）
+	const glm::dvec3 far { 1e6, 0.0, -250.5 };
+	CHECK(anchorOf({ far }) == far);  // 远工作点单 entity：恰等于它自己
+	const glm::dvec3 a { 10.0, 0.0, 0.0 }, b { 20.0, 4.0, -8.0 };
+	CHECK(anchorOf({ a, b }) == glm::dvec3 { 15.0, 2.0, -4.0 });  // 均值闭式（二进制精确）
+	// 相机无关性（🔴 硬要求，锚含相机 = 把滑移换个地方藏起来）：本函数的入参类型里
+	// **没有相机**，也没有每帧量——它只吃 entity 根平移列表。这条钉的是"签名即护栏"：
+	// 若有人把相机位姿掺进锚，必然要改这个签名 ⟹ 本用例的入参形态跟着红。
+	CHECK(anchorOf({ far }) == anchorOf({ far }));  // 同一入参 ⟹ 逐位同值（恒量）
+}
+
+TEST_CASE("wetAnchorOffset：出厂恰 +0 / 远工作点是米量级小数 / 减法必须在 double 域（债-152）") {
+	// 门关出厂（原点恒零 + 锚恰零）⟹ 偏移恰 +0 ⟹ shader 里 `P.xz + 0` 与改前逐位相同。
+	const glm::dvec2 zero = wetAnchorOffset(glm::dvec3 { 0.0 }, glm::dvec3 { 0.0 });
+	CHECK(zero.x == 0.0f);
+	CHECK(zero.y == 0.0f);
+	CHECK(!std::signbit(zero.x));   // +0，不是 −0
+	CHECK(!std::signbit(zero.y));
+
+	// 只吃 xz：y 分量再大也不许进偏移（图案自变量 = 世界 xz，含 y 就是另一套坐标）。
+	const glm::dvec2 yOnly = wetAnchorOffset(glm::dvec3 { 0.0, 5e6, 0.0 }, glm::dvec3 { 0.0 });
+	CHECK(yOnly.x == 0.0f);
+	CHECK(yOnly.y == 0.0f);
+
+	// 远工作点：偏移 = 小量，且**先在 float 里做差会得到不同的数**（阳性对照，同 toRelative
+	// 单测手法）。0.03125 = 半个 ULP(1e6) ⟹ float 表示不出来、double 精确。
+	const glm::dvec3 origin { 1e6 + 0.03125, 0.75, 1e6 - 0.03125 };
+	const glm::dvec3 anchor { 1e6, 0.0, 1e6 };
+	const glm::dvec2 off = wetAnchorOffset(origin, anchor);
+	CHECK(off.x == 0.03125f);
+	CHECK(off.y == -0.03125f);
+	CHECK(float(origin.x) - float(anchor.x) != off.x);      // float 先行的结果 ≠ double 先行
+	CHECK(std::abs(off.x) < 1.0f);  // 「小量」：图案自变量全程小数
+	CHECK(std::abs(off.y) < 1.0f);
+
+	// 🔴 反面对照（任务书明令禁止的修法）：把原点直接加回去会把 ~1e7 喂进 float32 噪声。
+	// 这里钉的是「偏移量级 ≪ 原点量级」这个事实本身——它是修法成立的全部理由。
+	CHECK(std::abs(off.x) * 1e7f < static_cast<float>(std::abs(origin.x)));
 }
 
 }  // TEST_SUITE coordinate_rebase

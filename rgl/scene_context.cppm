@@ -844,4 +844,30 @@ export struct RenderOrigin {
 	bool enabled = false;   ///< 配置门 = configs/runtime.lua `coordinate.rebase`（默认 false = 门关）
 };
 
+/**
+ * 湿面图案的世界锚（registry context，债-152）。生产 = main 装配期一次（`wireWetAnchorContext`，
+ * 值 = `coordinate_rebase::wetSceneAnchor(scene.entities 各根平移)`）；唯一消费者 =
+ * renderListSystem 的 `fillWetParams`（算出「原点 − 锚」写进 scene data 湿面区 spatial.zw，
+ * 着色器侧 `q = (P.xz + spatial.zw) · freq`）。
+ *
+ * ## 它治的是什么
+ *
+ * 水洼噪声的自变量本该是**世界** xz，而 rebase 之后着色器手里的 `P` 是相对渲染原点的；
+ * 原点每帧 snap 到级联纹素粒度并跟相机走 ⟹ 图案整片随相机滑。锚给图案一个场景固定的原点，
+ * 传进着色器的只是「渲染原点离该锚多远」这个小量。🔴 不能直接把原点加回去：1e6 工作点上
+ * 那会把 ~1e7 喂进 float32 值噪声（ULP ≈ 1）⟹ 噪声被毁，且毁在 rebase 专门要支持的坐标上。
+ * 三条候选锚的完整裁决（相机无关 / 出厂恰零 / 离场景够近）→ `wetSceneAnchor` 的头注释。
+ *
+ * ## 为什么是 ctx 而不是每帧量
+ *
+ * 它**必须**逐帧恒量：锚若随帧变，图案就换一种方式滑。装配期写一次、运行期只读，把「恒量」
+ * 变成结构事实（而不是「目前看起来没变」）。与 `ClusterRangeTable` 同一形态（启动期装配层写、
+ * 每帧只搬 span/值）。缺省构造 = (0,0,0) = 出厂工作点的值，但生产路径**必须**显式 emplace：
+ * renderListSystem 用 `ctx().get<WetAnchor>()`，漏接线当场抛而不是静默按零锚跑
+ * （零锚 = 远工作点上图案又跟着原点走 = 债-152 复发，而 `imgqa material-swim` 的 J4 会红）。
+ */
+export struct WetAnchor {
+	glm::dvec3 position{};  ///< 场景锚（绝对层）。出厂场景（entity 不写 position）⟹ 恰 (0,0,0)
+};
+
 }  // namespace RGL

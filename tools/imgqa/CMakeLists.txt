@@ -32,6 +32,8 @@ add_executable(imgqa
     cli_table_survival.cpp
     # `shadow-edge-ruler` 的 spec 段（同 survival 段的拆法，缝按仪器切）。
     cli_table_edge.cpp
+    # `material-swim` 的 spec 段（债-152，同 edge 段的拆法：主表撞 500 行，缝按仪器切）。
+    cli_table_material.cpp
     analytic.cpp
     ao_metrics.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
@@ -91,6 +93,8 @@ add_executable(imgqa
     # 只报数】/ |误差| 随 D 单调不减），缝按仪器切（`judgments_table_survival.cpp` 把头注缝
     # 声明为「本段两条属于 shadow-caster-survival」）。
     judgments_table_edge.cpp
+    # `material-swim` 判据段（债-152，4 条），缝按仪器切（同 edge / ssr / block 段）。
+    judgments_table_material.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -144,6 +148,9 @@ add_executable(imgqa
     # worldPerpMm 闭式 / 级联公式链闭式对账 / 闸门 C·D（含零臂·零板空集合守卫）/ 挂号，
     # 全部闭式不启引擎（合成 cov 场直打 `shadow_edge_metric.cpp`）。
     selftest_edge.cpp
+    # `material-swim` 口径层自检（债-152）：横移不变性 / 转向不是平移 / 三条不可量支路 /
+    # 注入平移闭式回收 / 覆盖率下限 / tie-break / 挂号，全部闭式不启引擎。
+    selftest_material.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -300,6 +307,14 @@ add_executable(imgqa
     # 跨 TU 面（`shadow_edge_ruler.h`），两台仪器共用。第 9 例外门住 `engine_profile_gates.cpp`。
     shadow_edge_rebase.cpp
     shadow_edge_rebase_judge.cpp
+    # `material-swim`（债-152 的守卫：材质场世界不变性）。拆两 TU 的缝同 shadow_edge_*：
+    # `ground_field_metric.cpp` = **口径层**（世界 y=0 平面二值场：重投影 / 共同格计数 /
+    # 平移搜索，被 selftest_material.cpp 闭式直测），🔴 同时是 `swim`（影场）与 `material-swim`
+    # （材质场）**共用**的那一份对拍口径——从 rig_shadow_field.cpp 的匿名 namespace 抬出来，
+    # 不是抄第二份（AGENTS 哲学第 1 条：两份口径会漂，漂了之后两台仪器各说各话）；
+    # `material_swim.cpp` = 仪器层（六臂表 + 采集 + 回显对账 + G1–G5 + J1–J4）。
+    ground_field_metric.cpp
+    material_swim.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器

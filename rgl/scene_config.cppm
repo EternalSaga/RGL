@@ -6,6 +6,7 @@ import rlstd;
 import vkerror;
 import rllogger;
 import scene_context;
+import coordinate_rebase;  // wetSceneAnchor（债-152 湿面图案的世界锚，坐标层纯函数）
 
 namespace RGL {
 
@@ -242,5 +243,25 @@ export std::string resolvePipelineSpecName(const SceneConfig& scene,
  */
 export [[nodiscard]] std::expected<SceneConfig, Error> loadSceneConfig(
 	std::string_view path, SceneKeyTrace* trace = nullptr);
+
+/**
+ * 湿面图案的**世界锚**（债-152）= 本场景各 entity 根平移的均值（绝对层）。
+ *
+ * 算法、三条候选锚的裁决（相机无关 / 出厂恰零 / 离场景够近）、以及「为什么不能把渲染原点
+ * 直接加回去」全在 coordinate_rebase::wetSceneAnchor 的头注释，本函数只做一件事：把
+ * `SceneConfig::entities` 的 `position` 列出来喂给它。放在本模块（而不是 main）的理由：
+ * 「场景在哪」是**场景配置**的事实，而 main_impl 的文件代码行已经贴着 500 上限——为了塞
+ * 六行去拆一个无关文件是错的取舍。
+ *
+ * 生产点 = main 启动流里 emplace 进 `WetAnchor` ctx（装配期一次、运行期只读）；唯一消费者
+ * = renderListSystem → fillWetParams（算「原点 − 锚」写进 scene data 湿面区 spatial.zw）。
+ */
+export inline glm::dvec3 wetSceneAnchorOf(const SceneConfig& scene) {
+	std::vector<glm::dvec3> roots;
+	roots.reserve(scene.entities.size());
+	for (const auto& ent : scene.entities)
+		roots.push_back(ent.position);  // 绝对层 double（相对坐标批 2 第一刀起）
+	return wetSceneAnchor(roots);
+}
 
 }  // namespace RGL

@@ -853,6 +853,20 @@ int cmdIzb(const std::string& glb, const std::string& camera);
 /// 影场世界不变量（同场景两机位、静态太阳 ⟹ 影场必须跟着世界走）：机位平移 `dx` 后重投影比影场，
 /// 零位移失配 = 地板，搜索到的最优平移 = 世界位移的证据。定义在 `rig_shadow_field.cpp`。
 int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool izb, bool evssm);
+
+/**
+ * **材质场世界不变量**（债-152 的守卫，`material-swim`）：把上面那条影场判据的「机位平移后
+ * 重投影比场、期望 0 位移」形状从影场推广到**材质场**（G-buffer metalrough 的 roughness 通道）。
+ *
+ * 缺陷本体 = `deferred_geometry.frag.slang:156` 的 `q = P.xz * freq` 吃的是**相对渲染原点**的
+ * 坐标，而原点每帧 snap 到级联纹素粒度并跟相机走 ⟹ 水洼图案整片随相机滑。批 5 的静态单姿态
+ * 对拍对它结构性失明（判据失明第四例：激励形态不对，换算子救不回来）⟹ 本命令换激励。
+ *
+ * 🔴 **无 flag 是设计**（同 shadow-edge-ruler / shadow-edge-rebase）：靶 / 机位 / 平移量 /
+ * 尺寸 / 格边长 / 阈值都是量具的组成部分，能调 = 能调绿。六臂四判据 + 五道闸门（抛 rc=3）
+ * 的全部论证 → `material_swim.cpp` 头注释；容差理由与 guard 出处 → `imgqa check`。
+ */
+int cmdMaterialSwim();
 /// 闭式解探针（12.3b 接替 analytic_ref.py --probe；2026-10-18 重立到 deferred 双锚）：
 /// 消费 qa/configs/analytic 冻结配置（六门逐项关掉写在注释里），**RPC 模式单启动三拍**
 /// （后缓冲 + gbuf 通道 0/3；副本只改回读管线键 rpc/llm_debug，渲染门一个不碰），

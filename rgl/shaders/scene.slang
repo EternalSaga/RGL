@@ -575,7 +575,9 @@ float4 readSsrGate()
 struct WetParamsBlock
 {
     float4 params;   // (strength, dark, roughLo, roughHi) = 身份调制系数（@0）
-    float4 spatial;  // (rippleAmp, puddleFreqRadii, 保留, 保留) = 空间变化参数（@16）
+    // (rippleAmp, puddleFreqRadii, 锚定偏移 x, 锚定偏移 z) = 空间变化参数（@16）。
+    // 🔴 zw 自债-152 起**占用**（此前是「保留」）= 图案锚定偏移，见 readWetSpatial。
+    float4 spatial;
 };
 
 [[vk::binding(32, 0)]]
@@ -587,9 +589,13 @@ float4 readWetParams()
 }
 
 // 湿面空间变化参数（x = rippleAmp 水膜法线扰动幅度、y = puddleFreqRadii 水洼噪声频率
-// = 本值 / sceneRadius，尺度无关口径同 ssrParams.x 的锚点；zw 保留）。消费者 = deferred
-// _geometry 湿面 G-buffer 调制（15.2B 已接线）；⚠ wetParams 的 z < w（roughLo < roughHi，反了 = 空间
+// = 本值 / sceneRadius，尺度无关口径同 ssrParams.x 的锚点；🔴 zw = **图案锚定偏移** =
+// 「本帧渲染原点 − 场景锚」的 xz，由 CPU 在 double 域做差后收窄，见 deferred_geometry 注）。
+// 消费者 = deferred_geometry 湿面 G-buffer 调制（15.2B 已接线）；⚠ wetParams 的 z < w（roughLo < roughHi，反了 = 空间
 // 调制方向倒置），不变式落点与「配置层为何不校验」→ scene_data.cppm 湿面区语义注释（params 槽）。
+// 🔴 zw **不是**调参旋钮：它由 fillWetParams 每帧按渲染原点算，配置里没有对应键。出厂工作点
+// （entity 不写 position）+ 门关（原点恒零）⟹ zw 恒 (+0.0, +0.0) ⟹ 消费点 `P.xz + zw` 与
+// 债-152 之前逐位相同（三枚截图锚逐位不变就是这条的图像级判据）。
 float4 readWetSpatial()
 {
     return sceneWet.spatial;

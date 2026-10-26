@@ -17,6 +17,7 @@
 //
 // 两条命令的**声明在 imgqa.h**（本仓惯例：实现分散、声明集中，不为拆 TU 另设声明头）。
 #include "imgqa.h"
+#include "ground_field_metric.h"
 
 #include <algorithm>
 #include <cmath>
@@ -137,67 +138,18 @@ int cmdIzb(const std::string& glb, const std::string& camera)
 
 namespace {
 
-/// 影场格 = 世界 y=0 平面上的栅格坐标（swim 的读数单位：一格 5cm）。
-using GroundCell = std::pair<int, int>;
-
-/// 多数票之后的影场：格 → 受光（true）/ 遮阴影（false）。
-using ShadowField = std::map<GroundCell, bool>;
-
-/// 重投影基向量与视锥参数（引擎口径：fb 行 0 ↔ ndc.y +1；fov 竖直，x 乘 aspect）。
-struct GroundCamera {
-    glm::vec3 pos;   ///< 机位
-    glm::vec3 fw;    ///< 前向（target − position 归一化）
-    glm::vec3 rt;    ///< 右向
-    glm::vec3 up;    ///< 上向
-    double tanH;     ///< 半高视场的正切（fov 是竖直的 ⟹ 换算除以 360 不是 2）
-    double aspect;   ///< 宽/高，x 方向要乘它
-};
-
-/// 两场地面的重叠计数（零位移主判据与平移搜索**共用同一条计数口径**，两处各写一份 = 两个口径）。
-struct FieldOverlap {
-    int common = 0;     ///< 共同格数
-    int mismatch = 0;   ///< 共同格里受光性不一致的格数
-};
-
-/// 平移搜索的读数。未触发搜索时保持零位移初值（x=z=0、失配 = 零位移失配数）。
-struct ShiftSearch {
-    int x = 0;
-    int z = 0;
-    size_t mismatch = 0;
-};
+/// swim 的读数单位：一格 5cm（`ground_field_metric.h` 的口径层参数，不是口径本身）。
+constexpr double kSwimCellM = 0.05;
+/// 交点距离上限（米）——超出即认为不可信（swim 改前的硬编码值，逐字继承）。
+constexpr double kSwimMaxDistanceM = 5000.0;
+/// 平移搜索半径（格）= ±50cm（同上，逐字继承）。
+constexpr int kSwimSearchRadius = 10;
 
 /// 从截图自带的机位算重投影基向量。两帧各算各的：与引擎有出入也只会**同样地**翘曲两帧。
 GroundCamera groundCameraOf(const Frame& f)
 {
-    const glm::vec3 pos(f.camera.position[0], f.camera.position[1], f.camera.position[2]);
-    const glm::vec3 tgt(f.camera.target[0], f.camera.target[1], f.camera.target[2]);
-    const glm::vec3 fw = glm::normalize(tgt - pos);
-    const glm::vec3 rt = glm::normalize(glm::cross(fw, glm::vec3(0.f, 1.f, 0.f)));
-    const glm::vec3 up = glm::cross(rt, fw);
-    const double tanH = std::tan(f.camera.fovDegrees * 3.14159265358979 / 360.0);
-    const double aspect = static_cast<double>(f.bgr.cols) / f.bgr.rows;
-    return GroundCamera{pos, fw, rt, up, tanH, aspect};
-}
-
-/// 像素 (x,y) 的视线与世界 y=0 平面交点所在的格。视线近平行于地面（|dir.y| < 1e-6）或交点出界
-/// （t ≤ 0、t > 5000）= 这一像素量不到，返回 false（原实现：continue 跳过）。
-bool groundCellOf(const GroundCamera& cam, int x, int y, const cv::Size& extent,
-    GroundCell& cell)
-{
-    const double nx = (x + 0.5) / extent.width * 2.0 - 1.0;
-    const double ny = 1.0 - (y + 0.5) / extent.height * 2.0;
-    const glm::vec3 dir = glm::normalize(cam.fw
-        + cam.rt * static_cast<float>(nx * cam.tanH * cam.aspect)
-        + cam.up * static_cast<float>(ny * cam.tanH));
-    if (std::abs(dir.y) < 1e-6)
-        return false;
-    const double t = -cam.pos.y / dir.y;
-    if (t <= 0 || t > 5000.0)
-        return false;
-    const glm::vec3 w = cam.pos + dir * static_cast<float>(t);
-    cell = std::make_pair(static_cast<int>(std::floor(w.x / 0.05)),
-        static_cast<int>(std::floor(w.z / 0.05)));
-    return true;
+    return makeGroundCamera(f.camera.position, f.camera.target, f.camera.fovDegrees,
+        f.bgr.cols, f.bgr.rows);
 }
 
 /// 阴影阈值 = 地面亮度 p95 × 0.3（env=0 解析光照：受光亮/遮黑双峰，居中判）。
@@ -225,7 +177,7 @@ std::map<GroundCell, int> voteGround(const Frame& f, const cv::Mat& gnd, double 
             if (!gnd.at<uint8_t>(y, x))
                 continue;
             GroundCell cell;
-            if (!groundCellOf(cam, x, y, f.bgr.size(), cell))
+            if (!groundCellOf(cam, x, y, kSwimCellM, kSwimMaxDistanceM, cell))
                 continue;
             votes[cell] += f.luma.at<double>(y, x) < thr ? 1 : -1;
         }
@@ -233,9 +185,9 @@ std::map<GroundCell, int> voteGround(const Frame& f, const cv::Mat& gnd, double 
 }
 
 /// 格内多数票 → 二值影场：格内至少 2 票同向才要（5cm 格 ≈ 3~4 像素，边缘半格噪声丢弃）。
-ShadowField majorityField(const std::map<GroundCell, int>& votes)
+GroundField majorityField(const std::map<GroundCell, int>& votes)
 {
-    ShadowField field;
+    GroundField field;
     for (const auto& [c, v] : votes)
         if (std::abs(v) >= 2)
             field[c] = v > 0;
@@ -244,53 +196,12 @@ ShadowField majorityField(const std::map<GroundCell, int>& votes)
 
 /// 一帧的地面影场：阈值 → 重投影投票 → 多数票（原先是 cmdSwim 里的内联 lambda，
 /// 独立计认知复杂度 26 > 15；拆成上面四个各 ≤ 15 的小函数后本函数只做串联）。
-ShadowField groundField(const Frame& f, const Manifest& m)
+GroundField groundField(const Frame& f, const Manifest& m)
 {
     const Attribution at = attribute(f, m);
     const cv::Mat gnd = maskOfPiece(f, at, "ground");
     const double thr = groundShadowThreshold(f, gnd);
     return majorityField(voteGround(f, gnd, thr));
-}
-
-/// 两场在平移 (sx,sz) 下的共同格数与失配格数；(0,0) 就是主判据要的零位移读数。
-FieldOverlap overlapOf(const ShadowField& a, const ShadowField& b, int sx, int sz)
-{
-    FieldOverlap o;
-    for (const auto& [c, sh] : a) {
-        const auto hit = b.find({c.first + sx, c.second + sz});
-        if (hit == b.end())
-            continue;
-        ++o.common;
-        if (hit->second != sh)
-            ++o.mismatch;
-    }
-    return o;
-}
-
-/// 对 B 场做 ±10 格平移搜索——**最优平移 = 影子在世界里滑了多少**。候选覆盖率以零位移
-/// 共同格数为基准（不足 8/10 不可信，防止把低覆盖的角落平移当最优解——首跑 48 格教训），
-/// 同失配取覆盖更高者。
-ShiftSearch searchShift(const ShadowField& a, const ShadowField& b, int common0,
-    size_t initialMismatch)
-{
-    ShiftSearch best;
-    best.mismatch = initialMismatch;
-    size_t bestN = 0;
-    for (int sz = -10; sz <= 10; ++sz)
-        for (int sx = -10; sx <= 10; ++sx) {
-            const FieldOverlap o = overlapOf(a, b, sx, sz);
-            const size_t mm = static_cast<size_t>(o.mismatch);
-            const size_t n = static_cast<size_t>(o.common);
-            if (n < static_cast<size_t>(common0) * 8 / 10)
-                continue;  // 覆盖率不足，该候选不可信
-            if (mm < best.mismatch || (mm == best.mismatch && n > bestN)) {
-                best.mismatch = mm;
-                bestN = n;
-                best.x = sx;
-                best.z = sz;
-            }
-        }
-    return best;
 }
 
 /// 采集一个机位的地面帧（swim 两臂只差机位）。影场配置 = 固定五项 + izb/evssm 由调用侧给。
@@ -328,8 +239,8 @@ int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool i
     camB.target[0] += dx;
     const Frame fA = captureSwimGround(glb, it->second, "swim_a", izb, evssm);
     const Frame fB = captureSwimGround(glb, camB, "swim_b", izb, evssm);
-    const ShadowField fieldA = groundField(fA, man);
-    const ShadowField fieldB = groundField(fB, man);
+    const GroundField fieldA = groundField(fA, man);
+    const GroundField fieldB = groundField(fB, man);
 
     // 零位移失配 = 主判据；FAIL 才做平移搜索量化"滑了多少"（候选覆盖率以零位移
     // 共同格数为基准，防止把低覆盖的角落平移当最优解——首跑 48 格教训）
@@ -341,7 +252,7 @@ int cmdSwim(const std::string& glb, const std::string& camera, double dx, bool i
     ShiftSearch best;
     best.mismatch = static_cast<size_t>(mismatchAt0);
     if (mismatchAt0 > std::max(20, common0 / 200))
-        best = searchShift(fieldA, fieldB, common0, best.mismatch);
+        best = searchShift(fieldA, fieldB, common0, best.mismatch, kSwimSearchRadius);
     std::printf("  最优平移 (%d, %d) 格 = (%.0f, %.0f) cm，失配 %zu\n", best.x, best.z,
         best.x * 5.0, best.z * 5.0, best.mismatch);
     const bool still = mismatchAt0 <= std::max(20, common0 / 200);

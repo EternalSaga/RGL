@@ -153,7 +153,17 @@ void main(
         //（尺度无关，锚点 = readSsrParams().x，与 SSR 同一颗 SceneBounds.radius 球）；
         // 1e-6 是空场景防零除守卫不是调定值（同 ssr.frag 的 maxDistance 守卫）。
         float freq = ws.y / max(readSsrParams().x, 1e-6);
-        float2 q = P.xz * freq;
+        // 🔴 **图案自变量 = 世界 − 场景锚，不是「相对渲染原点的世界坐标」**（债-152）。
+        // P 是相对渲染原点的（rebase 之后），而原点每帧 snap 到级联纹素粒度并跟相机走 ⟹
+        // 只写 `P.xz * freq` 的话，整片水洼场随相机平移（用户肉眼所见：湿面反光随相机游）。
+        // ws.zw = 「渲染原点 − 场景锚」的 xz（CPU 在 double 域做差后收窄），加上它得到
+        // (world − anchor)·freq —— 三项全程小量。
+        // 🔴 为什么不是 `q = (P + origin)·freq`（把原点直接加回去）：远工作点（+1e6）下
+        // freq ≈ 10 ⟹ 把 ~1e7 喂进 float32 值噪声，ULP(1e7) ≈ 1 ⟹ 噪声直接被毁，而且毁在
+        // rebase 专门要支持的那些坐标上。锚的选择与三条裁决（相机无关 / 出厂恰零 / 离场景
+        // 够近）→ coordinate_rebase.cppm 的 wetSceneAnchor 头注释。
+        // 出厂工作点 + 门关（原点恒零）⟹ ws.zw = (+0, +0) ⟹ 本式与改前逐位相同。
+        float2 q = (P.xz + ws.zw) * freq;
         float n = wetFbm(q);
         // 0.45/0.65（内部常数，不是旋钮）：0.45 以下是干石、0.65 以上满水洼，带宽 0.2 ≈
         // 噪声特征尺寸的 1/3，再窄出水洼硬边、再宽水洼轮廓糊掉。upness 0.3/0.7：水只聚

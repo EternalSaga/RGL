@@ -303,4 +303,70 @@ export glm::mat4 motionWithOriginShift(const glm::mat4& spinRatio, const glm::dv
 	return toRelative(absolute, previousOrigin);  // 减法仍然只由 toRelative 做那一次
 }
 
+/**
+ * 湿面图案的**世界锚**（债-152）= 各 entity 根平移的均值（绝对层，逐分量）。
+ *
+ * ## 为什么需要一枚锚（缺陷本体，钉到行）
+ *
+ * `rgl/shaders/deferred_geometry.frag.slang` 的水洼掩码 = 低频值噪声，自变量本该是**世界
+ * xz**（意图 = 画在场景表面上的图案）。rebase 之后送进着色器的 `P` 是**相对渲染原点**的坐标，
+ * 而原点每帧 snap 到级联纹素粒度并跟着相机走 ⟹ 噪声场整片随相机平移（用户肉眼所见）。
+ *
+ * ## 🔴 为什么不能「把原点加回去」（`q = (P + origin)·freq`）
+ *
+ * 大坐标工作点上 bistro 的 `freq = puddleFreqRadii / sceneRadius ≈ 10` ⟹ 1e6 处会把 ~1e7
+ * 喂进 float32 值噪声：ULP(1e7) ≈ 1 ⟹ **噪声直接被毁**，而且毁在 rebase 专门要支持的那些
+ * 坐标上。修法只有一条：图案的自变量换成「世界 − 锚」，只把**渲染原点到该锚的小偏移**传进
+ * 着色器（`q = (P + (origin − anchor))·freq`，三项全程是小量）。
+ *
+ * ## 为什么锚取「entity 根平移的均值」，三个候选的裁决
+ *
+ * ① **相机无关**（硬要求）：锚若含相机，就是把滑移换个地方藏起来。根平移来自 scene.lua 的
+ *   `entities[i].position`，装配期写死、运行期只读 ⟹ 逐帧恒量。
+ * ② **出厂工作点上恰为零**（本批红线：门关态三枚截图锚逐位不变，且**没有**重立锚的授权）。
+ *   出厂 `entities` 不写 `position` ⟹ 根平移恰 (0,0,0) ⟹ 均值恰 (0,0,0) ⟹ 偏移 = 原点 − 锚
+ *   在门关态（原点恒零）是 `0.0 − 0.0` **恰为零** ⟹ 着色器里 `(P + 0)` 与改前逐字同。
+ *   候选「场景包围球心」（`SceneBounds.center`）**过不了这条**：它是资产几何的派生量，出厂
+ *   bistro 的球心 xz 不保证恰零，一次资产改动就会静默挪动出厂画面。
+ * ③ **离场景够近**（精度要求）：偏移 = |origin − anchor| 要小，否则大数又进 float32。远工作点
+ *   （整场景 +1e6）下根平移 = 1e6、原点 snap 后 ≈ 1e6 ⟹ 偏移是米量级 ✓；候选 ① 的球心同样
+ *   够近，但过不了 ②。
+ * 多 entity 场景取**均值**：单 entity（现网全部靶与出厂场景）⟹ 恰等于它自己（`sum/1` 在 IEEE
+ * 下精确）；多 entity 时它是各根平移的凸组合 ⟹ 仍落在场景点集包络内，③ 继续成立。
+ * 空列表返回 (0,0,0)：无实体可锚（也是「门关逐位不变」要求的那个值）。
+ *
+ * ⚠ 入参刻意是**裸的根平移列表**而不是 `SceneEntityDesc` 列表：本模块在 rlbase，而场景配置
+ * 类型在 rlscene 侧——为了两行求和去 import 配置模块，会让「坐标层的纯数学」拖上 sol2 的编译
+ * 前置（分层判据 → AGENTS「引擎四库分层」；调用点 = main 的装配层，它两边都认识）。
+ *
+ * @param entityRootPositions 各 entity 的根平移（绝对层 double，批 2 第一刀起就是 double）
+ */
+export glm::dvec3 wetSceneAnchor(std::span<const glm::dvec3> entityRootPositions) {
+	if (entityRootPositions.empty())
+		return glm::dvec3{0.0};
+	glm::dvec3 sum{0.0};
+	for (const auto& p : entityRootPositions)
+		sum += p;
+	return sum / static_cast<double>(entityRootPositions.size());
+}
+
+/**
+ * 送进着色器的**锚定偏移** = 渲染原点 − 场景锚，取 xz 两分量（湿面图案只吃 xz）。
+ *
+ * 🔴 减法必须在 double 域做完**最后一步才收窄**（与 `toRelative` 同一条纪律，同一条理由）：
+ * 先在 float 里各存一份 1e6 再相减，丢掉的尾数救不回来（ULP(1e6) = 0.0625 m，比水洼噪声
+ * 特征尺寸粗两个量级）。收窄到 float32 的是**差**本身，它是米量级的小数，表示精确。
+ *
+ * 门关态（原点恒 (0,0,0)）+ 出厂场景（锚恰 (0,0,0)）⟹ 返回 `(+0.0f, +0.0f)`，着色器里
+ * `P.xz + 0.0` 与改前逐位相同（三枚截图锚的逐位不变性由 `just regress` 与 `imgqa
+ * material-swim` 的 J3 共同守）。
+ *
+ * @param origin 本帧渲染原点（`RenderOrigin::position`，绝对层）
+ * @param anchor 场景锚（`wetSceneAnchor` 的产物，绝对层）
+ */
+export glm::dvec2 wetAnchorOffset(const glm::dvec3& origin, const glm::dvec3& anchor) {
+	const glm::dvec3 delta = origin - anchor;  // double 域做差
+	return glm::dvec2 { static_cast<float>(delta.x), static_cast<float>(delta.z) };
+}
+
 }  // namespace RGL
