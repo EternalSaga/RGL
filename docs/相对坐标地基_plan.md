@@ -1096,6 +1096,70 @@ CPU 侧下发 `params.x = W / 级 0 跨度` ⟹ `.slang` 与 `rgl/generated/` �
 ⚠ 这与第 6 刀被批评的「记成已知地雷」不同——**区别在于下一批的第一个动作就是拆**，
 且 `ecs_impl.cppm` 只剩 3 行余量，任何改动都必然撞上。
 
+#### ✅ 批 5 第 10 刀（2026-10-26）：拆 `ecs_impl`（497/500）与 `runtime_config_impl`（481/500）——第 9 刀排的那笔账当批就还了
+
+第 9 刀的收尾记录写明「下一批第一个动作就是拆这两个文件」，**这一刀就是那一批**——
+不是「记成已知地雷等以后」（第 6 刀被用户否掉的那个处置），也不是「挪去有余量的文件凑数字」。
+
+| 文件 | 拆前 | 拆后 |
+|---|---|---|
+| `ecs_impl.cppm` | **497 / 500**（只剩 3 行余量） | **299** |
+| `runtime_config_impl.cppm` | **481 / 500** | **202** |
+| 新增 `ecs_frame_input.cppm` / `runtime_config_keys.cppm` / `runtime_config_failfast.cppm` | — | 215 / 99 / 199 |
+
+六个文件全部 ≤ 420，最重函数 104 < 120。阈值与基线一个字没动、零抑制注释。
+
+**三条缝的判据**（写在文件头与 CMake 登记注释里，不是「哪个文件有空位」）：
+- **`ecs:frame_input`** = 三条独立判据落在同一条缝上：生命周期阶段全是「帧首、system 链之前那一拍」；
+  数据流方向全是「外部源 → registry context」（留在 `:impl` 的 animation/bounds/projection/taa 是
+  **registry→registry 纯几何变换、零外部源**）；可选性同构（钩子未装配 / 门未开 = 零调用早退）。
+  可机械复核的推论：本分区不出现 `ViewProjection`/`RenderOrigin`，而 `SDL_PollEvent` 作为调用全仓只在此处 1 处。
+- **`runtime_config:keys`** = 进出全是键名（`string_view` / `RuntimeKeyTrace`）、**一处不写 `RuntimeConfig` 字段**，
+  且它同时是 tests 覆盖率断言与 gate_lint 读的对外名单 ⟹ 「改一个字段」与「改一份对外承诺的名单」
+  不该落在同一个 diff 里。
+- **`runtime_config:failfast`** = 错误处理契约，**而且这条缝源码里本来就写好了**：
+  `applyFailFastKeys` 头注早已把它们成组（「新增 fail-fast 键 = 在此加一行」），本刀只是把那条注释指向一个文件。
+  与留下的宽容装配是**刻意相反**的契约（`ssr` / `wet` 明写「原样透传，一条 warn 都不发」）——
+  两种相反契约混在一处，正是「顺手给 ssr 也补一句 clamp」最容易发生的地方。
+
+**🔴 执行者否掉了任务书举例的那条缝，两条理由都成立。** 我举例说按「`projectionSystem` 一族 vs `renderSystem`」切。
+它复核后拒绝：① 单切不够（那一族 226 行、驱动侧 218 行，另一边仍 444 > 420，当不了唯一的缝）；
+② 🔴 更要紧的是它**会把一条契约拆成两半**——`renderSystem` 的存在理由就是那张显式 system 列表，
+而「projection 必须排在 taa 与 renderlist 之前」这条帧序约束是全文件最承重的注释。
+**把 system 的定义搬走、把它们的次序声明留下，等于让「改错顺序」这件事跨文件发生**——比现在更难错，不是更容易。
+⟹ 这是「缝必须开在契约上，不是开在行数上」的一个干净样本，值得当先例引。
+
+**🔴 主 agent 独立裁掉的两条解释**（都判执行者对）：
+① 它主张 §1.1/§1.2「分区定义不许 `export`」只管裸 `module X:part;`（分区**实现**单元），接口分区不在判定面内。
+读 `tools/checks/rules_text.py:94` 证实：`is_partition = (":" in name) and not ln.lstrip().startswith("export")`；
+而**拆同一个文件的上一次**（`ecs_frame_diag.cppm`）用的正是 `export module ecs:frame_diag;`，照先例。
+代价是 8 条签名加 `export`、其中 2 条必须同时去掉 `static`（`export static` 仍是内部链接，跨分区根本看不见）。
+② 它**没有**给 `docs/技术概念.md §核心运行时模块表` 新增 3 行模块行，而是写进 `ecs` / `runtime_config` 两行的
+**文件列**——那张表是「每模块一行」且自己声明**不穷尽**（全量清单 = `rgl/CMakeLists.txt` 五份清单），
+加行会变成第三份模块名单，正是 `rgl-doc-placement` 点名的抄名单反模式。
+⚠ 顺带订正本计划第 6 刀的写法：那一刀说「补了三个漏登记的分区进职责表」——**方向对，动作要按这一刀的形态做**
+（补进文件列，不新立行）。
+
+**🔴 主 agent 补收本批造成的悬空位置声明 4 处。** 执行者只把它记成「下一批容易漂的候选」，
+但这些**现在就已经是错的**：`vkresources` / `vkswapchain` 的「调用方 `resizeSystem`（`ecs_impl`）」、
+`ecs.cppm` 的「见 `ecs_impl` `eventSystem`」、`tests/test_scene_config` 的「实读 `runtime_config_impl::readMeshletBlock`」
+⟹ 全部改指新分区。**「搬移之后顺手把指向旧位置的注释改准」属于搬移的一部分，不是下一批的活。**
+
+**无损性（主 agent 用与执行者不同的口径独立做）**：HEAD 两文件 vs 现在五文件做非注释行多重集差 ⟹
+丢的 8 行**全部**是那 8 条签名（以 `export` 形态重现），**函数体内容丢 0 行**；新增 44 行 =
+模块声明 / GMF include / import / 命名空间花括号 / 这 8 条签名。三枚锚逐位不变（各复跑两次）。
+
+## ⚠ 一条还没裁决的护栏问题：≥450/500 的文件有六个
+
+现算（`--file-threshold 400` 扫出来的，**不是**读缓存）：`debug_rpc_exec_impl` 495 · `profiler_impl` 482 ·
+`shader.cppm` 466 · `render_graph_impl` 462 · `diagnostics_impl` 451 · `meshlet_shadow_args_impl` 450。
+本批拆的是**自己工作路径上的那两个**（`ecs_impl` 只剩 3 行余量，不动它下一批必然撞上）。
+剩下六个今天不咬人，但每一个都是「下一个动它的人会被诱导去挪代码而不是拆」的现场。
+候选处置：① 维持现状（谁碰谁拆，靠纪律）；② 给一方代码加**只准降不准升**的文件数棘轮
+（机制现成 = `tools/checks/tool_baseline.json` 那套，工具侧已在用）；③ 攒一批纯搬移全拆。
+**未决**——② 最符合「让错的东西编不过 > 让错的东西被看见」，但它会把这六个数**冻结成基线**，
+要接受「基线里的数字就是允许的最差值」这件事。
+
 ### 2.5 一条被核查后**没有**放松的约束：shadow proxy 不改变债-139 的状态
 
 有人提出「用了 shadow proxy 之后，债-139 就无所谓了」。核查结论：**不成立**，三条代码事实：
