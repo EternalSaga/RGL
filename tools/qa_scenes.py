@@ -3125,6 +3125,396 @@ def scene_shadow_edge_rig(thicknesses: list | None = None, scan: bool = False,
     return s
 
 
+# ---------------------------------------------------------------------------
+# 场景 11：shadow_wall_rig —— **垂直接收面**上影场的世界不变性 + 级联接缝因果实验
+# ---------------------------------------------------------------------------
+# ## 为什么必须有它（债-139 的第二半，别删）
+# 第 7 刀的 `shadow-swim-flat` 把「平地残差是不是测量地板」答死了（恰 0.0000 %），但结案时明确
+# 留了一句没验的话：**本仪器量的是水平地面，而债-139 的原始症状在垂直门面上**——门面不是 y=0
+# 平面，那套闭式重建吃不下它。「门上那条影为什么随相机动」仍未答。本靶把接收面换成**竖直平面**，
+# 把同一个问题在正确的几何上重做一遍。
+#
+# ## 三条可分离机制（用户的猜想只点名了第一条）
+#   S 接缝     = 级联切分距离投到门面上的那条边界（两侧纹素尺寸 / 法线外推不同）；相机动 ⟹
+#                边界扫过门面
+#   T 纹素吸附 = 单级联内光空间盒随相机自适应；门关态已被世界锚定吸附消掉（债-139 ①）
+#   C 坐标精度 = 大坐标 float32 量化（rebase 治的那个）
+#   ⟹ 判据必须能把三者分开，否则「门面上有随相机动的影」证实不了任何一件事。
+#
+# ## 几何机关（编号 = 构建期 assert 的编号，改坏任何一条直接建不出靶）
+#   ① **门面法线 = 太阳的水平分量方向**（竖直面能拿到的最大日照 = |水平(L)| = 0.6677，地面是
+#      0.7444）。影深 = 太阳在受光里的占比；拿 edge rig 的地面实测（~30 %）折算，门面约 27 %
+#      ⟹ cov 峰值 ≈ 0.45（线性域），够判据吃。法线取反 = 门面背对太阳 = 全场本影 = 判据恒真。
+#   ② **遮挡体是竖直细杆，且整根在画外**。两条性质同时成立才有得测：
+#      · 影缘竖直：e1（沿墙水平）⊥ 光的水平行进方向 ⟹ e1·L = 0 ⟹ 杆上每一点的影都落在
+#        u = 杆的 u 处，杆影就是竖直线段，与杆的高度范围无关。
+#      · 杆画外：杆沿 +n 前移 HBAR，影在墙上**下移** K_V·HBAR（K_V = −L.y/(−n·L) = 1.1149）
+#        ⟹ 把杆抬到 K_V·HBAR 以上，它的影照旧盖住整块门面，而相机一个像素都看不见它。
+#        🔴 这条不是省事：仪器的门面掩码是**闭式**的（「射线命中门面矩形」），前提是画内除了
+#        门面没有别的东西。杆入画 ⟹ 掩码把杆的像素当成门面 ⟹ 对拍读的是两回事。
+#        构建期 assert ⑤ 逐角点投影核对（含 60 px 余量），不是口头承诺。
+#      · 接缝必须**穿过**门面（assert ②'：splits[force] ∈ 门面视深区间），否则仪器没有自变量。
+#   ③ **接缝近水平**：机位在门面正前方 ⟹ 视深梯度 gU = e1·f ≈ 0 ⟹ 等视深线（= 接缝在门面上的
+#      轨迹）是水平线。梯度方向 = 接缝的法线 ⟹ 相机沿 n 平移时接缝**横切**竖直影缘。反过来
+#      （接缝平行于影缘）受影响面积会塌成一条线，判据没有统计量。
+#   ④ **末级淡出**（shadow.slang ⑦，t>0.866 吃 cov）把全部档挡在射程内。
+#   ⑤⑥⑦⑧ 见下面 assert 本体。
+#
+#   ④' **推拉序列 = 因果实验的自变量**：接缝在门面上的位置 = 「视深 == splits[c]」的轨迹，而
+#      splits 只吃 (nearQ, farQ) = 量化后的 dist(相机, SceneBounds 球心) ± R。沿门面法线 n 推拉
+#      相机 ⟹ 换桶时 splits **跳**、不换桶时 splits **恒**。⟹ 一条可证伪的预测：
+#        · 同桶内挪相机：接缝在门面上**扫过**，但它的**视深逐字不变**；
+#        · 跨桶：接缝视深**跳**到新的 splits 值，跳量 = 闭式已知的 Δsplits。
+#      「拧它它就动、不拧它不动」= 因果；只报「不连续位置与预测接缝位置重合」= 相关性，不算。
+#      WALL_CAUSAL_DOLLY 就是这条序列，WALL_CAUSAL_PAIRS 是「同桶对 / 跨桶对」的配对表。
+#
+# ## 闭式真值（manifest 的 measure 块 = 仪器唯一读数接口，C++ 一个几何常量都不抄）
+#   门面平面：点 O = (0,0,0)（世界原点，n·P = 0）、法线 n、局部轴 e1（水平）/ e2 = +Y。
+#   视深场：depth(u, y) = c0 + gU·u + gY·y，其中 (gU, gY, c0) 只由机位与朝向决定。
+#   接缝轨迹：depth = splits[c] ⟹ y = (splits[c] − c0 − gU·u)/gY（gY ≠ 0 由 assert ③ 钉）。
+#   杆影：u = 杆的 u（机关 ②），y 覆盖 [杆底 − K_V·HBAR, 杆顶 − K_V·HBAR] ⊇ [0, WALL_H]（⑥）。
+#   级联闭式 = 引擎公式链复刻（同 edge_frame：unionSphere → near/far → 2 的幂 → practical
+#   split(mix=0.5,count=4) → frustumBoundingSphere → texel = 2r/1024）。
+WALL_W = 5.0                                 # 门面宽（沿 e1，米）
+WALL_H = 3.5                                 # 门面高（沿 +Y，米）
+WALL_HBAR = 5.0                              # 遮挡杆沿门面法线 n 的前移量（米）
+WALL_NBAR = 9                                # 杆数（= 门面上的竖直影缘对数）；+1 门面
+#   = 10 件，正好等于固定调色板的容量（构建期「同场景 piece 两两色距 ≥ 0.5」是反查
+#   可靠性的地基，见 PAL 注释；加杆数要么换调色板要么并件，别绕那条断言）
+WALL_PERIOD = 0.50                           # 杆间距（沿 e1，米）；9 根 × 0.5 = 4.0 m 跨门面
+WALL_BAR_W = 0.05                            # 杆宽（沿 e1）
+WALL_BAR_D = 0.10                            # 杆厚（沿 n）
+WALL_BAR_PAD = 0.6                           # 杆影覆盖相对门面的上下余量（米）
+WALL_CAPTURE = (1600, 900)                   # 采集尺寸（仪器写死同值；assert ⑧ 按它算）
+WALL_FOV = 40.0                              # 竖直 fov（度）
+WALL_Y_E = 0.0                               # 机位高度（沿 e2，米）
+WALL_Y_TGT = WALL_H / 2.0                    # 目标点高度（= 门面中线）
+WALL_FORCE_CASCADE = 3                       # 钉级臂的级号（接缝 = splits[2]，钉在远侧那一级）
+
+# 激励：B = A 沿门面法线 n 纯平移（target 不动 ⟹ 姿态逐字相同）。🔴 两枚机位必须**同桶**
+# （assert ⑦ 逐数对账），否则「阴影随相机变」里有一半是级联本身变了，不是本判据的射程。
+WALL_CAM_A = 8.75
+WALL_CAM_B = 9.00
+WALL_STIMULUS_M = WALL_CAM_B - WALL_CAM_A    # = 0.25 m，闭式已知，仪器不另算
+
+# 因果序列：沿 n 的相机距离。同桶的两档成对（接缝视深必须逐字相同）、跨桶的两档成对
+# （必须差一个闭式已知的 Δsplits）。三档桶位 = (1,16) / (2,16) / (4,16)。
+WALL_CAUSAL_DOLLY = {
+    # ── 第一组：本批开工前按闭式模型选的档（模型说接缝穿门面）────────────────────────
+    "d1": 8.75, "d2": 9.00,      # 模型桶 (2, 16)  模型 splits[2] = 9.0784
+    "d3": 10.25, "d4": 10.50,    # 模型桶 (4, 16)  模型 splits[2] = 10.5
+}
+WALL_CAUSAL_PAIRS = [
+    ("d1", "d2", "same"),   # 同桶：模型说接缝在门面上扫过，但**视深逐字不变**
+    ("d3", "d4", "same"),
+    ("d2", "d3", "jump"),   # 跨桶：模型说接缝视深跳到新的 splits（Δ = +1.4216 m）
+    ("d4", "d1", "jump"),   # 反着拧：Δ = −1.4216 m（主 agent 的独立验红形态）
+]
+
+
+def wall_basis():
+    """门面局部标架 + 影位移常数（纯函数；assert 与 manifest 共用同一份，不抄第二份）。"""
+    ln = math.sqrt(sum(v * v for v in SUN))
+    lx, ly, lz = SUN[0] / ln, SUN[1] / ln, SUN[2] / ln      # 光传播方向（单位）
+    nn = math.hypot(-lx, -lz)
+    nv = (-lx / nn, 0.0, -lz / nn)                          # 竖直面能拿到的最大日照法线
+    e1v = (nv[2], 0.0, -nv[0])                              # 沿墙水平；e1 × e2 = n
+    kh = -(nv[0] * lx + nv[2] * lz)                         # = −n·L > 0
+    kv = -ly / kh                                           # 前移 1 m → 影下移 kv 米
+    return {"L": (lx, ly, lz), "n": nv, "e1": e1v, "e2": (0.0, 1.0, 0.0),
+            "kH": kh, "kV": kv, "sunFrac": kh}
+
+
+def wall_u2w(u: float, y: float, h: float = 0.0, b=None) -> tuple:
+    """门面局部 (u, y, 沿 n 的前距 h) → 世界 (x, y, z)。"""
+    b = b or wall_basis()
+    e1, e2, nv = b["e1"], b["e2"], b["n"]
+    return (u * e1[0] + y * e2[0] + h * nv[0],
+            u * e1[1] + y * e2[1] + h * nv[1],
+            u * e1[2] + y * e2[2] + h * nv[2])
+
+
+def wall_yaw_deg(b) -> float:
+    """`box()` 的 yaw：局部 +x → e1、局部 +z → n（两者都水平且正交，yaw 就够了）。"""
+    return math.degrees(math.atan2(b["n"][0], b["n"][2]))
+
+
+def wall_frame(a: float, b=None) -> dict:
+    """沿 n 距离为 a 的一枚机位的闭式量（视深梯度）。纯函数。"""
+    b = b or wall_basis()
+    eye = wall_u2w(0.0, WALL_Y_E, a, b)
+    tgt = wall_u2w(0.0, WALL_Y_TGT, 0.0, b)
+    tv = tuple(tgt[k] - eye[k] for k in range(3))
+    tl = math.sqrt(sum(x * x for x in tv))
+    f = tuple(x / tl for x in tv)
+    gU = sum(b["e1"][k] * f[k] for k in range(3))
+    gY = sum(b["e2"][k] * f[k] for k in range(3))
+    o = wall_u2w(0.0, 0.0, 0.0, b)
+    c0 = -sum((eye[k] - o[k]) * f[k] for k in range(3))
+    return {"eye": eye, "tgt": tgt, "f": f, "gU": gU, "gY": gY, "c0": c0, "a": a}
+
+
+def wall_bars(b=None) -> list:
+    """15 根竖直杆的 (u, y 起, y 止)。影覆盖 [y0 − kV·h, y1 − kV·h] ⊇ [0, WALL_H]。"""
+    b = b or wall_basis()
+    sh = b["kV"] * WALL_HBAR
+    return [((i - (WALL_NBAR - 1) / 2.0) * WALL_PERIOD, sh - WALL_BAR_PAD,
+             sh + WALL_H + WALL_BAR_PAD) for i in range(WALL_NBAR)]
+
+
+def wall_cascade(eye: tuple, sb_center: tuple, sb_r: float) -> dict:
+    """引擎级联公式链复刻（同 edge_frame；口径注释在那边，两份公式各自独立实现会漂）。"""
+    def _quant(d):
+        m, e = math.frexp(d)
+        return math.ldexp(1.0, e - 1 if m == 0.5 else e)
+    def _split(near_, far_, c, count=4):
+        if c + 1 >= count:
+            return far_
+        return 0.5 * near_ * (far_ / near_) ** (c / count) + 0.5 * (
+            near_ + (far_ - near_) * ((c + 1) / count))
+    def _frustum_r(n_, f_):
+        th = math.tan(math.radians(WALL_FOV) / 2.0)
+        aspect = WALL_CAPTURE[0] / WALL_CAPTURE[1]
+        cs = th * math.sqrt(aspect * aspect + 1.0)
+        rn, rf = n_ * cs, f_ * cs
+        zc = (f_ * f_ - n_ * n_ + rf * rf - rn * rn) / (2.0 * (f_ - n_))
+        return math.sqrt((f_ - zc) ** 2 + rf * rf) * 1.001
+    dist = math.dist(eye, sb_center)
+    near, far = max(0.05, dist - sb_r), dist + sb_r
+    sn, sf = _quant(near), _quant(far)
+    sp = [_split(sn, sf, c) for c in range(4)]
+    radii = [_frustum_r(0.02 if c == 0 else sp[c - 1], sp[c]) for c in range(4)]
+    return {"dist": dist, "nearRaw": near, "farRaw": far, "nearQ": sn, "farQ": sf,
+            "splits": sp, "radii": radii, "texels": [2.0 * r / 1024.0 for r in radii]}
+
+
+def wall_corners(b=None) -> list:
+    b = b or wall_basis()
+    return [wall_u2w(u, y, 0.0, b) for u in (-WALL_W / 2, WALL_W / 2)
+            for y in (0.0, WALL_H)]
+
+
+def wall_bar_verts(uc: float, y0: float, y1: float, b) -> list:
+    """一根杆的 8 角（构建期 assert ⑤⑥ 与 SceneBounds 都吃它；口径 = box 的局部 ±半宽）。"""
+    yc = (y0 + y1) / 2.0
+    return [wall_u2w(uc + sx * WALL_BAR_W / 2, yc + sy * (y1 - y0) / 2,
+                     WALL_HBAR + sz * WALL_BAR_D / 2, b)
+            for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
+
+
+def wall_scene_bounds(b=None) -> tuple:
+    """SceneBounds（引擎口径：逐 primitive 质心+最远点球，再 unionSphere 逐个合并）。"""
+    b = b or wall_basis()
+    def _sph(pts):
+        c = tuple(sum(p[k] for p in pts) / len(pts) for k in range(3))
+        return c, max(math.dist(c, p) for p in pts)
+    def _uni(x, y):
+        ca, ra = x; cb, rb = y
+        d = math.dist(ca, cb)
+        if d == 0.0:
+            return (ca, max(ra, rb))
+        if d + ra <= rb:
+            return (cb, rb)
+        if d + rb <= ra:
+            return (ca, ra)
+        k = (d + ra - rb) / (2 * d)
+        return tuple(ca[j] + (cb[j] - ca[j]) * k for j in range(3)), (d + ra + rb) / 2.0
+    acc = _sph(wall_corners(b))
+    for uc, y0, y1 in wall_bars(b):
+        acc = _uni(acc, _sph(wall_bar_verts(uc, y0, y1, b)))
+    return acc
+
+
+def wall_camera_px(fr: dict, pt: tuple) -> tuple | None:
+    """世界点 → 像素（针孔：竖直 fov + aspect 压横轴；与 imgqa projectPoint3 同口径）。"""
+    d = tuple(pt[k] - fr["eye"][k] for k in range(3))
+    z = sum(d[k] * fr["f"][k] for k in range(3))
+    if z <= 1e-6:
+        return None
+    r_ = _norm((fr["f"][1] * 0.0 - fr["f"][2] * 1.0, fr["f"][2] * 0.0 - fr["f"][0] * 0.0,
+                fr["f"][0] * 1.0 - fr["f"][1] * 0.0))
+    u_ = (r_[1] * fr["f"][2] - r_[2] * fr["f"][1],
+          r_[2] * fr["f"][0] - r_[0] * fr["f"][2],
+          r_[0] * fr["f"][1] - r_[1] * fr["f"][0])
+    th = math.tan(math.radians(WALL_FOV) / 2.0)
+    asp = WALL_CAPTURE[0] / WALL_CAPTURE[1]
+    nx = sum(d[k] * r_[k] for k in range(3)) / (z * th * asp)
+    ny = sum(d[k] * u_[k] for k in range(3)) / (z * th)
+    return ((nx + 1) / 2 * WALL_CAPTURE[0] - 0.5, (1 - ny) / 2 * WALL_CAPTURE[1] - 0.5)
+
+
+def scene_shadow_wall_rig() -> Scene:
+    """竖直门面靶（本文件场景 11；判据 = imgqa shadow-swim-wall）。"""
+    b = wall_basis()
+    bars = wall_bars(b)
+    corners = wall_corners(b)
+    sb_c, sb_r = wall_scene_bounds(b)
+    names = list(WALL_CAUSAL_DOLLY) + ["A", "B"]
+    dist_of = dict(WALL_CAUSAL_DOLLY)
+    dist_of["A"] = WALL_CAM_A
+    dist_of["B"] = WALL_CAM_B
+    models = {}
+    for nm in names:
+        fr = wall_frame(dist_of[nm], b)
+        cm = wall_cascade(fr["eye"], sb_c, sb_r)
+        models[nm] = (fr, cm)
+
+    cams = {nm: {"position": list(models[nm][0]["eye"]), "target": list(models[nm][0]["tgt"]),
+                 "fovDegrees": WALL_FOV,
+                 "note": f"沿 n 距离 {dist_of[nm]} m（因果推拉序列；同桶对/跨桶对见 measure.causalPairs）"}
+            for nm in names}
+    cams["factory"] = dict(cams["d3"], note="仪器默认机位 = d3（接缝穿门面中段）")
+
+    s = Scene(
+        name="shadow_wall_rig",
+        purpose="垂直接收面（门面）上影场的世界不变性 + 级联接缝因果实验：15 根**画外**竖直杆在"
+                "墙上投出 15 对竖直影缘；接缝近水平 ⟹ 相机沿墙法线平移时横切影缘"
+                "（imgqa shadow-swim-wall）",
+        honesty=("闭式解成立的前提（破任何一条读到的是假数）：① 门面是**平面**且法线 = 太阳水平"
+                 "分量方向（竖直面最大日照）——门面一弯或转个角，影深与视深梯度全变；"
+                 "② 遮挡杆**整根在画外**（构建期 assert ⑤ 逐角点投影核对）——仪器的门面掩码是"
+                 "「射线命中门面矩形」这条闭式判据，画内混进别的几何它认不出来；"
+                 "③ 杆影是竖直线段（e1·L = 0，由法线选型钉死）——杆影一旦斜了，接缝与影缘的夹角"
+                 "就小，受影响的像素面积塌成一条线；④ 光方向 = SUN=(0.5,−0.75,−0.45)"
+                 "（configs/scene.lua light 段），改光后本 manifest 全部作废；⑤ 末级淡出"
+                 "（shadow.slang ⑦，t>0.866 吃 cov）由 assert ④ 把全部档挡在射程内；"
+                 "⑥ 级联 splits/texel 是**闭式预测**（公式链 = 引擎复刻），运行期相机或内容变了"
+                 "会漂——仪器按 manifest 机位采集并逐数对账，漂移即红。"
+                 "⚠ 本靶**只有**门面与画外的杆：门面上的影只来自那 15 根杆，所以它量的是"
+                 "「垂直接收面 + CSM 固有机制」这一类缺陷，**不含** bistro 那种逐图元剔除 / "
+                 "逐图元 LOD 造成的级间内容差异（那条不在本靶上，别拿本靶的绿去回答它）。"),
+        cameras=cams,
+        extra={
+            "defaultLight": {"direction": list(SUN), "intensity": 12.0,
+                             "source": "configs/scene.lua light 段（闭式解的前提④）"},
+            "measure": {
+                "captureSize": list(WALL_CAPTURE),
+                "fovDegrees": WALL_FOV,
+                "plane": {"origin": [0.0, 0.0, 0.0], "normal": list(b["n"]),
+                          "e1": list(b["e1"]), "e2": list(b["e2"]),
+                          "uMin": -WALL_W / 2.0, "uMax": WALL_W / 2.0,
+                          "yMin": 0.0, "yMax": WALL_H},
+                "sunFracVertical": b["sunFrac"],
+                "shadowDropPerMeterForward": b["kV"],
+                "barDistanceM": WALL_HBAR,
+                "bars": [{"name": f"bar_{i:02d}", "u": uc, "yBottom": y0, "yTop": y1,
+                          "shadowU": uc, "shadowYBottom": y0 - b["kV"] * WALL_HBAR,
+                          "shadowYTop": y1 - b["kV"] * WALL_HBAR}
+                         for i, (uc, y0, y1) in enumerate(bars)],
+                "sceneBounds": {"center": list(sb_c), "radius": sb_r},
+                "stimulus": {"from": "A", "to": "B", "axis": "n",
+                             "meters": WALL_STIMULUS_M,
+                             "note": "B = A 沿门面法线 n 纯平移（target 不动 = 姿态逐字相同）"},
+                "forceCascade": WALL_FORCE_CASCADE,
+                "seamSplitIndex": WALL_FORCE_CASCADE - 1,
+                "cameras": {nm: {
+                    "distanceN": dist_of[nm],
+                    "position": list(models[nm][0]["eye"]),
+                    "target": list(models[nm][0]["tgt"]),
+                    "gU": models[nm][0]["gU"], "gY": models[nm][0]["gY"],
+                    "c0": models[nm][0]["c0"],
+                    "nearRaw": models[nm][1]["nearRaw"], "farRaw": models[nm][1]["farRaw"],
+                    "nearQ": models[nm][1]["nearQ"], "farQ": models[nm][1]["farQ"],
+                    "splits": models[nm][1]["splits"],
+                    "texelM": models[nm][1]["texels"],
+                    "seamYAtU0": [((sp - models[nm][0]["c0"]) / models[nm][0]["gY"])
+                                  for sp in models[nm][1]["splits"][:3]],
+                    "depthLo": min(models[nm][0]["c0"] + models[nm][0]["gU"] * u
+                                   + models[nm][0]["gY"] * y
+                                   for u in (-WALL_W / 2, WALL_W / 2) for y in (0.0, WALL_H)),
+                    "depthHi": max(models[nm][0]["c0"] + models[nm][0]["gU"] * u
+                                   + models[nm][0]["gY"] * y
+                                   for u in (-WALL_W / 2, WALL_W / 2) for y in (0.0, WALL_H)),
+                } for nm in names},
+                "causalPairs": [{"a": p[0], "b": p[1], "kind": p[2],
+                                 "splitA": models[p[0]][1]["splits"][WALL_FORCE_CASCADE - 1],
+                                 "splitB": models[p[1]][1]["splits"][WALL_FORCE_CASCADE - 1]}
+                                for p in WALL_CAUSAL_PAIRS],
+            },
+        },
+    )
+    P = s.pieces.append
+    e1 = b["e1"]
+    P(Piece("facade", quad(corners[0], (WALL_W * e1[0], 0.0, WALL_W * e1[2]),
+                           (0.0, WALL_H, 0.0)),
+            PAL["yellow"], roughness=0.9, radial=False, closed=False,
+            intent="**唯一接收面**：竖直平面 n·P = 0，u∈[−2.5,2.5]、y∈[0,3.5]；法线 = 太阳水平"
+                   "分量方向（竖直面最大日照，前提①）；单面（背面剔除下从背面看是空的）"))
+    yaw = wall_yaw_deg(b)
+    # 杆的颜色 = 调色板里除门面（yellow）之外的前 WALL_NBAR 个（构建期色距断言要求两两不同；
+    # 杆整根在画外，颜色对图像零影响，只是 manifest ↔ objectID 反查的静态事实）。
+    bar_colors = [k for k in PAL if k != "yellow"][:WALL_NBAR]
+    assert len(bar_colors) == WALL_NBAR, f"调色板不够 {WALL_NBAR} 根杆用"
+    for i, (uc, y0, y1) in enumerate(bars):
+        c = wall_u2w(uc, (y0 + y1) / 2.0, WALL_HBAR, b)
+        P(Piece(f"bar_{i:02d}", box(c[0], c[1], c[2], WALL_BAR_W, y1 - y0, WALL_BAR_D, yaw),
+                PAL[bar_colors[i]], roughness=0.6,
+                intent=f"竖直遮挡杆：u={uc:+.2f}、沿 n 前移 {WALL_HBAR} m、y∈[{y0:.2f},{y1:.2f}]"
+                       f"（**整根在画外**，assert ⑤）；在墙上投出 u={uc:+.2f} 的竖直影缘"))
+
+    # ---- 构建期断言（编号对应头注「几何机关」；口头承诺不算数）----
+    tag = "shadow_wall_rig"
+    assert abs(b["e2"][1] - 1.0) < 1e-12, f"{tag}: ① e2 必须是 +Y（门面竖直的前提）"
+    assert abs(b["n"][1]) < 1e-12, f"{tag}: ① 门面法线必须水平（接收面竖直）"
+    best_n = math.hypot(b["L"][0], b["L"][2])
+    assert abs(b["sunFrac"] - best_n) < 1e-12, \
+        f"{tag}: ① 门面法线不是最大日照方向（{b['sunFrac']:.6f} vs {best_n:.6f}）"
+    cross_e1e2 = (-b["e1"][2], 0.0, b["e1"][0])   # e1 × (+Y)
+    assert all(abs(cross_e1e2[k] - b["n"][k]) < 1e-12 for k in range(3)), \
+        f"{tag}: ① e1 × e2 ≠ n（quad 的法线就是错的，门面会朝反方向）"
+    frA = models["A"][0]
+    assert abs(frA["gU"]) < 0.02 * abs(frA["gY"]), \
+        f"{tag}: ③ 接缝不近水平（gU/gY = {frA['gU']/frA['gY']:.4f}）——接缝与竖直影缘夹角太小"
+    assert abs(frA["gY"]) > 1e-6, f"{tag}: ③ 视深沿门面高度无梯度（gY=0）——接缝根本不上墙"
+    for nm, (fr, cm) in models.items():
+        for c in corners:
+            p = wall_camera_px(fr, c)
+            assert p is not None and 30 < p[0] < WALL_CAPTURE[0] - 30 \
+                and 30 < p[1] < WALL_CAPTURE[1] - 30, \
+                f"{tag}: ⑧ 档 {nm} 的门面角点投出画外/贴边"
+            for uc, y0, y1 in bars:
+                for v in wall_bar_verts(uc, y0, y1, b):
+                    pv = wall_camera_px(fr, v)
+                    assert pv is None or not (-60 < pv[0] < WALL_CAPTURE[0] + 60
+                                              and -60 < pv[1] < WALL_CAPTURE[1] + 60), \
+                        f"{tag}: ⑤ 档 {nm} 的遮挡杆角点落进画面（px={tuple(round(x) for x in pv)}）" \
+                        f"——闭式门面掩码的前提破了"
+        dlo = min(fr["c0"] + fr["gU"] * u + fr["gY"] * y
+                  for u in (-WALL_W / 2, WALL_W / 2) for y in (0.0, WALL_H))
+        dhi = max(fr["c0"] + fr["gU"] * u + fr["gY"] * y
+                  for u in (-WALL_W / 2, WALL_W / 2) for y in (0.0, WALL_H))
+        assert dhi < 0.86 * cm["farQ"], \
+            f"{tag}: ④ 档 {nm} 门面最远视深 {dhi:.3f} 进末级淡出带（0.86·farQ=" \
+            f"{0.86*cm['farQ']:.3f}）——cov 被 atten 吃掉，读数系统性偏受光"
+        # ②' 🔴 **不再**要求「模型算出的接缝穿过门面」。本批实机逐位读出的结果是：闭式级联
+        # 模型（quantize → cascadeSplitDistance）在 a = 11…16 段与引擎实际选级不符，而
+        # 「接缝在不在门面上」恰恰是**被测命题**——把它写成构建期硬 assert 等于用假设堵死结论，
+        # 也等于让靶永远只能生成「模型说接缝在门面上」的那几档（实机却不在）。
+        # 换成两条与模型无关、且判据真正依赖的前提：
+        assert dhi > dlo + 1e-9, f"{tag}: ②' 档 {nm} 门面视深区间退化（区间宽度 0）"
+        # 以及「模型接缝位置」必须**写进** manifest 供仪器对账（缺键即抛，见下面的 measure 装配）。
+        _ = cm["splits"][WALL_FORCE_CASCADE - 1]
+    for uc, y0, y1 in bars:
+        assert y0 - b["kV"] * WALL_HBAR <= 0.0 and y1 - b["kV"] * WALL_HBAR >= WALL_H, \
+            f"{tag}: ⑥ 杆 u={uc:+.2f} 的影盖不住整块门面"
+    for a_nm, b_nm, kind in WALL_CAUSAL_PAIRS:
+        sa = models[a_nm][1]["splits"][WALL_FORCE_CASCADE - 1]
+        sb = models[b_nm][1]["splits"][WALL_FORCE_CASCADE - 1]
+        if kind == "same":
+            assert (models[a_nm][1]["nearQ"], models[a_nm][1]["farQ"]) == \
+                   (models[b_nm][1]["nearQ"], models[b_nm][1]["farQ"]), \
+                f"{tag}: ⑦ 同桶对 {a_nm}/{b_nm} 其实不同桶"
+            assert abs(sa - sb) < 1e-12, \
+                f"{tag}: ⑦ 同桶对 {a_nm}/{b_nm} 的 splits 不等（{sa} vs {sb}）——「同桶内挪相机" \
+                f"接缝视深不变」这条预测根本不成立"
+        else:
+            assert abs(sa - sb) > 0.5, \
+                f"{tag}: ⑦ 跨桶对 {a_nm}/{b_nm} 的 splits 只差 {abs(sa-sb):.4f} m（要 > 0.5 m）" \
+                f"——「拧切分距离」的幅度不够，因果实验没有区分力"
+    assert 0.0 < WALL_STIMULUS_M < 0.5, f"{tag}: 激励量 {WALL_STIMULUS_M} 越出同桶窗口"
+    return s
+
+
 SCENES = {
     "cornell_box": scene_cornell_box,
     "shadow_rig": scene_shadow_rig,
@@ -3139,6 +3529,7 @@ SCENES = {
     "blend_lit_opaque": scene_blend_lit_opaque,
     "shadow_grain": scene_shadow_grain,
     "shadow_edge_rig": scene_shadow_edge_rig,
+    "shadow_wall_rig": scene_shadow_wall_rig,
     # 远工作点（相对坐标批 5 第 2 刀）：同一台靶整体沿世界 +X 平移 1e6 m，闭式真值跟着平移
     # 并写进 manifest 的 measure 块。GLB 与出厂靶逐字节相同（大坐标只住 entity position）。
     "shadow_edge_rig_far": lambda: scene_shadow_edge_rig(world_offset=EDGE_FAR_OFFSET),

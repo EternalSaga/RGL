@@ -112,6 +112,10 @@ namespace RGL::imgqa {
 /// 📄 正文在 `judgments_table_swim_flat.cpp`。
 [[nodiscard]] const std::vector<JudgmentInfo>& swimFlatJudgments();
 
+/// 判据契约表 · **垂直接收面**级联接缝干预段（`shadow-swim-wall`，债-139 竖直面对照批，6 条）。
+/// 📄 正文在 `judgments_table_swim_wall.cpp`。
+[[nodiscard]] const std::vector<JudgmentInfo>& swimWallJudgments();
+
 /// 地基族 · `shadow-swim-flat` **远工作点段**（2 条：J-F4 变好 / J-F5 区分力守卫）。
 /// 缝 = 工作点（出厂 vs 大坐标），不是行数——债-159 换远工作点只动这一段。
 [[nodiscard]] const std::vector<JudgmentInfo>& swimFlatFarJudgments();

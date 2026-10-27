@@ -37,6 +37,8 @@ add_executable(imgqa
     # `shadow-swim-flat` 的 spec 段（债-139 结案批，同 material 段的拆法：主表撞 500 行，
     # 缝按仪器切）。
     cli_table_swim_flat.cpp
+    # `shadow-swim-wall` 的 spec 段（同 swim_flat 段的拆法，缝按仪器切）。
+    cli_table_swim_wall.cpp
     analytic.cpp
     ao_metrics.cpp
     # `field_diff_metric.{h,cpp}` = **连续量差的 mean/p99 口径层**（债-154）。它被两台仪器共用：
@@ -46,6 +48,18 @@ add_executable(imgqa
     # 各自漂，而两个 p99 数字看着可比、其实不可比，且没有任何一条判据会红（AGENTS 哲学第 1 条）。
     # 泛化边界的全文 → `field_diff_metric.h` 头注「泛化的边界在哪」。
     field_diff_metric.cpp
+    # `plane_reconstruct.{h,cpp}` = **「像素 ↔ 一个已知平面上的世界点」重建的唯一口径层**。
+    # 拆出来的缝 = 接收面方向：`shadow-swim-flat` 吃水平面 y=0、`shadow-swim-wall` 吃竖直面，
+    # 两者要的是同一个算子（重投影 / 局部坐标 / 沿平面挪再投回目标网格 / 像素中心约定）。
+    # 复制一份改名字 = 两份会各自漂的「同一件事」，漂了之后两台仪器的「世界不变性残差」看着
+    # 可比、其实不可比（AGENTS 哲学第 1 条）。`shadow_transport_metric` 的 y=0 三函数现在是
+    # **纯转发**，无损性由 `just imgqa shadow-swim-flat` 搬移前后逐数相同来证。
+    plane_reconstruct.cpp
+    # `shadow_wall_metric.{h,cpp}` = **垂直接收面上的接缝定位口径层**（shadow-swim-wall）。
+    # 它的新概念只有一条：同机位「自然臂 vs 钉级臂」的对拍**地板按构造为 0**（不搬运、不
+    # 重采样），所以接缝定位不需要侵蚀带——而 shadow-swim-flat 那套「erode 2 后残差恰 0」
+    # 会把接缝的信号（只住在影缘 ~1 纹素内）和地板一起剔掉。论证全文 → 该头注。
+    shadow_wall_metric.cpp
     # `ao-noise`（护栏逼的三刀：ao_noise.cpp 903 代码行 > 500），缝按仪器切、缝说明全文见
     # `ao_noise_metric.h` 头注释。`ao_noise_metric.cpp` = **口径层**（帧差算子 / 逐位相同判定 /
     # 取值分布与扫描线 / 存图可视化，同 shadow_kernel_metric.* 与 diff_struct_metric.* 那条缝）；
@@ -113,6 +127,7 @@ add_executable(imgqa
     # `shadow-swim-flat` 判据段（债-139 结案批，5 条：无地板残差 / 阴性对照 / 不坏 / 变好 🔴 /
     # 区分力守卫），缝按仪器切（同 material / edge / ssr / block 段）。
     judgments_table_swim_flat.cpp
+    judgments_table_swim_wall.cpp
     # `selftest`（护栏逼的五刀：selftest.cpp 1927 代码行 > 500），缝按**被测仪器**切、
     # 缝说明全文见 `selftest.h` 头注释。`selftest.cpp` 留**地基**（image.cpp 的图像算子 +
     # judge.cpp 的判据/反模式注册表 + cli.cpp 的 CLI 注册表）与 `cmdSelftest` 汇总路由
@@ -179,6 +194,7 @@ add_executable(imgqa
     # 零侵蚀必翻、侵蚀 2 像素后**恰 0**、两臂并集）/ 注入平移同号回收 / 覆盖率下限 / 五条守卫各抛 /
     # 五条判决线挂号，全部闭式不启引擎（合成 cov 场直打）。
     selftest_swim_flat.cpp
+    selftest_swim_wall.cpp
     # `temporal` / `taa-swim`（护栏逼的两刀：temporal.cpp 926 代码行 > 500，里面住着**两台
     # 仪器**），缝按仪器切、缝说明全文见 `temporal_swim.h` 头注释。`temporal.cpp` = **锚点线**
     # （静止机位 + jitter 的抑制比：yawCam / runSequence / temporalDiffStat / cmdTemporal）；
@@ -356,6 +372,21 @@ add_executable(imgqa
     shadow_transport_metric.cpp
     shadow_swim_flat_judge.cpp
     shadow_swim_flat.cpp
+    # `shadow-swim-wall`（债-139 第二半，**竖直**接收面）：三刀切法照 shadow-swim-flat，缝同
+    # 「仪器 vs 口径 vs 判定」——`shadow_swim_wall.cpp` = 臂表 + 采集 + 编排，
+    # `shadow_swim_wall_judge.cpp` = 闸门 + 判决线，`shadow_wall_metric.*` = 口径层（上两行）。
+    # 第四刀（`shadow_swim_wall.cpp` 到 504 代码行 > 500）按**要不要引擎**切，不是按行数找空位：
+    #   · `shadow_swim_wall_target.cpp` = **零引擎那一半**——manifest 读取 + 机位构造 + 闭式门面
+    #     掩码/视深场。判据可机器核对：**剥掉注释后**本文件里 `makeProfile` / `runEngineOnce` /
+    #     `readEngineLog` / `readPngBgr` 各 0 次，因此没有 GPU 也跑得完（同 `shadow_edge_target.cpp`
+    #     的职责，也同「这段逻辑需不需要一个 VkDevice 才能跑」那条分层判据）。
+    #   · `shadow_swim_wall.cpp`        = **起引擎那一半**——一臂 = 一次 `makeProfile` +
+    #     `runEngineOnce`，加回显对账、派生场装配与出表编排。
+    # 两侧各自的改动原因不同：改测量接口形状（manifest 换键 / captureSize 换口径）只动前者，
+    # 改臂表与配置门（钉哪级、门开门关、帧号）只动后者。
+    shadow_swim_wall_target.cpp
+    shadow_swim_wall.cpp
+    shadow_swim_wall_judge.cpp
     # `blend-sort`（债-132 结案：把刀3 那份透明排序输入接成常驻检查）。拆两 TU 的缝同上一条
     # （口径 vs 仪器）：`blend_sort_metric.cpp` 是纯度量（投影 / 合成 / 判别力 / 三条拒跑条件，
     # selftest 用合成输入闭式直接测，不启引擎、不读文件、不碰 OpenCV），`blend_sort.cpp` 是仪器

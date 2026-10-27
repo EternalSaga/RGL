@@ -200,6 +200,9 @@ int dispatch(const std::string& cmd, const Args& P)
         // 同上：零 flag。债-139 结案批——**零起伏平地**上影场的世界不变性（无地板残差 Q1 +
         // 四格时间稳定性 Q2 + 与 swim 的口径对照 Q3）。五条判决线 + 六道闸门（抛 rc=3）。
         { "shadow-swim-flat", cmdShadowSwimFlat },
+        // 同上：零 flag。债-139 第二半——**垂直接收面**上影场的世界不变性 + 级联接缝的因果
+        // 实验（四组对照给 S/T/C 比例；推拉相机翻分桶做干预，「拧它它就动」才算因果）。
+        { "shadow-swim-wall", cmdShadowSwimWall },
         // 同上：零 flag。债-134 的先决——透明段 lit 变体的常驻像素贡献（双臂同源 + 引擎回显条数）。
         { "blend-lit", cmdBlendLit },
     };

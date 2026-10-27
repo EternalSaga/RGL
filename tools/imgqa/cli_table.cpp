@@ -548,6 +548,10 @@ std::vector<SubcommandSpec> allSpecs()
     // swim 那份 5 cm 世界格口径对毫米级刀锋影场的结构性失明——相邻能让读 -h 的人看见「同一台仪器
     // 换了口径」。
     append(swimFlatSpecs());
+    // 同上：-h 顺序只是打印序。**紧挨 shadow-swim-flat 是刻意的**——两台仪器是同一个形状
+    // （两机位 + 世界对拍 + 平移搜索）在水平面与竖直面上的两副面孔，而本条补的正是前者结案时
+    // 写明没答的那一半（「本仪器量的是水平地面，而症状在垂直门面上」）。
+    append(swimWallSpecs());
     append(specsResidualAndMotion());
     append(specsTailAndMotion());
     append(specsFlickerAndNoise());

@@ -186,9 +186,10 @@ void testShadowTransportRoundTrip(Checker& c)
             if (!groundHitDouble(p, x, y, kMaxDistM, wx, wz))
                 continue;
             GroundSamples s;
+            s.plane = groundPlane();
             s.srcIndex = { y * kW + x };
-            s.wx = { wx };
-            s.wz = { wz };
+            s.u = { wx };
+            s.v = { wz };
             std::vector<double> dx;
             std::vector<double> dy;
             projectSamples(p, s, 0.0, 0.0, dx, dy);
@@ -205,9 +206,10 @@ void testShadowTransportRoundTrip(Checker& c)
     const Projector behind = makeProjector({ { { 0.0, 1.0, 0.0 } }, { { 0.0, 1.0, 10.0 } }, kFov },
         kW, kH);
     GroundSamples gs;
+    gs.plane = groundPlane();
     gs.srcIndex = { 0 };
-    gs.wx = { 0.0 };
-    gs.wz = { 0.0 };
+    gs.u = { 0.0 };
+    gs.v = { 0.0 };
     std::vector<double> bx;
     std::vector<double> by;
     projectSamples(behind, gs, 0.0, 0.0, bx, by);

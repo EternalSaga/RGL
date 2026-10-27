@@ -1,6 +1,6 @@
 #pragma once
 //
-// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 73 条
+// selftest.h —— `imgqa selftest` 的**跨 TU 共享层**（Checker + 两个共享断言辅助 + 78 条
 // testXxx 声明）。
 //
 //   为什么拆：`selftest.cpp` 到 1927 代码行（工具侧上限 500）被文件护栏逼出刀。缝按**被测
@@ -62,7 +62,7 @@
 //   ⚠ 断言条数 = 本文件的机械护栏：**口径必须连命令一起写死**，否则两个人数出两个数（实测踩过：
 //   旧注释只写"grep -cE 数 chk 调用点"，改前用 `c\.chk\(` 数 .cpp 得 338、用 `\bchk\b` 连 .h 与
 //   注释一起数得 343，护栏当场不可证伪）。**唯一口径**：
-//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}                   # = 671
+//       grep -cE 'c\.chk\(' tools/imgqa/selftest*.cpp | awk -F: '{s+=$2} END {print s}                   # = 688
 //   （只数 .cpp 里的调用点，**不含** selftest.h 的成员函数定义、不含注释。）
 //   🔴 改这个数字的仪式：只在**逐条可红**的断言进出时改。曾删掉 `topLevelValueOf` 的两条断言
 //   ——npos 分支经 findKeyHits 不可达 ⟹ 改前改后都绿，**买了信心不买覆盖**，那种断言不配进这个数。
@@ -150,7 +150,7 @@ std::string captureStdout(F fn)
     return out;
 }
 
-// ── 73 条测试的声明（定义按仪器族分散在十七个 TU；调用顺序只写在 `cmdSelftest`）──
+// ── 78 条测试的声明（定义按仪器族分散在十九个 TU；调用顺序只写在 `cmdSelftest`）──
 void testSrgb(Checker& c);
 void testObjectId(Checker& c);
 void testRegion(Checker& c);
@@ -233,5 +233,14 @@ void testShadowTransportIdentity(Checker& c);
 void testShadowTransportErosion(Checker& c);
 void testShadowTransportSearch(Checker& c);
 void testShadowTransportGuards(Checker& c);
+
+// —— `shadow_wall_metric.*`（shadow-swim-wall 的级联索引逐位读出口径层，债-139 竖直面对照批）——
+// 五个测试的缝 = 问的东西（投票四态 / 接缝方向与单调 / 守卫 / 水平面反证 / 挂号），
+// 逐条说明见 `selftest_swim_wall.cpp` 头注。
+void testWallVotes(Checker& c);
+void testWallSeamDepth(Checker& c);
+void testWallSeamGuards(Checker& c);
+void testWallPlaneGeneric(Checker& c);
+void testWallRegistration(Checker& c);
 
 }  // namespace RGL::imgqa

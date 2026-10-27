@@ -21,11 +21,6 @@
 namespace RGL::imgqa {
 namespace {
 
-double dot3(const std::array<double, 3>& a, const std::array<double, 3>& b)
-{
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
 /// 双线性取 CV_64FC1 的 cov 值。2×2 邻域不全在图内 = false（不夹到边缘：夹 = 把屏外读成边缘值）。
 bool sampleBilinear(const cv::Mat& f, double u, double v, double& out)
 {
@@ -78,59 +73,21 @@ bool onBandForSample(const cv::Mat& bandA, const cv::Mat& bandB, int xa, int ya,
 bool groundHitDouble(const Projector& p, int x, int y, double maxDistanceM, double& wx,
     double& wz)
 {
-    // 像素中心 → ndc（与 projectPoint3 的 ndc→像素严格互逆，selftest 的往返锚点钉这条）。
-    const double nx = (x + 0.5) / static_cast<double>(p.cols) * 2.0 - 1.0;
-    const double ny = 1.0 - (y + 0.5) / static_cast<double>(p.rows) * 2.0;
-    std::array<double, 3> d
-        = {p.f[0] + p.r[0] * (nx * p.tanHalf * p.aspect) + p.up[0] * (ny * p.tanHalf),
-              p.f[1] + p.r[1] * (nx * p.tanHalf * p.aspect) + p.up[1] * (ny * p.tanHalf),
-              p.f[2] + p.r[2] * (nx * p.tanHalf * p.aspect) + p.up[2] * (ny * p.tanHalf)};
-    const double n = std::sqrt(dot3(d, d));
-    if (!(n > 0.0))
-        return false;
-    for (double& c : d)
-        c /= n;
-    if (std::abs(d[1]) < 1e-9)
-        return false;  // 视线近平行地面：交点在无穷远
-    const double t = -p.pos[1] / d[1];
-    if (!(t > 0.0) || t > maxDistanceM)
-        return false;  // 相机背后 / 远到不可信
-    wx = p.pos[0] + d[0] * t;
-    wz = p.pos[2] + d[2] * t;
-    return true;
+    // 🔴 **纯转发**（本层一份算式都不留，见同名 .h 的「别名而不是新类型」那条）。
+    // groundPlane() = (origin 0, e1 x̂, e2 ẑ) ⟹ planeHitDouble 里的 t、u、v 与搬移前
+    // 手写的 −pos.y/d.y、pos.x + d.x·t、pos.z + d.z·t **逐位相同**（乘 1、加 0 不引入舍入）。
+    return planeHitDouble(p, x, y, maxDistanceM, groundPlane(), wx, wz);
 }
 
 GroundSamples sampleGround(const Projector& from, int cols, int rows, double maxDistanceM)
 {
-    GroundSamples s;
-    s.srcIndex.reserve(static_cast<size_t>(cols) * static_cast<size_t>(rows) / 4);
-    for (int y = 0; y < rows; ++y)
-        for (int x = 0; x < cols; ++x) {
-            double wx = 0.0;
-            double wz = 0.0;
-            if (!groundHitDouble(from, x, y, maxDistanceM, wx, wz))
-                continue;
-            s.srcIndex.push_back(y * cols + x);
-            s.wx.push_back(wx);
-            s.wz.push_back(wz);
-        }
-    return s;
+    return samplePlane(from, cols, rows, maxDistanceM, groundPlane());
 }
 
 void projectSamples(const Projector& into, const GroundSamples& s, double sx, double sz,
     std::vector<double>& dstX, std::vector<double>& dstY)
 {
-    dstX.assign(s.srcIndex.size(), kNaN);
-    dstY.assign(s.srcIndex.size(), kNaN);
-    for (size_t k = 0; k < s.srcIndex.size(); ++k) {
-        double px = 0.0;
-        double py = 0.0;
-        // 🔴 −0.5：projectPoint3 回的是像素**边缘**坐标，本层全程用像素**中心**（见头注那节）。
-        if (!projectPoint3(into, {s.wx[k] + sx, 0.0, s.wz[k] + sz}, px, py))
-            continue;
-        dstX[k] = px - 0.5;
-        dstY[k] = py - 0.5;
-    }
+    projectPlaneSamples(into, s, sx, sz, dstX, dstY);
 }
 
 cv::Mat edgeBandMask(const cv::Mat& cov, int rad)

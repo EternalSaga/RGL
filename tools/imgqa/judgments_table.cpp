@@ -470,6 +470,7 @@ const std::vector<JudgmentInfo>& registeredJudgments()
         // `shadow-swim-flat`（债-139 结案批，5 条）紧跟 material-swim：同一个形状的两副面孔
         // （材质场 / 影场），相邻能让 `imgqa check` 的读者看见「换了口径之后判据变成什么」。
         append(swimFlatJudgments());
+        append(swimWallJudgments());
         append(swimFlatFarJudgments());
         return v;
     }();

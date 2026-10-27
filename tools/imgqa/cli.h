@@ -97,6 +97,11 @@ const SubcommandSpec* findSubcommand(const std::string& name);
 /// 之后（理由见 `cli_table.cpp` 的 allSpecs() 注）。
 [[nodiscard]] std::vector<SubcommandSpec> swimFlatSpecs();
 
+/// `shadow-swim-wall` 段的正文在 `cli_table_swim_wall.cpp`（债-139 第二半：**竖直**接收面上的
+/// 世界不变性 + 级联接缝因果实验；同 swim_flat 段的拆法，缝按仪器切）。-h 位置 = shadow-swim-
+/// flat 段之后（理由见 `cli_table.cpp` 的 allSpecs() 注）。
+[[nodiscard]] std::vector<SubcommandSpec> swimWallSpecs();
+
 /// 绑定到某个 spec 的解析结果。**默认值只能来自 spec**——旧的三参数
 /// `get(args, key, def)` 已删除：留着它，字面量默认值就还有地方活。
 /// 读未声明的 flag 直接抛（不抛 = 校验是摆设）。

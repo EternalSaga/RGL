@@ -62,6 +62,7 @@
 //   · 判据名拼错或漏 append → 挂号那条红。
 //
 #include "field_diff_metric.h"    // meanAbsPermille / p99Abs（连续量口径，与 material-swim 共用）
+#include "plane_reconstruct.h"     // **平面接收面重建层**（本层的 y=0 特例全部转发到它）
 #include "shadow_kernel_metric.h"  // Projector / makeProjector / projectPoint3（复用，别重写）
 
 #include <opencv2/core.hpp>
@@ -72,18 +73,23 @@
 
 namespace RGL::imgqa {
 
-/// 一枚机位下「像素 → 世界 y=0 平面」的采样点集（double 域，见头注 ①）。预计算一次、平移搜索
-/// 时复用：搜索只改「世界点 → B 的像素」那一步，重投影不重算。
-struct GroundSamples {
-    std::vector<int> srcIndex;  ///< A 网格内的像素下标（y*cols + x）
-    std::vector<double> wx;     ///< 世界 x
-    std::vector<double> wz;     ///< 世界 z
-};
+/**
+ * 一枚机位下「像素 → 世界 y=0 平面」的采样点集（double 域，见头注 ①）。预计算一次、平移搜索
+ * 时复用：搜索只改「世界点 → B 的像素」那一步，重投影不重算。
+ *
+ * 🔴 **它就是 `PlaneSamples`**（本层不再自己存 (wx, wz)）：接收面重建的口径住在
+ * `plane_reconstruct.h`，本层只是它的 **y = 0 特例别名**。另立一份在只有一台平地仪器时还
+ * 说得过去，到竖直门面那台就不成立了——复制一份改个名字 = 两份会各自漂的「同一件事」，
+ * 漂了之后两台仪器报的两个「世界不变性残差」看着可比、其实不可比（AGENTS 哲学第 1 条）。
+ * 用别名而不是新类型 ⟹ 两台仪器**结构上不可能**用不同的重建口径。
+ */
+using GroundSamples = PlaneSamples;
 
 /**
  * 像素 (x,y) 的视线与世界 y=0 平面交点，**double 域**（`groundHitOf` 的高精度同式版）。
- * 与 `projectPoint3` 严格互逆（selftest 的往返锚点钉这条）。不可量 = false：视线近平行地面、
- * 交点在相机背后、交点距离超 `maxDistanceM`（掠射区一像素跨数米，噪声主导，不进判据）。
+ * 🔴 实现 = `planeHitDouble(…, groundPlane())` 的**转发**（wx = u、wz = v），本函数一份算式
+ * 都不留。与 `projectPoint3` 严格互逆（selftest 的往返锚点钉这条）。不可量 = false：
+ * 视线近平行地面、交点在相机背后、交点距离超 `maxDistanceM`（掠射区一像素跨数米，不进判据）。
  */
 [[nodiscard]] bool groundHitDouble(const Projector& p, int x, int y, double maxDistanceM,
     double& wx, double& wz);

@@ -237,7 +237,9 @@ void testRegistry(Checker& c)
 void testJudgmentFamilies(Checker& c)
 {
     const auto& all = registeredJudgments();
-    // 54 是**当前**条数，写死它才有牙：族拆分/合并时漏接一个子表，这里立刻红。
+    // 108 是**当前**条数，写死它才有牙：族拆分/合并时漏接一个子表，这里立刻红。
+    // ⚠ 下面这段增量流水**有缺口**（89 → 102 那几跳没记），别拿它当对账依据——能证的只有
+    // 这一行写死的总数。
     // 43 → 46 = 批 13.14a `temporal-tail --motion camera` 新增三条（smear-alpha-monotone /
     // static-collapse / gate-breakpoint）；46 → 47 = 同批把 **φ 符号标定**从诊断升格成判据
     // （`temporal-tail-phi-sign`）——理由见其契约：自搭金标准与实现共享朝后的相机基，
@@ -279,7 +281,10 @@ void testJudgmentFamilies(Checker& c)
     // 存在」（csm 臂与 none 臂逐位相同），而那种格子在误差表上是一个 NaN，与「阴影对但量不出」
     // 同形 ⟹ 必须有一条独立判据在这里分家（详见 judgments_table_edge.cpp 的 rebase 段）。
     // 这条硬计数的意义 = 族拆分/改名最容易掉条目，而掉掉的正是没人再读的那几条。
-    c.chk("判据总数 == 102（族拆分最容易掉条目）", all.size() == 102, std::to_string(all.size()));
+    // 102 → 108：`shadow-swim-wall`（债-139 竖直面对照批）六条 J-W1…J-W6，正文在
+    // `judgments_table_swim_wall.cpp`；六条的容差理由与 guard 出处由上面两条逐条判据
+    // （「必须有 guard 出处」/「容差理由 >20 字符」）强制，挂号本身另有 ⑮ 一条。
+    c.chk("判据总数 == 108（族拆分最容易掉条目）", all.size() == 108, std::to_string(all.size()));
     size_t n[4] = {0, 0, 0, 0};
     for (const auto& j : all) {
         switch (j.family) {
@@ -610,6 +615,12 @@ int cmdSelftest()
     testShadowTransportErosion(c);
     testShadowTransportSearch(c);
     testShadowTransportGuards(c);
+    // 垂直接收面那台仪器的口径层：投票四态 → 接缝方向与单调 → 守卫 → 水平面反证 → 挂号。
+    testWallVotes(c);
+    testWallSeamDepth(c);
+    testWallSeamGuards(c);
+    testWallPlaneGeneric(c);
+    testWallRegistration(c);
     std::printf("%s：%d 条失败\n", c.bad ? "自检失败" : "自检通过", c.bad);
     return c.bad ? 1 : 0;
 }
