@@ -21,7 +21,7 @@ e9fd016660fbc17933e695bfb8503fdf1496d78b  rgl/shaders/cull_tables.slang
 e2988b049852b816a531b82d53ffcd7d91e6d0a1  rgl/shaders/cull_tables_schema.lua
 69ebae222b5acfa4efbef3230e7f24fbff769ecd  tools/templates/types_cppm.inja
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
-ce17319eb66bd75ca05148668035be124ec0eba7  rgl/shaders/env_prefilter.comp.slang
+8216ea99e8ba46f5083deb81ef776b8c8a26497a  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
 f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
@@ -72,7 +72,7 @@ ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.fra
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
 cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
-ce17319eb66bd75ca05148668035be124ec0eba7  rgl/shaders/env_prefilter.comp.slang
+8216ea99e8ba46f5083deb81ef776b8c8a26497a  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
 f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang
@@ -123,7 +123,7 @@ ed318966f3ad80d93e1523423156ee686bd9ef5f  rgl/shaders/transparent_vegetation.fra
 fef42a9140ddaf3d94c17a35f786de989536d5a2  rgl/shaders/types.slang
 cfcbcb48b3523c97460f0917c215831192b60ba8  rgl/shaders/velocity.frag.slang
 f9ddf8af6a22f93a526bc40d43f21c7238cf24eb  rgl/shaders/cull.comp.slang
-ce17319eb66bd75ca05148668035be124ec0eba7  rgl/shaders/env_prefilter.comp.slang
+8216ea99e8ba46f5083deb81ef776b8c8a26497a  rgl/shaders/env_prefilter.comp.slang
 b823e0c7dcda2ab805da35003bb22db9bc27705a  rgl/shaders/evssm_downsample.comp.slang
 f53fa5cbaab8f465ae2bdaf35b2664be9419b716  rgl/shaders/evssm_moments.comp.slang
 f39f58eeeae71d90b69b1568d9535c1028508803  rgl/shaders/izb_create.comp.slang

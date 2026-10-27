@@ -41,13 +41,32 @@
 // 从孤立点恢复成连续一片。CPU 同口径验证：r=0.122 孤立尖峰 12 → **0**、最坏孤立比 751 → **2.6**；
 // r=0.35 65 → **0**、641 → **1.1**。
 //
+// 🔴 **上面推导里的 4π 在代码里漏了七天**（2026-10-25 修，债-144）：第 39 行写的
+// saTexel = 4π/(6·W²) 一直是对的，而 LOD 那一行写成 `0.5·log2(6W²/(N·pdf))`——分母少 4π ⟹
+// LOD 恒定偏大 0.5·log2(4π) = **1.83 级**，每个样本都去读比它自己足迹糊近两级的源，整张预滤波
+// 图偏糊。为什么"CPU 同口径验证"没抓到：它跑的是**独立复刻的估计器**（不是这份 shader），验的是
+// "逐样本 LOD 有效"这个方向，验不出两侧常数不一致。外部对照 = HEngine 同一处
+// （`Modern/SceneEnvironmentPrecompute.hlsl`）是 Karis 原式、带 4π。
+//
 // 🔴 **源视图看不到被写的那一级**（结构性防自引用，不靠 shader 里钳位）：C++ 侧把 src 视图的
 // baseMip 定为 level+1（末两级见 env_prefilter_impl.cppm），本 shader 因此**读不到 mip0，也
 // 读不到正在写的 level**。这不是省事——逐样本 LOD 的落点在 level=9..11 会掉到 level±1 内，
 // 若视图能看到自身，就是同一 dispatch 内读写同一纹素（UB，且 VVL 只会报布局不匹配）。
-// 代价 = 最锐的样本也只能从 level+1 读起；由公式实测各 level 的 LOD 下界 = 3.2/7.8/9.2/9.5/
-// 9.9/10.1（level 1/5/8/9/10/11），除末两级外恒 > level+1 ⟹ **钳位只在 roughness ≥ 0.82 的
-// 最后两级生效**，而那两级每面只有 2×2 / 1×1 纹素。
+// 代价 = 最锐的样本也只能从 level+1 读起。
+//
+// LOD 下界（= 峰值 pdf 样本的 LOD；下界被地板顶起只影响最锐的那一小截样本尾巴，其余样本读到
+// 更高 LOD）。口径 W=2048 / L=12 / N=256，**2026-10-25 按修正后公式重算**：
+//   level        1     5     8     9    10    11
+//   下界        1.37  6.02  7.37  7.71  8.02  8.29
+//   地板        2     6     9    10    11    10*
+// ⟹ **除 level 5 外，每一级的最锐样本都被地板顶起**。旧结论"钳位只在 roughness ≥ 0.82 的最后
+// 两级生效"是缺 4π 撑出来的，方向整个反了（*level 11 走末两级特殊视图 base=10；level 10 的
+// srcMaxLod=0，恒读 11）。顺带：旧结论**即便按旧数也不成立**——旧下界 3.20/7.84/9.20/9.54/
+// 9.84/10.12（五格与旧记录逐位对上、level 10 差 0.06，反过来证明那串数是照代码算的）里
+// level 9 的 9.54 已 < 地板 10。
+// 修正后暴露一条与 4π 无关的既有限制：level 1（roughness 0.09，近镜面）想要 LOD 1.37，地板却是
+// 2 = 512² 的盒平均 ⟹ 最锐的预滤波级达不到该粗糙度该有的锐度。缺 4π 时这条被掩盖（3.20 > 2
+// 看着"不钳位"）。账 → 债-145。
 // 前提：源图 level ≥1 必须是**盒式降采样链**（本图 level ≥1 原为 UNDEFINED，现由上传路径的
 // LINEAR blit 链先填，见 texture_upload_cubemap.cppm::recordGgxMipChain）。
 
@@ -134,12 +153,21 @@ void main(uint3 gid : SV_DispatchThreadID)
 
     float3 sum = float3(0.0, 0.0, 0.0);
     float weight = 0.0;
-    // 逐样本 LOD 常数项（推导见文件头）：lod = 0.5·log2(6·W²/(N·pdf))，pdf = D_GGX/4。
+    // 逐样本 LOD（Karis 原式，与文件头推导逐字同形）：lod = 0.5·log2(saSample/saTexel)。
+    // saSample = 1/(N·pdf) 是一个样本覆盖的立体角，saTexel = 4π/(6·W²) 是一个源纹素的立体角
+    // （立方图 6 面各 W² 纹素铺满 4π 球面），pdf = D_GGX/4。
+    // 🔴 saTexel 分子上的 4π **不是可约掉的常数**（2026-10-25 修，债-144）：本行此前写成
+    // `0.5·log2(6W²/(N·pdf))`，等价于把 saTexel 当成 1/(6W²)，LOD 恒定偏大 0.5·log2(4π)=1.83
+    // 级 ⟹ 每个样本都去读比它自己足迹糊近两级的源，整张预滤波图偏糊。之所以把两个立体角各写
+    // 成一个具名量、而不是把 4π 折进分子：折进去后这一行与文件头推导就再也对不上字，而本文件
+    // 头 2026-10-18 那版推导**本来就是带 4π 的正确式**——错的一直是代码，它却靠"注释与代码
+    // 不一致"活了七天（AGENTS 哲学 §1 点名的形态：注释里的推导像护栏）。
     // a2 = roughness⁴ = α²，与 importanceSampleGGX 内的 a2 同值（两处必须一致，否则样本
     // 分布与它的 pdf 对不上，LOD 就选错）。
     const float r2 = roughness * roughness;
     const float a2 = r2 * r2;
-    const float sixWSq = 6.0 * float(push.srcFaceSize) * float(push.srcFaceSize);
+    const float saTexel =
+        4.0 * kPi / (6.0 * float(push.srcFaceSize) * float(push.srcFaceSize));
     // 源视图只覆盖 [srcBaseMip, mipLevels)，故 LOD 先减 baseMip 再钳到视图内（视图外的级
     // 硬件也会钳，这里显式写出来是为了让「读不到什么」在本文件可读）
     const float srcBase = float(push.srcBaseMip);
@@ -157,8 +185,8 @@ void main(uint3 gid : SV_DispatchThreadID)
             float d = NoH * NoH * (a2 - 1.0) + 1.0;
             float D = a2 / (kPi * d * d);
             float pdf = max(D * 0.25, 1e-20);
-            float lod = clamp(0.5 * log2(sixWSq / (float(SAMPLE_COUNT) * pdf)) - srcBase,
-                0.0, srcMaxLod);
+            float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf);
+            float lod = clamp(0.5 * log2(saSample / saTexel) - srcBase, 0.0, srcMaxLod);
             sum += srcEnv.SampleLevel(srcSampler, L, lod).rgb * NoL;
             weight += NoL;
         }
